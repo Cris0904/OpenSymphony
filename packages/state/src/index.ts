@@ -127,10 +127,13 @@ export function gatewayReducer(
     case "TERMINAL_FRAMES_RECEIVED": {
       const frames = new Map(state.terminal.frames);
       const existing = frames.get(action.runId) ?? [];
-      frames.set(action.runId, [...existing, ...action.frames]);
+      // Deduplicate by frame_sequence to handle replayed/overlapping batches.
+      const existingSeqs = new Set(existing.map((f) => f.frame_sequence));
+      const newFrames = action.frames.filter((f) => !existingSeqs.has(f.frame_sequence));
+      frames.set(action.runId, [...existing, ...newFrames]);
       const cursor = new Map(state.terminal.cursor);
-      if (action.frames.length > 0) {
-        const lastSeq = action.frames[action.frames.length - 1].frame_sequence;
+      if (newFrames.length > 0) {
+        const lastSeq = newFrames[newFrames.length - 1].frame_sequence;
         cursor.set(action.runId, lastSeq);
       }
       return {

@@ -9,6 +9,8 @@ import type {
   TransportProfile,
 } from "@opensymphony/gateway-schema";
 
+export { HttpGatewayTransport } from "./transports.js";
+
 /** Transport adapter interface for all gateway communication. */
 export interface GatewayTransport {
   readonly baseUri: string;
