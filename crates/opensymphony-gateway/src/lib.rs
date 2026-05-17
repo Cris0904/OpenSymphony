@@ -740,7 +740,14 @@ async fn get_run_detail(
     let release_reason = match issue.last_outcome {
         ControlPlaneWorkerOutcome::Completed => Some(ReleaseReason::Completed),
         ControlPlaneWorkerOutcome::Canceled => Some(ReleaseReason::Cancelled),
-        ControlPlaneWorkerOutcome::Failed => Some(ReleaseReason::RetryExhausted),
+        // When the snapshot indicates a failure and retries are exhausted
+        // (retry_count > 0), treat it as RetryExhausted.  When the issue
+        // failed on the first attempt with no retry queued, treat it as a
+        // terminal tracker state rather than an exhausted-retry signal.
+        ControlPlaneWorkerOutcome::Failed if issue.retry_count > 0 => {
+            Some(ReleaseReason::RetryExhausted)
+        }
+        ControlPlaneWorkerOutcome::Failed => Some(ReleaseReason::TrackerTerminal),
         _ => None,
     };
 
