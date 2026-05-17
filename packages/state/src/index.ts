@@ -134,7 +134,9 @@ export function gatewayReducer(
       const cursor = new Map(state.terminal.cursor);
       if (newFrames.length > 0) {
         const lastSeq = newFrames[newFrames.length - 1].frame_sequence;
-        cursor.set(action.runId, lastSeq);
+        // Use Math.max so cursor always advances even if frames arrive out of order.
+        const prevCursor = cursor.get(action.runId) ?? 0;
+        cursor.set(action.runId, Math.max(prevCursor, lastSeq));
       }
       return {
         ...state,
@@ -198,16 +200,18 @@ export function gatewayReducer(
         planning: { ...state.planning, error: action.error, loading: false },
       };
 
-    case "LOADING":
+    case "LOADING": {
+      const { dashboard, taskGraph, run, terminal, approval, planning } = state;
       return {
         ...state,
-        dashboard: { ...state.dashboard, loading: action.loading },
-        taskGraph: { ...state.taskGraph, loading: action.loading },
-        run: { ...state.run, loading: action.loading },
-        terminal: { ...state.terminal, loading: action.loading },
-        approval: { ...state.approval, loading: action.loading },
-        planning: { ...state.planning, loading: action.loading },
+        dashboard: { ...dashboard, loading: action.loading, error: action.loading ? null : dashboard.error },
+        taskGraph: { ...taskGraph, loading: action.loading, error: action.loading ? null : taskGraph.error },
+        run: { ...run, loading: action.loading, error: action.loading ? null : run.error },
+        terminal: { ...terminal, loading: action.loading, error: action.loading ? null : terminal.error },
+        approval: { ...approval, loading: action.loading, error: action.loading ? null : approval.error },
+        planning: { ...planning, loading: action.loading, error: action.loading ? null : planning.error },
       };
+    }
 
     default:
       return state;

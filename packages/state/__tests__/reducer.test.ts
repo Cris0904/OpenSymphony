@@ -181,6 +181,23 @@ describe("gatewayReducer", () => {
     expect(state.terminal.cursor.get("run-1")).toBe(3);
   });
 
+  it("TERMINAL_FRAMES_RECEIVED cursor uses Math.max for out-of-order batches", () => {
+    // Batch 1: frames 1-5, cursor = 5.
+    let state = gatewayReducer(initialState, {
+      type: "TERMINAL_FRAMES_RECEIVED",
+      runId: "run-1",
+      frames: [makeFrame(1), makeFrame(2), makeFrame(3), makeFrame(4), makeFrame(5)],
+    });
+    expect(state.terminal.cursor.get("run-1")).toBe(5);
+    // Batch 2: frames 3-4 arrive late (lower seq), cursor should stay at 5.
+    state = gatewayReducer(state, {
+      type: "TERMINAL_FRAMES_RECEIVED",
+      runId: "run-1",
+      frames: [makeFrame(3), makeFrame(4)],
+    });
+    expect(state.terminal.cursor.get("run-1")).toBe(5);
+  });
+
   it("TERMINAL_FRAMES_RECEIVED does not reset cursor for empty batch", () => {
     let state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
@@ -287,5 +304,25 @@ describe("gatewayReducer", () => {
     expect(state.terminal.loading).toBe(true);
     expect(state.approval.loading).toBe(true);
     expect(state.planning.loading).toBe(true);
+  });
+
+  it("LOADING true clears prior errors, LOADING false preserves them", () => {
+    let state = gatewayReducer(initialState, {
+      type: "ERROR",
+      error: "Previous failure",
+    });
+    expect(state.dashboard.error).toBe("Previous failure");
+    state = gatewayReducer(state, {
+      type: "LOADING",
+      loading: true,
+    });
+    expect(state.dashboard.error).toBeNull();
+    expect(state.dashboard.loading).toBe(true);
+    state = gatewayReducer(state, {
+      type: "LOADING",
+      loading: false,
+    });
+    expect(state.dashboard.error).toBeNull();
+    expect(state.dashboard.loading).toBe(false);
   });
 });
