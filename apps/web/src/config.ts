@@ -43,7 +43,7 @@ export function createWebAppConfig(): WebAppConfig {
   const gatewayServed = !gatewayUrl;
 
   return {
-    gatewayUrl: gatewayUrl || "http://127.0.0.1:3000",
+    gatewayUrl: gatewayUrl,
     gatewayServed,
     basePath: (import.meta.env.VITE_APP_BASE_PATH as string) ?? "/app/",
   };

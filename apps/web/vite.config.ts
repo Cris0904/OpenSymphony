@@ -51,11 +51,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@opensymphony/gateway-schema":
-        "../../packages/gateway-schema/src/index.ts",
-      "@opensymphony/api-client": "../../packages/api-client/src/index.ts",
-      "@opensymphony/ui-core": "../../packages/ui-core/src/index.ts",
-      "@opensymphony/state": "../../packages/state/src/index.ts",
+      "@opensymphony/gateway-schema": resolve(__dirname, "../../packages/gateway-schema/src/index.ts"),
+      "@opensymphony/api-client": resolve(__dirname, "../../packages/api-client/src/index.ts"),
+      "@opensymphony/ui-core": resolve(__dirname, "../../packages/ui-core/src/index.ts"),
+      "@opensymphony/state": resolve(__dirname, "../../packages/state/src/index.ts"),
     },
   },
   define: {

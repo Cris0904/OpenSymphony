@@ -391,7 +391,19 @@ async fn web_asset_handler(
     // If canonicalize fails (e.g. the file doesn't exist yet), fall back to
     // path-clean style check: reject if any component is "..".
     let is_inside = match (candidate.canonicalize(), base.canonicalize()) {
-        (Ok(resolved), Ok(base_resolved)) => resolved.starts_with(&base_resolved),
+        (Ok(resolved), Ok(base_resolved)) => {
+            if resolved == base_resolved {
+                true
+            } else {
+                let resolved_s = resolved.to_string_lossy();
+                let base_s = base_resolved.to_string_lossy();
+                let prefix_len = base_s.len();
+                resolved_s
+                    .get(prefix_len..)
+                    .map(|suffix: &str| suffix.starts_with(std::path::MAIN_SEPARATOR))
+                    .unwrap_or(false)
+            }
+        }
         _ => !rest.split('/').any(|seg| seg == ".."),
     };
     if !is_inside {
