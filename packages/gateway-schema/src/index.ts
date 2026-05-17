@@ -44,6 +44,7 @@ export {
   isValidGatewayEnvelope,
   assertValidGatewayEnvelope,
   validateEnvelopeBatch,
+  assertValidEnvelopeBatch,
   parseGatewayEnvelope,
   getGatewaySchemaVersion,
 } from "./validation.js";

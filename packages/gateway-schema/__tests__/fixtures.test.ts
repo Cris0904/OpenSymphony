@@ -7,15 +7,18 @@
  */
 
 import { readFileSync } from "node:fs";
-import { resolve, basename } from "node:path";
+import { resolve } from "node:path";
 import {
-  isValidSchemaVersion,
-  assertValidGatewayEnvelope,
-  parseGatewayEnvelope,
-  getGatewaySchemaVersion,
-  assertCompatibleSchemaVersion,
-  isValidGatewayEnvelope,
   GATEWAY_SCHEMA_VERSION,
+  assertCompatibleSchemaVersion,
+  assertValidEnvelopeBatch,
+  assertValidGatewayEnvelope,
+  getGatewaySchemaVersion,
+  isValidGatewayEnvelope,
+  isValidSchemaVersion,
+  parseGatewayEnvelope,
+  schemaVersionFromString,
+  validateEnvelopeBatch,
 } from "@opensymphony/gateway-schema";
 
 const fixturesDir = resolve(__dirname, "fixtures");
@@ -49,6 +52,55 @@ describe("schema version", () => {
     expect(() => assertCompatibleSchemaVersion({ major: 2, minor: 0, patch: 0 })).toThrow(
       /unsupported schema major=2/,
     );
+  });
+
+  test("isValidSchemaVersion rejects NaN values", () => {
+    expect(isValidSchemaVersion({ major: NaN, minor: 0, patch: 0 })).toBe(false);
+    expect(isValidSchemaVersion({ major: 1, minor: Infinity, patch: 0 })).toBe(false);
+  });
+
+  test("schemaVersionFromString parses valid string", () => {
+    expect(schemaVersionFromString("1.2.3")).toEqual({ major: 1, minor: 2, patch: 3 });
+  });
+
+  test("schemaVersionFromString throws on incomplete string", () => {
+    expect(() => schemaVersionFromString("1.2")).toThrow(/Invalid schema version/);
+  });
+
+  test("schemaVersionFromString throws on non-numeric string", () => {
+    expect(() => schemaVersionFromString("a.b.c")).toThrow(/Invalid schema version/);
+  });
+});
+
+// -- Batch validation tests --
+
+describe("batch validation", () => {
+  const validEnvelope = loadFixture("envelope_terminal_frame.json");
+
+  test("validateEnvelopeBatch returns empty array for all valid", () => {
+    const failed = validateEnvelopeBatch([validEnvelope, validEnvelope]);
+    expect(failed).toEqual([]);
+  });
+
+  test("validateEnvelopeBatch returns indices of invalid envelopes", () => {
+    const batch = [validEnvelope, { bad: true }, validEnvelope, "not an object"];
+    const failed = validateEnvelopeBatch(batch);
+    expect(failed).toEqual([1, 3]);
+  });
+
+  test("validateEnvelopeBatch does not throw", () => {
+    const batch = [validEnvelope, { bad: true }];
+    expect(() => validateEnvelopeBatch(batch)).not.toThrow();
+  });
+
+  test("assertValidEnvelopeBatch throws on failures", () => {
+    const batch = [validEnvelope, { bad: true }];
+    expect(() => assertValidEnvelopeBatch(batch)).toThrow(/failed validation/);
+  });
+
+  test("assertValidEnvelopeBatch passes for all valid", () => {
+    const batch = [validEnvelope, validEnvelope];
+    expect(() => assertValidEnvelopeBatch(batch)).not.toThrow();
   });
 });
 

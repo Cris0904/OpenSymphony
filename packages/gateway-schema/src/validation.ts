@@ -10,17 +10,22 @@ import type { GatewayEnvelope } from "./envelope.js";
 import type { SchemaVersion } from "./version.js";
 import { GATEWAY_SCHEMA_VERSION } from "./version.js";
 
-/** Return true when the payload's schema_version major matches v1. */
+/** Return true when the payload's schema_version has valid numeric fields. */
 export function isValidSchemaVersion(v: unknown): v is SchemaVersion {
+  if (
+    typeof v !== "object" ||
+    v === null ||
+    !("major" in v) ||
+    !("minor" in v) ||
+    !("patch" in v)
+  ) {
+    return false;
+  }
+  const obj = v as SchemaVersion;
   return (
-    typeof v === "object" &&
-    v !== null &&
-    "major" in v &&
-    "minor" in v &&
-    "patch" in v &&
-    typeof (v as SchemaVersion).major === "number" &&
-    typeof (v as SchemaVersion).minor === "number" &&
-    typeof (v as SchemaVersion).patch === "number"
+    Number.isFinite(obj.major) &&
+    Number.isFinite(obj.minor) &&
+    Number.isFinite(obj.patch)
   );
 }
 
@@ -71,10 +76,9 @@ export function assertValidGatewayEnvelope(
   assertCompatibleSchemaVersion(envelope.schema_version, label);
 }
 
-/** Validate a batch of envelopes; returns array of indexes that failed. */
+/** Validate a batch of envelopes; returns array of indexes that failed (no throw). */
 export function validateEnvelopeBatch(
   batch: unknown[],
-  label = "batch",
 ): number[] {
   const failed: number[] = [];
   for (let i = 0; i < batch.length; i++) {
@@ -82,12 +86,20 @@ export function validateEnvelopeBatch(
       failed.push(i);
     }
   }
+  return failed;
+}
+
+/** Throw if any envelope in the batch fails validation. */
+export function assertValidEnvelopeBatch(
+  batch: unknown[],
+  label = "batch",
+): void {
+  const failed = validateEnvelopeBatch(batch);
   if (failed.length > 0) {
     throw new Error(
       `[schema] ${label}: envelopes at indices ${failed.join(",")} failed validation`,
     );
   }
-  return failed;
 }
 
 /** Parse and validate a JSON string as a GatewayEnvelope. */

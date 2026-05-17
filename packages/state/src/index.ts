@@ -42,16 +42,19 @@ export interface TerminalSlice {
   frames: Map<string, TerminalFrame[]>;
   cursor: Map<string, number>;
   loading: boolean;
+  error: string | null;
 }
 
 export interface ApprovalSlice {
   pending: ApprovalRequest[];
   resolved: Map<string, ApprovalRequest>;
+  error: string | null;
 }
 
 export interface PlanningSlice {
   sessions: Map<string, PlanningSessionSummary>;
   loading: boolean;
+  error: string | null;
 }
 
 // -- Combined state --
@@ -69,9 +72,9 @@ export const initialState: GatewayState = {
   dashboard: { snapshot: null, loading: false, error: null },
   taskGraph: { nodes: new Map(), rootIds: [], loading: false, error: null },
   run: { runs: new Map(), loading: false, error: null },
-  terminal: { frames: new Map(), cursor: new Map(), loading: false },
-  approval: { pending: [], resolved: new Map() },
-  planning: { sessions: new Map(), loading: false },
+  terminal: { frames: new Map(), cursor: new Map(), loading: false, error: null },
+  approval: { pending: [], resolved: new Map(), error: null },
+  planning: { sessions: new Map(), loading: false, error: null },
 };
 
 // -- Action types --
@@ -160,7 +163,7 @@ export function gatewayReducer(
       sessions.set(action.payload.session_id, action.payload);
       return {
         ...state,
-        planning: { sessions, loading: false },
+        planning: { sessions, loading: false, error: null },
       };
     }
 
@@ -175,6 +178,9 @@ export function gatewayReducer(
         dashboard: { ...state.dashboard, error: action.error },
         taskGraph: { ...state.taskGraph, error: action.error },
         run: { ...state.run, error: action.error },
+        terminal: { ...state.terminal, error: action.error },
+        approval: { ...state.approval, error: action.error },
+        planning: { ...state.planning, error: action.error },
       };
 
     case "LOADING":

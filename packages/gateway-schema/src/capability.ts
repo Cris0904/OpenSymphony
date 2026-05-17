@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "./version.js";
+import type { TransportProfile } from "./transport.js";
 
 export type AuthMode =
   | "none"
@@ -7,7 +8,7 @@ export type AuthMode =
   | "subscription_oauth";
 
 export interface TransportCapability {
-  transport: string;
+  transport: TransportProfile;
   modes: string[];
   supported_encodings: string[];
   bidirectional: boolean;
