@@ -161,13 +161,14 @@ export function gatewayReducer(
     }
 
     case "APPROVAL_RESOLVED": {
+      const approvalId = action.payload.approval_id;
       const resolved = new Map(state.approval.resolved);
-      resolved.set(action.approvalId, action.payload);
+      resolved.set(approvalId, action.payload);
       return {
         ...state,
         approval: {
           ...state.approval,
-          pending: state.approval.pending.filter((a) => a.approval_id !== action.approvalId),
+          pending: state.approval.pending.filter((a) => a.approval_id !== approvalId),
           resolved,
           loading: false,
           error: null,
