@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_yaml::Mapping;
 
 use super::version::SchemaVersion;
 
@@ -66,26 +67,11 @@ pub enum PlanningArtifactKind {
 
 impl std::fmt::Display for PlanningArtifactKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlanningArtifactKind::Intake => write!(f, "intake"),
-            PlanningArtifactKind::ProjectContext => write!(f, "project_context"),
-            PlanningArtifactKind::Requirements => write!(f, "requirements"),
-            PlanningArtifactKind::ResearchBrief => write!(f, "research_brief"),
-            PlanningArtifactKind::CodebaseAnalysis => write!(f, "codebase_analysis"),
-            PlanningArtifactKind::ArchitectureNotes => write!(f, "architecture_notes"),
-            PlanningArtifactKind::RiskRegister => write!(f, "risk_register"),
-            PlanningArtifactKind::MilestoneDraft => write!(f, "milestone_draft"),
-            PlanningArtifactKind::IssueDraft => write!(f, "issue_draft"),
-            PlanningArtifactKind::SubIssueDraft => write!(f, "sub_issue_draft"),
-            PlanningArtifactKind::DependencyMap => write!(f, "dependency_map"),
-            PlanningArtifactKind::VerificationPlan => write!(f, "verification_plan"),
-            PlanningArtifactKind::AcceptanceCriteria => write!(f, "acceptance_criteria"),
-            PlanningArtifactKind::PlanValidation => write!(f, "plan_validation"),
-            PlanningArtifactKind::LinearDraft => write!(f, "linear_draft"),
-            PlanningArtifactKind::ReviewComments => write!(f, "review_comments"),
-            PlanningArtifactKind::PublishReceipt => write!(f, "publish_receipt"),
-            PlanningArtifactKind::PlanningWave => write!(f, "planning_wave"),
-        }
+        // Delegate to serde serialization so the Display output is guaranteed
+        // to stay in sync with the `#[serde(rename_all = "snake_case")]` contract.
+        let serde_str = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        // serde_json serializes unit-variant enums as quoted strings, e.g. `"intake"`.
+        write!(f, "{}", serde_str.trim_matches('"'))
     }
 }
 
@@ -367,32 +353,66 @@ pub struct PublishedTask {
 }
 
 impl LinearPublishReceipt {
-    /// Render YAML-compatible string for the publish receipt.
+    /// Render YAML string for the publish receipt using serde_yaml.
+    ///
+    /// This replaces the previous hand-built `format!()` approach so that
+    /// YAML escaping rules and structural changes are handled correctly
+    /// by the serializer.
     pub fn render_yaml(&self) -> String {
-        let mut lines = Vec::new();
-        lines.push(format!("planningWave: {}", self.planning_wave));
-        lines.push(format!("linearProject: {}", self.linear_project));
-        lines.push(format!(
-            "publishedAt: '{}'",
-            self.published_at.format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
-        ));
+        // Build a mapping with the same camelCase keys expected by the
+        // `docs/tasks/linear-publish.yaml` contract.
+        let mut mapping = Mapping::new();
+        mapping.insert(
+            "planningWave".into(),
+            serde_yaml::Value::String(self.planning_wave.clone()),
+        );
+        mapping.insert(
+            "linearProject".into(),
+            serde_yaml::Value::String(self.linear_project.clone()),
+        );
+        mapping.insert(
+            "publishedAt".into(),
+            serde_yaml::Value::String(
+                self.published_at
+                    .format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
+                    .to_string(),
+            ),
+        );
 
-        lines.push("milestones:".to_string());
+        let mut milestones = Vec::new();
         for ms in &self.milestones {
-            lines.push(format!("  '{}':", ms.name));
-            lines.push(format!("    milestoneId: {}", ms.milestone_id));
-            lines.push(format!("    name: '{}'", ms.name));
+            let mut ms_mapping = Mapping::new();
+            ms_mapping.insert("name".into(), serde_yaml::Value::String(ms.name.clone()));
+            ms_mapping.insert(
+                "milestoneId".into(),
+                serde_yaml::Value::String(ms.milestone_id.clone()),
+            );
+            milestones.push(serde_yaml::Value::Mapping(ms_mapping));
         }
+        mapping.insert("milestones".into(), serde_yaml::Value::Sequence(milestones));
 
-        lines.push("tasks:".to_string());
+        let mut tasks = Vec::new();
         for task in &self.tasks {
-            lines.push(format!("  {}:", task.task_id));
-            lines.push(format!("    issue: {}", task.issue));
-            lines.push(format!("    issueId: {}", task.issue_id));
-            lines.push(format!("    url: {}", task.url));
-            lines.push(format!("    file: {}", task.file));
+            let mut t_mapping = Mapping::new();
+            t_mapping.insert(
+                "taskId".into(),
+                serde_yaml::Value::String(task.task_id.clone()),
+            );
+            t_mapping.insert(
+                "issue".into(),
+                serde_yaml::Value::String(task.issue.clone()),
+            );
+            t_mapping.insert(
+                "issueId".into(),
+                serde_yaml::Value::String(task.issue_id.clone()),
+            );
+            t_mapping.insert("url".into(), serde_yaml::Value::String(task.url.clone()));
+            t_mapping.insert("file".into(), serde_yaml::Value::String(task.file.clone()));
+            tasks.push(serde_yaml::Value::Mapping(t_mapping));
         }
+        mapping.insert("tasks".into(), serde_yaml::Value::Sequence(tasks));
 
-        lines.join("\n")
+        serde_yaml::to_string(&mapping)
+            .expect("LinearPublishReceipt yaml serialization should never fail")
     }
 }

@@ -6,10 +6,10 @@ use opensymphony::opensymphony_gateway_schema::{
     cursor::{PageCursor, StreamCursor},
     envelope::{EntityKind, EntityRef, GatewayEnvelope},
     planning::{
-        ArtifactDiff, ArtifactRevision, ConversationTurn, LinearPublishReceipt,
-        PlanningArtifact, PlanningArtifactKind, PlanningSession, PlanningSessionStatus,
-        PlanningSessionSummary, PlanningWave, PublishedMilestone, PublishedTask, ReviewComment,
-        TaskEntry, TaskPackageProjection, TurnRole,
+        ArtifactDiff, ArtifactRevision, ConversationTurn, LinearPublishReceipt, PlanningArtifact,
+        PlanningArtifactKind, PlanningSession, PlanningSessionStatus, PlanningSessionSummary,
+        PlanningWave, PublishedMilestone, PublishedTask, ReviewComment, TaskEntry,
+        TaskPackageProjection, TurnRole,
     },
     run::{ReleaseReason, RunDetail, RunEvent, RunEventPage, RunStatus},
     snapshot::{
@@ -774,7 +774,10 @@ fn planning_session_roundtrips() {
     let back: PlanningSession = must_deserialize(&json);
     assert_eq!(back.session_id, "sess-1");
     assert_eq!(back.status, PlanningSessionStatus::Draft);
-    assert_eq!(back.planning_wave.as_deref(), Some("rich-client-hosted-mode"));
+    assert_eq!(
+        back.planning_wave.as_deref(),
+        Some("rich-client-hosted-mode")
+    );
     assert_eq!(back.turns.len(), 1);
     assert_eq!(back.artifacts.len(), 1);
 }
@@ -970,6 +973,45 @@ fn linear_publish_receipt_render_yaml_contains_expected_fields() {
     assert!(yaml.contains("tasks:"));
     assert!(yaml.contains("OSYM-730"));
     assert!(yaml.contains("issue: COE-395"));
+}
+
+#[test]
+fn linear_publish_receipt_render_yaml_is_valid_yaml() {
+    let receipt = LinearPublishReceipt {
+        planning_wave: "rich-client-hosted-mode".into(),
+        linear_project: "proj-123".into(),
+        published_at: Utc::now(),
+        milestones: vec![PublishedMilestone {
+            name: "M9: Collaborative Planning Alpha".into(),
+            milestone_id: "ms-1".into(),
+        }],
+        tasks: vec![PublishedTask {
+            task_id: "OSYM-730".into(),
+            issue: "COE-395".into(),
+            issue_id: "issue-1".into(),
+            url: "https://linear.app/trilogy-ai-coe/issue/COE-395".into(),
+            file: "docs/tasks/osym-730.md".into(),
+        }],
+    };
+    let yaml = receipt.render_yaml();
+    // Verify the output is actually valid parseable YAML
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&yaml).expect("render_yaml must produce valid YAML");
+    assert_eq!(
+        parsed["planningWave"].as_str(),
+        Some("rich-client-hosted-mode")
+    );
+    assert_eq!(parsed["linearProject"].as_str(), Some("proj-123"));
+    assert_eq!(
+        parsed["milestones"][0]["name"].as_str(),
+        Some("M9: Collaborative Planning Alpha")
+    );
+    assert_eq!(
+        parsed["milestones"][0]["milestoneId"].as_str(),
+        Some("ms-1")
+    );
+    assert_eq!(parsed["tasks"][0]["taskId"].as_str(), Some("OSYM-730"));
+    assert_eq!(parsed["tasks"][0]["issue"].as_str(), Some("COE-395"));
 }
 
 // ─── Compile-time gate for all planning types ─────────────────────────────
