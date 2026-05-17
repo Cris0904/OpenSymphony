@@ -6,10 +6,11 @@ use opensymphony::opensymphony_domain::{
     ControlPlaneConversationEvent as ConversationEvent,
     ControlPlaneDaemonSnapshot as DaemonSnapshot, ControlPlaneDaemonState as DaemonState,
     ControlPlaneDaemonStatus as DaemonStatus, ControlPlaneFileChange as FileChange,
-    ControlPlaneFileChangeKind as FileChangeKind, ControlPlaneIssueRuntimeState as IssueRuntimeState,
-    ControlPlaneIssueSnapshot as IssueSnapshot, ControlPlaneMetricsSnapshot as MetricsSnapshot,
-    ControlPlaneRecentEvent as RecentEvent, ControlPlaneRecentEventKind as RecentEventKind,
-    ControlPlaneWorkerOutcome as WorkerOutcome, SnapshotEnvelope,
+    ControlPlaneFileChangeKind as FileChangeKind,
+    ControlPlaneIssueRuntimeState as IssueRuntimeState, ControlPlaneIssueSnapshot as IssueSnapshot,
+    ControlPlaneMetricsSnapshot as MetricsSnapshot, ControlPlaneRecentEvent as RecentEvent,
+    ControlPlaneRecentEventKind as RecentEventKind, ControlPlaneWorkerOutcome as WorkerOutcome,
+    SnapshotEnvelope,
 };
 use opensymphony::opensymphony_gateway::{
     GatewayCapabilities, GatewayServer, control_plane_to_dashboard_snapshot,
@@ -965,10 +966,8 @@ async fn gateway_returns_404_for_unknown_run_diffs() {
     assert_eq!(resp.status(), 404);
 
     // Assert the 404 response body is well-formed
-    let body: opensymphony::opensymphony_gateway_schema::run::FileDiffPage = resp
-        .json()
-        .await
-        .expect("decode 404 run diffs body");
+    let body: opensymphony::opensymphony_gateway_schema::run::FileDiffPage =
+        resp.json().await.expect("decode 404 run diffs body");
     assert_eq!(body.run_id, "UNKNOWN-999");
     assert!(body.hunks.is_empty());
 
@@ -1160,9 +1159,7 @@ async fn gateway_run_detail_failed_without_retries() {
     // Failed with retry_count == 0 should map to TrackerTerminal, not RetryExhausted
     assert_eq!(
         response.release_reason,
-        Some(
-            opensymphony::opensymphony_gateway_schema::run::ReleaseReason::TrackerTerminal
-        )
+        Some(opensymphony::opensymphony_gateway_schema::run::ReleaseReason::TrackerTerminal)
     );
     // Finished at should be set for terminal states
     assert!(response.finished_at.is_some());
@@ -1198,9 +1195,7 @@ async fn gateway_run_detail_completed_state() {
     assert_eq!(response.run_id, "COE-301");
     assert_eq!(
         response.release_reason,
-        Some(
-            opensymphony::opensymphony_gateway_schema::run::ReleaseReason::Completed
-        )
+        Some(opensymphony::opensymphony_gateway_schema::run::ReleaseReason::Completed)
     );
     assert!(response.finished_at.is_some());
 
