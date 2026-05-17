@@ -382,3 +382,81 @@ async fn gateway_and_control_plane_are_reachable() {
     gateway_task.abort();
     control_task.abort();
 }
+
+/// Verify the gateway serves built web assets under /app/* and falls back to
+/// index.html for SPA routes.
+#[tokio::test]
+async fn gateway_serves_web_assets_and_spa_fallback() {
+    use std::fs;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    let store = SnapshotStore::new(fixture_snapshot(0));
+
+    // Create a temporary directory with mock web assets.
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let index_path = temp_dir.path().join("index.html");
+    let mut index_file = fs::File::create(&index_path).expect("create index.html");
+    writeln!(index_file, "<html><body>Web App</body></html>").expect("write index.html");
+
+    let css_path = temp_dir.path().join("assets").join("style.css");
+    fs::create_dir_all(css_path.parent().unwrap()).expect("create assets dir");
+    let mut css_file = fs::File::create(&css_path).expect("create style.css");
+    writeln!(css_file, "body {{ color: red; }}").expect("write style.css");
+
+    let server = GatewayServer::new(store.clone())
+        .with_web_assets(temp_dir.path().to_string_lossy().to_string());
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+
+    // Serve index.html at /app/
+    let index_resp = client
+        .get(format!("http://{address}/app/"))
+        .send()
+        .await
+        .expect("fetch /app/");
+    assert!(index_resp.status().is_success(), "index.html should be served");
+    let index_body = index_resp.text().await.expect("read index body");
+    assert!(index_body.contains("Web App"), "index.html content mismatch");
+
+    // Serve assets file directly
+    let css_resp = client
+        .get(format!("http://{address}/app/assets/style.css"))
+        .send()
+        .await
+        .expect("fetch /app/assets/style.css");
+    assert!(css_resp.status().is_success(), "CSS should be served");
+    let css_body = css_resp.text().await.expect("read css body");
+    assert!(css_body.contains("body"), "CSS content mismatch");
+
+    // SPA fallback: no extension should serve index.html
+    let spa_resp = client
+        .get(format!("http://{address}/app/dashboard/runs"))
+        .send()
+        .await
+        .expect("fetch SPA route");
+    assert!(spa_resp.status().is_success(), "SPA route should serve index.html");
+    let spa_body = spa_resp.text().await.expect("read spa body");
+    assert!(spa_body.contains("Web App"), "SPA fallback should serve index.html");
+
+    // 404 for non-existent file with extension
+    let not_found = client
+        .get(format!("http://{address}/app/nonexistent.js"))
+        .send()
+        .await
+        .expect("fetch nonexistent.js");
+    assert!(not_found.status().is_client_error(), "nonexistent file should 404");
+
+    server_task.abort();
+}

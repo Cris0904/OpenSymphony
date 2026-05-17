@@ -1,10 +1,11 @@
-use std::{convert::Infallible, time::Duration};
+use std::{convert::Infallible, path::Path, time::Duration};
 
 use async_stream::stream;
 use axum::{
     Json, Router,
-    extract::State,
-    response::sse::{Event, KeepAlive, Sse},
+    extract::{Path as ExtractPath, State},
+    http::StatusCode,
+    response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::get,
 };
 use tokio::{net::TcpListener, sync::broadcast};
@@ -27,24 +28,53 @@ pub use crate::opensymphony_gateway_schema::{
 
 const GATEWAY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+/// Combined state for the gateway router.
+#[derive(Debug, Clone)]
+struct GatewayState {
+    store: SnapshotStore,
+    /// Optional path to the built web app static assets directory.
+    web_assets_dir: Option<String>,
+}
+
 /// V1 gateway server that exposes stable public DTO endpoints
 /// on top of the internal control-plane `SnapshotStore`.
 #[derive(Debug, Clone)]
 pub struct GatewayServer {
-    store: SnapshotStore,
+    state: GatewayState,
 }
 
 impl GatewayServer {
     pub fn new(store: SnapshotStore) -> Self {
-        Self { store }
+        Self {
+            state: GatewayState {
+                store,
+                web_assets_dir: None,
+            },
+        }
+    }
+
+    /// Enable serving of the built web client from the given directory.
+    /// The directory should contain the output of the Vite build
+    /// (index.html, assets/, etc.).
+    pub fn with_web_assets(mut self, dir: impl Into<String>) -> Self {
+        self.state.web_assets_dir = Some(dir.into());
+        self
     }
 
     pub fn router(&self) -> Router {
-        Router::new()
+        let mut router = Router::new()
             .route("/api/v1/capabilities", get(capabilities))
             .route("/api/v1/dashboard/snapshot", get(dashboard_snapshot))
-            .route("/api/v1/events", get(events))
-            .with_state(self.store.clone())
+            .route("/api/v1/events", get(events));
+
+        // Attach static web asset routes if configured.
+        if self.state.web_assets_dir.is_some() {
+            router = router
+                .route("/app/", get(web_asset_handler))
+                .route("/app/{*path}", get(web_asset_handler));
+        }
+
+        router.with_state(self.state.clone())
     }
 
     pub async fn serve(self, listener: TcpListener) -> std::io::Result<()> {
@@ -253,21 +283,22 @@ async fn capabilities() -> Json<GatewayCapabilities> {
     Json(build_capabilities())
 }
 
-async fn dashboard_snapshot(State(store): State<SnapshotStore>) -> Json<DashboardSnapshot> {
-    let envelope = store.current().await;
+async fn dashboard_snapshot(State(state): State<GatewayState>) -> Json<DashboardSnapshot> {
+    let envelope = state.store.current().await;
     Json(control_plane_to_dashboard_snapshot(&envelope))
 }
 
 async fn events(
-    State(store): State<SnapshotStore>,
+    State(state): State<GatewayState>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let mut receiver = store.subscribe();
-    let initial = store.current().await;
+    let mut receiver = state.store.subscribe();
+    let initial = state.store.current().await;
+    let store_clone = state.store.clone();
     let stream = stream! {
         let mut last_sent_sequence = initial.sequence;
         yield Ok(snapshot_event(&initial));
         while let Some(envelope) =
-            next_snapshot_envelope(&store, &mut receiver, &mut last_sent_sequence).await
+            next_snapshot_envelope(&store_clone, &mut receiver, &mut last_sent_sequence).await
         {
             yield Ok(snapshot_event(&envelope));
         }
@@ -321,4 +352,93 @@ async fn latest_from_store(
 ) -> Option<SnapshotEnvelope> {
     let latest = store.current().await;
     (latest.sequence > last_sent_sequence).then_some(latest)
+}
+
+// ---------------------------------------------------------------------------
+// Web client static asset serving
+// ---------------------------------------------------------------------------
+
+/// Serve a static file from the web assets directory, or fall back to
+/// `index.html` for SPA routes.
+async fn web_asset_handler(
+    State(state): State<GatewayState>,
+    path: Option<ExtractPath<String>>,
+) -> Response {
+    // If web assets are not configured, return 404.
+    let assets_dir = match &state.web_assets_dir {
+        Some(dir) => dir,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let rest = path.map(|p| p.0).unwrap_or_default();
+
+    // Reject path traversal.
+    if rest.starts_with("..") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    // If the path is empty (root /app/), serve index.html directly.
+    if rest.is_empty() {
+        let index_path = Path::new(assets_dir).join("index.html");
+        match serve_file(&index_path).await {
+            Ok(resp) => return resp,
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    // Try the exact file path first.
+    let candidate = Path::new(assets_dir).join(&rest);
+    if candidate.is_file() {
+        match serve_file(&candidate).await {
+            Ok(resp) => return resp,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+
+    // SPA fallback: if the path has no file extension, serve index.html.
+    if !rest.contains('.') {
+        let index_path = Path::new(assets_dir).join("index.html");
+        match serve_file(&index_path).await {
+            Ok(resp) => return resp,
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    StatusCode::NOT_FOUND.into_response()
+}
+
+/// Read a file from disk and return it as an HTTP response with the correct
+/// content type.
+async fn serve_file(path: &Path) -> Result<Response, std::io::Error> {
+    let bytes = tokio::fs::read(path).await?;
+    let content_type = mime_type(path);
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, content_type)],
+        bytes,
+    )
+        .into_response())
+}
+
+/// Return a conservative MIME type for the given file extension.
+fn mime_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("eot") => "application/vnd.ms-fontobject",
+        Some("otf") => "font/otf",
+        Some("map") => "application/json; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("xml") => "application/xml; charset=utf-8",
+        Some(_) | None => "application/octet-stream",
+    }
 }
