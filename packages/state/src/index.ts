@@ -48,6 +48,7 @@ export interface TerminalSlice {
 export interface ApprovalSlice {
   pending: ApprovalRequest[];
   resolved: Map<string, ApprovalRequest>;
+  loading: boolean;
   error: string | null;
 }
 
@@ -73,7 +74,7 @@ export const initialState: GatewayState = {
   taskGraph: { nodes: new Map(), rootIds: [], loading: false, error: null },
   run: { runs: new Map(), loading: false, error: null },
   terminal: { frames: new Map(), cursor: new Map(), loading: false, error: null },
-  approval: { pending: [], resolved: new Map(), error: null },
+  approval: { pending: [], resolved: new Map(), loading: false, error: null },
   planning: { sessions: new Map(), loading: false, error: null },
 };
 
@@ -181,12 +182,12 @@ export function gatewayReducer(
     case "ERROR":
       return {
         ...state,
-        dashboard: { ...state.dashboard, error: action.error },
-        taskGraph: { ...state.taskGraph, error: action.error },
-        run: { ...state.run, error: action.error },
-        terminal: { ...state.terminal, error: action.error },
-        approval: { ...state.approval, error: action.error },
-        planning: { ...state.planning, error: action.error },
+        dashboard: { ...state.dashboard, error: action.error, loading: false },
+        taskGraph: { ...state.taskGraph, error: action.error, loading: false },
+        run: { ...state.run, error: action.error, loading: false },
+        terminal: { ...state.terminal, error: action.error, loading: false },
+        approval: { ...state.approval, error: action.error, loading: false },
+        planning: { ...state.planning, error: action.error, loading: false },
       };
 
     case "LOADING":
@@ -196,6 +197,7 @@ export function gatewayReducer(
         taskGraph: { ...state.taskGraph, loading: action.loading },
         run: { ...state.run, loading: action.loading },
         terminal: { ...state.terminal, loading: action.loading },
+        approval: { ...state.approval, loading: action.loading },
         planning: { ...state.planning, loading: action.loading },
       };
 
