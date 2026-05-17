@@ -19,13 +19,13 @@ if (root) {
       h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
       .badge { display: inline-block; padding: 0.2em 0.6em; border-radius: 4px; background: #21262d; font-size: 0.85rem; }
       .status { margin-top: 1rem; }
-      .status ok { color: #3fb950; }
-      .status warn { color: #d29922; }
+      .status-ok { color: #3fb950; }
+      .status-warn { color: #d29922; }
     </style>
     <h1>OpenSymphony Web Client</h1>
     <div><span class="badge">gateway: ${config.gatewayUrl}</span></div>
     <div><span class="badge">mode: ${config.gatewayServed ? "gateway-served" : "separate"}</span></div>
-    <div class="status ok">Browser shell ready.</div>
+    <div class="status status-ok">Browser shell ready.</div>
   `;
 }
 
