@@ -21,7 +21,7 @@ export function schemaVersionToString(v: SchemaVersion): string {
 /** Parse a dotted version string into a SchemaVersion. */
 export function schemaVersionFromString(s: string): SchemaVersion {
   const parts = s.split(".");
-  if (parts.length !== 3) {
+  if (parts.length !== 3 || parts.some((p) => p === "")) {
     throw new Error(`Invalid schema version string: ${s}`);
   }
   const [major, minor, patch] = parts.map(Number);
