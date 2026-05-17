@@ -617,10 +617,8 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeO
         retry_count: issue.retry_count,
         workspace_id: Some(issue.workspace_path_suffix.clone()),
         harness_type: issue.server_base_url.is_some().then(|| "openhands".into()),
-        conversation_id: issue.server_base_url.as_ref().and_then(|_| {
-            (!issue.conversation_id_suffix.is_empty())
-                .then(|| format!("conv-{}", issue.conversation_id_suffix))
-        }),
+        conversation_id: (!issue.conversation_id_suffix.is_empty())
+            .then(|| format!("conv-{}", issue.conversation_id_suffix)),
         last_event_at: Some(issue.last_event_at),
         diff_summary,
         validation_status: None,
@@ -708,17 +706,27 @@ async fn get_run_detail(
             worker_id: "default-worker".into(),
             status,
             lifecycle_state,
-            claimed_at: issue.last_event_at,
-            started_at: Some(issue.last_event_at),
+            // Use published timestamp so it does not drift on every event.
+            claimed_at: envelope.published_at,
+            // started_at is meaningful only when the run is actively running.
+            started_at: matches!(
+                issue.runtime_state,
+                ControlPlaneIssueRuntimeState::Running | ControlPlaneIssueRuntimeState::Releasing
+            )
+            .then(|| envelope.published_at),
             finished_at: None,
             release_reason,
-            turn_count: issue.retry_count,
-            max_turns: 8,
+            // retry_count and turn_count are distinct concepts; the snapshot
+            // currently only tracks retries.
+            turn_count: 0,
+            max_turns: issue.retry_count.saturating_add(1).max(1),
             retry_attempt: (issue.retry_count > 0).then_some(issue.retry_count),
             input_tokens: issue.input_tokens,
             output_tokens: issue.output_tokens,
             cache_read_tokens: issue.cache_read_tokens,
             runtime_seconds: 0,
+            // Emit conversation_id whenever a suffix is available regardless of
+            // whether a server URL is configured.
             conversation_id: (!issue.conversation_id_suffix.is_empty())
                 .then(|| format!("conv-{}", issue.conversation_id_suffix)),
             workspace_id: (!issue.workspace_path_suffix.is_empty())
@@ -856,9 +864,16 @@ async fn get_run_diffs(
                 ControlPlaneFileChangeKind::Removed => "removed",
             };
             DiffHunk {
+                // Use proper unified-diff header format: @@ -start,count +start,count @@
+                // Counts default to 1 when the line count is 0 so the header is valid.
                 header: format!(
-                    "@@ -{} +{} @@  {}  ({})",
-                    fc.lines_removed, fc.lines_added, path, kind_label
+                    "@@ -{},{} +{},{} @@  {}  ({})",
+                    1,
+                    fc.lines_removed.max(1),
+                    1,
+                    fc.lines_added.max(1),
+                    path,
+                    kind_label
                 ),
                 start_line: 1,
                 old_line_count: fc.lines_removed,
@@ -868,12 +883,18 @@ async fn get_run_diffs(
         })
         .collect();
 
-    let file_path = files
-        .first()
-        .map(|fc| sanitize_file_path(&workspace_root, &fc.path));
-
     let total_lines_added: u32 = files.iter().map(|f| f.lines_added).sum();
     let total_lines_removed: u32 = files.iter().map(|f| f.lines_removed).sum();
+
+    // When multiple files are present, list all paths so the caller knows the
+    // response is an aggregate rather than a single-file diff.
+    let file_path = if files.len() == 1 {
+        files
+            .first()
+            .map(|fc| sanitize_file_path(&workspace_root, &fc.path))
+    } else {
+        Some(format!("[{} files]", files.len()))
+    };
 
     (
         StatusCode::OK,
