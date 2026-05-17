@@ -58,7 +58,8 @@ CDN, and configured to point at a remote gateway URL.
 
 1. Build the web app with the target gateway URL:
    ```bash
-   VITE_GATEWAY_URL=https://gateway.example.com \fVITE_APP_BASE_PATH=/ npm run build --workspace=@opensymphony/web
+   VITE_GATEWAY_URL=https://gateway.example.com \
+   VITE_APP_BASE_PATH=/ npm run build --workspace=@opensymphony/web
    ```
 
 2. Deploy `apps/web/dist/` to a static file host (nginx, Cloudflare Pages, etc.).
