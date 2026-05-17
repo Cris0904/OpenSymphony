@@ -678,7 +678,7 @@ async fn get_run_detail(
         ControlPlaneIssueRuntimeState::Idle => (RunStatus::Unclaimed, RunLifecycleState::Eligible),
         ControlPlaneIssueRuntimeState::Running => (RunStatus::Running, RunLifecycleState::Running),
         ControlPlaneIssueRuntimeState::RetryQueued => {
-            (RunStatus::RetryQueued, RunLifecycleState::Failed)
+            (RunStatus::RetryQueued, RunLifecycleState::Queued)
         }
         ControlPlaneIssueRuntimeState::Releasing => {
             (RunStatus::Released, RunLifecycleState::Releasing)
@@ -714,7 +714,13 @@ async fn get_run_detail(
                 ControlPlaneIssueRuntimeState::Running | ControlPlaneIssueRuntimeState::Releasing
             )
             .then(|| envelope.published_at),
-            finished_at: None,
+            // finished_at is set for terminal states using the snapshot timestamp
+            // since the control plane does not yet track exact completion time.
+            finished_at: matches!(
+                issue.runtime_state,
+                ControlPlaneIssueRuntimeState::Completed | ControlPlaneIssueRuntimeState::Failed
+            )
+            .then(|| envelope.published_at),
             release_reason,
             // retry_count and turn_count are distinct concepts; the snapshot
             // currently only tracks retries.
@@ -857,23 +863,14 @@ async fn get_run_diffs(
     let hunks: Vec<DiffHunk> = files
         .iter()
         .map(|fc| {
-            let path = sanitize_file_path(&workspace_root, &fc.path);
-            let kind_label = match fc.change_kind {
-                ControlPlaneFileChangeKind::Created => "added",
-                ControlPlaneFileChangeKind::Modified => "modified",
-                ControlPlaneFileChangeKind::Removed => "removed",
-            };
             DiffHunk {
-                // Use proper unified-diff header format: @@ -start,count +start,count @@
-                // Counts default to 1 when the line count is 0 so the header is valid.
+                // Standard unified-diff hunk header: @@ -start,count +start,count @@
                 header: format!(
-                    "@@ -{},{} +{},{} @@  {}  ({})",
+                    "@@ -{},{} +{},{} @@",
                     1,
                     fc.lines_removed.max(1),
                     1,
-                    fc.lines_added.max(1),
-                    path,
-                    kind_label
+                    fc.lines_added.max(1)
                 ),
                 start_line: 1,
                 old_line_count: fc.lines_removed,
