@@ -375,11 +375,6 @@ async fn web_asset_handler(
 
     let rest = path.map(|p| p.0).unwrap_or_default();
 
-    // Reject path traversal.
-    if rest.starts_with("..") {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-
     // If the path is empty (root /app/), serve index.html directly.
     if rest.is_empty() {
         let index_path = Path::new(assets_dir).join("index.html");
@@ -389,8 +384,21 @@ async fn web_asset_handler(
         }
     }
 
+    // Resolve the joined path and verify it stays inside the assets directory.
+    let base = Path::new(assets_dir);
+    let candidate = base.join(&rest);
+    // Use canonicalize to resolve any ".." or symlink components.
+    // If canonicalize fails (e.g. the file doesn't exist yet), fall back to
+    // path-clean style check: reject if any component is "..".
+    let is_inside = match (candidate.canonicalize(), base.canonicalize()) {
+        (Ok(resolved), Ok(base_resolved)) => resolved.starts_with(&base_resolved),
+        _ => !rest.split('/').any(|seg| seg == ".."),
+    };
+    if !is_inside {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     // Try the exact file path first.
-    let candidate = Path::new(assets_dir).join(&rest);
     if candidate.is_file() {
         match serve_file(&candidate).await {
             Ok(resp) => return resp,
@@ -400,7 +408,7 @@ async fn web_asset_handler(
 
     // SPA fallback: if the path has no file extension, serve index.html.
     if !rest.contains('.') {
-        let index_path = Path::new(assets_dir).join("index.html");
+        let index_path = base.join("index.html");
         match serve_file(&index_path).await {
             Ok(resp) => return resp,
             Err(_) => return StatusCode::NOT_FOUND.into_response(),

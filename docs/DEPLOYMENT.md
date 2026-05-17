@@ -118,3 +118,4 @@ After building, `apps/web/dist/` should contain:
 The web build does not include Tauri APIs or desktop-only transports. The
 `apps/web/src/` directory is isolated from `apps/desktop/src/` and only imports
 shared packages from `packages/`.
+

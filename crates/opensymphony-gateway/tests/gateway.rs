@@ -474,5 +474,16 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
         "nonexistent file should 404"
     );
 
+    // Path traversal must be rejected (404)
+    let traversal = client
+        .get(format!("http://{address}/app/assets/../../../etc/passwd"))
+        .send()
+        .await
+        .expect("fetch path traversal attempt");
+    assert!(
+        traversal.status().is_client_error(),
+        "path traversal must be rejected with 404"
+    );
+
     server_task.abort();
 }
