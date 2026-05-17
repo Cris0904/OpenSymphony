@@ -653,13 +653,18 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeO
     };
 
     let is_running = matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Running);
+    // An issue is eligible only when it is idle (not yet started) and not
+    // blocked.  Completed and failed issues must not appear eligible.
+    let is_eligible =
+        !issue.blocked && matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle);
+    // A blocked issue cannot be queued even if its runtime state is Idle.
+    let is_queued = is_eligible;
 
     TaskGraphRuntimeOverlay {
-        // An issue is eligible only when it is idle (not yet started) and not
-        // blocked.  Completed and failed issues must not appear eligible.
-        eligible: !issue.blocked
-            && matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle),
-        queued: matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle),
+        eligible: is_eligible,
+        queued: is_queued,
+        // active_run_id maps to the gateway run identifier (the Linear issue
+        // identifier), which is the key used by the /runs/{run_id} endpoints.
         active_run_id: is_running.then(|| issue.identifier.clone()),
         last_outcome: outcome,
         retry_count: issue.retry_count,
