@@ -1,25 +1,30 @@
+use chrono::Utc;
 use opensymphony::opensymphony_gateway_schema::{
     action::{ActionDispatch, ActionKind, ActionTarget},
     approval::{ActionReceipt, ActionReceiptStatus, ApprovalKind, ApprovalRequest, ApprovalStatus},
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
     cursor::{PageCursor, StreamCursor},
     envelope::{EntityKind, EntityRef, GatewayEnvelope},
-    planning::{PlanningArtifact, PlanningArtifactKind, PlanningSessionStatus, PlanningSessionSummary},
+    planning::{
+        PlanningArtifact, PlanningArtifactKind, PlanningSessionStatus, PlanningSessionSummary,
+    },
     run::{ReleaseReason, RunDetail, RunEvent, RunEventPage, RunStatus},
-    snapshot::{DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind, SnapshotEventSummary},
+    snapshot::{
+        DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind,
+        SnapshotEventSummary,
+    },
     task_graph::{TaskGraphNode, TaskGraphNodeKind, TaskGraphStateCategory},
     terminal::{TerminalEncoding, TerminalFrame, TerminalFrameKind, TerminalSnapshot},
     transport::{TransportProfile, TransportRecommendation},
-    version::{SchemaVersion, GATEWAY_SCHEMA_VERSION},
+    version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
 };
-use chrono::Utc;
 use serde_json::json;
 
 fn must_serialize<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("must serialize")
 }
 
-fn must_deserialize<'a, T: serde::de::DeserializeOwned>(json: &'a str) -> T {
+fn must_deserialize<T: serde::de::DeserializeOwned>(json: &str) -> T {
     serde_json::from_str(json).expect("must deserialize")
 }
 
@@ -44,8 +49,7 @@ fn gateway_schema_version_constant_matches() {
 
 #[test]
 fn stream_cursor_roundtrips() {
-    let cursor = StreamCursor::new(42, "events")
-        .with_timestamp_anchor(1_700_000_000);
+    let cursor = StreamCursor::new(42, "events").with_timestamp_anchor(1_700_000_000);
     let json = must_serialize(&cursor);
     let back: StreamCursor = must_deserialize(&json);
     assert_eq!(cursor, back);

@@ -7,7 +7,9 @@ use tokio::{
     sync::mpsc,
 };
 
-use opensymphony::opensymphony_gateway_schema::terminal::{TerminalEncoding, TerminalFrame, TerminalFrameKind};
+use opensymphony::opensymphony_gateway_schema::terminal::{
+    TerminalEncoding, TerminalFrame, TerminalFrameKind,
+};
 use opensymphony::opensymphony_gateway_schema::version::SchemaVersion;
 
 const BENCH_PAYLOAD: &str = concat!(
@@ -192,8 +194,7 @@ async fn bench_websocket_loopback_throughput() {
         let (mut ws, _) = connect_async(&url).await.expect("connect ws");
         let start = Instant::now();
         for _ in 0..total_messages {
-            let msg =
-                tokio_tungstenite::tungstenite::Message::Binary(payload.clone().into());
+            let msg = tokio_tungstenite::tungstenite::Message::Binary(payload.clone().into());
             if ws.send(msg).await.is_err() {
                 break;
             }
