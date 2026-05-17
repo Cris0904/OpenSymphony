@@ -1,9 +1,12 @@
-use std::{convert::Infallible, time::Duration};
+use std::{convert::Infallible, path::Path as StdPath, time::Duration};
+
+use chrono::Utc;
+use serde_json::json;
 
 use async_stream::stream;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path as AxumPath, State},
     response::sse::{Event, KeepAlive, Sse},
     routing::get,
 };
@@ -12,16 +15,24 @@ use tokio::{net::TcpListener, sync::broadcast};
 pub use crate::opensymphony_control::SnapshotStore;
 pub use crate::opensymphony_domain::{
     ControlPlaneAgentServerStatus, ControlPlaneDaemonSnapshot, ControlPlaneDaemonState,
-    ControlPlaneDaemonStatus, ControlPlaneIssueRuntimeState, ControlPlaneIssueSnapshot,
-    ControlPlaneMetricsSnapshot, ControlPlaneRecentEvent, ControlPlaneRecentEventKind,
-    ControlPlaneWorkerOutcome, SnapshotEnvelope,
+    ControlPlaneDaemonStatus, ControlPlaneFileChange, ControlPlaneFileChangeKind,
+    ControlPlaneIssueRuntimeState, ControlPlaneIssueSnapshot, ControlPlaneMetricsSnapshot,
+    ControlPlaneRecentEvent, ControlPlaneRecentEventKind, ControlPlaneWorkerOutcome,
+    SnapshotEnvelope,
 };
 pub use crate::opensymphony_gateway_schema::{
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
-    snapshot::{
-        DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind,
-        SnapshotEventSummary,
+    cursor::PageCursor,
+    run::{
+        ChangedFileEntry, FileChangeKind, FileDiffPage, ReleaseReason, RunAction, RunDetail,
+        RunEvent, RunEventPage, RunFilesPage, RunLifecycleState, RunStatus,
     },
+    snapshot::{
+        DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectDetail, ProjectIssueSummary,
+        ProjectIssuesPage, ProjectList, ProjectMilestoneSummary, ProjectSummary,
+        SnapshotEventKind, SnapshotEventSummary,
+    },
+    task_graph::{DiffSummary, TaskGraphRuntimeOverlay, TaskGraphSnapshot, TaskGraphStateCategory},
     version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
 };
 
@@ -44,6 +55,13 @@ impl GatewayServer {
             .route("/api/v1/capabilities", get(capabilities))
             .route("/api/v1/dashboard/snapshot", get(dashboard_snapshot))
             .route("/api/v1/events", get(events))
+            .route("/api/v1/projects", get(list_projects))
+            .route("/api/v1/projects/{project_id}", get(get_project))
+            .route("/api/v1/projects/{project_id}/taskgraph", get(get_task_graph))
+            .route("/api/v1/runs/{run_id}", get(get_run_detail))
+            .route("/api/v1/runs/{run_id}/events", get(get_run_events))
+            .route("/api/v1/runs/{run_id}/files", get(get_run_files))
+            .route("/api/v1/runs/{run_id}/diffs", get(get_run_diffs))
             .with_state(self.store.clone())
     }
 
@@ -65,8 +83,6 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
         total_cost_micros: snapshot.metrics.total_cost_micros,
     };
 
-    // For v1 we flatten all issues into a single synthetic project because the
-    // control-plane does not yet expose per-project grouping.
     let projects = if snapshot.issues.is_empty() {
         Vec::new()
     } else {
@@ -172,19 +188,19 @@ fn build_capabilities() -> GatewayCapabilities {
         features: vec![
             FeatureCapability {
                 feature: "task_graph".into(),
-                available: false,
+                available: true,
                 requires_auth: false,
                 requires_plan: None,
             },
             FeatureCapability {
                 feature: "run_detail".into(),
-                available: false,
+                available: true,
                 requires_auth: false,
                 requires_plan: None,
             },
             FeatureCapability {
                 feature: "event_journal".into(),
-                available: false,
+                available: true,
                 requires_auth: false,
                 requires_plan: None,
             },
@@ -321,4 +337,420 @@ async fn latest_from_store(
 ) -> Option<SnapshotEnvelope> {
     let latest = store.current().await;
     (latest.sequence > last_sent_sequence).then_some(latest)
+}
+
+// ── Read API helpers ──────────────────────────────────────────────────────────
+
+fn find_issue_snapshot<'a>(
+    envelope: &'a SnapshotEnvelope,
+    run_id: &'a str,
+) -> Option<&'a ControlPlaneIssueSnapshot> {
+    envelope
+        .snapshot
+        .issues
+        .iter()
+        .find(|issue| {
+            issue.identifier.eq_ignore_ascii_case(run_id)
+                || issue.conversation_id_suffix.eq_ignore_ascii_case(run_id)
+                || run_id.starts_with(&issue.identifier)
+        })
+}
+
+/// Strip the workspace root from a raw absolute path so that the public API
+/// never leaks a local filesystem path outside the workspace boundary.
+pub fn sanitize_file_path(workspace_root: &str, raw_path: &str) -> String {
+    let root = StdPath::new(workspace_root);
+    let candidate = StdPath::new(raw_path);
+    candidate
+        .strip_prefix(root)
+        .map(|rel: &StdPath| rel.to_string_lossy().to_string())
+        .unwrap_or_else(|_| {
+            candidate
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| raw_path.to_string())
+        })
+}
+
+fn map_file_change_kind(kind: ControlPlaneFileChangeKind) -> FileChangeKind {
+    match kind {
+        ControlPlaneFileChangeKind::Created => FileChangeKind::Created,
+        ControlPlaneFileChangeKind::Modified => FileChangeKind::Modified,
+        ControlPlaneFileChangeKind::Removed => FileChangeKind::Removed,
+    }
+}
+
+// ── Project endpoints ─────────────────────────────────────────────────────────
+
+async fn list_projects(State(store): State<SnapshotStore>) -> Json<ProjectList> {
+    let envelope = store.current().await;
+    let snapshot = &envelope.snapshot;
+    let projects = if snapshot.issues.is_empty() {
+        Vec::new()
+    } else {
+        let running = snapshot
+            .issues
+            .iter()
+            .filter(|i| matches!(i.runtime_state, ControlPlaneIssueRuntimeState::Running))
+            .count() as u32;
+        let completed = snapshot
+            .issues
+            .iter()
+            .filter(|i| matches!(i.last_outcome, ControlPlaneWorkerOutcome::Completed))
+            .count() as u32;
+        let failed = snapshot
+            .issues
+            .iter()
+            .filter(|i| matches!(i.last_outcome, ControlPlaneWorkerOutcome::Failed))
+            .count() as u32;
+
+        vec![ProjectSummary {
+            project_id: "default".into(),
+            name: "OpenSymphony".into(),
+            milestone_count: 0,
+            issue_count: snapshot.issues.len() as u32,
+            running_count: running,
+            completed_count: completed,
+            failed_count: failed,
+        }]
+    };
+
+    Json(ProjectList {
+        schema_version: SchemaVersion::v1(),
+        projects,
+    })
+}
+
+async fn get_project(
+    State(store): State<SnapshotStore>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Json<ProjectDetail> {
+    let envelope = store.current().await;
+    let snapshot = &envelope.snapshot;
+    let issue_count = snapshot.issues.len() as u32;
+    let running = snapshot
+        .issues
+        .iter()
+        .filter(|i| matches!(i.runtime_state, ControlPlaneIssueRuntimeState::Running))
+        .count() as u32;
+    let completed = snapshot
+        .issues
+        .iter()
+        .filter(|i| matches!(i.last_outcome, ControlPlaneWorkerOutcome::Completed))
+        .count() as u32;
+    let failed = snapshot
+        .issues
+        .iter()
+        .filter(|i| matches!(i.last_outcome, ControlPlaneWorkerOutcome::Failed))
+        .count() as u32;
+
+    Json(ProjectDetail {
+        schema_version: SchemaVersion::v1(),
+        project_id,
+        name: "OpenSymphony".into(),
+        milestone_count: 0,
+        issue_count,
+        running_count: running,
+        completed_count: completed,
+        failed_count: failed,
+        summary: Some("Current workspace issues".into()),
+        milestones: Vec::new(),
+    })
+}
+
+// ── Task Graph endpoint ───────────────────────────────────────────────────────
+
+async fn get_task_graph(
+    State(store): State<SnapshotStore>,
+    AxumPath(project_id): AxumPath<String>,
+) -> Json<TaskGraphSnapshot> {
+    let envelope = store.current().await;
+    let snapshot = &envelope.snapshot;
+    let generated_at = Utc::now();
+
+    let nodes: Vec<_> = snapshot
+        .issues
+        .iter()
+        .map(|issue| {
+            let state_category = map_runtime_state_to_graph_category(&issue.runtime_state);
+            let runtime_overlay = build_runtime_overlay(issue);
+
+            crate::opensymphony_gateway_schema::task_graph::TaskGraphNode {
+                schema_version: SchemaVersion::v1(),
+                node_id: issue.identifier.clone(),
+                kind: crate::opensymphony_gateway_schema::task_graph::TaskGraphNodeKind::Issue,
+                identifier: issue.identifier.clone(),
+                title: issue.title.clone(),
+                state: issue.tracker_state.clone(),
+                state_category,
+                priority: None,
+                parent_id: None,
+                children: Vec::new(),
+                blocked_by: if issue.blocked {
+                    vec![format!("blocked: {}", issue.identifier)]
+                } else {
+                    Vec::new()
+                },
+                url: None,
+                branch_name: None,
+                labels: Vec::new(),
+                created_at: None,
+                updated_at: None,
+                estimate_minutes: None,
+                runtime_overlay,
+            }
+        })
+        .collect();
+
+    let root_ids: Vec<String> = snapshot.issues.iter().map(|i| i.identifier.clone()).collect();
+
+    Json(TaskGraphSnapshot {
+        schema_version: SchemaVersion::v1(),
+        project_id,
+        generated_at,
+        nodes,
+        root_ids,
+    })
+}
+
+fn map_runtime_state_to_graph_category(state: &ControlPlaneIssueRuntimeState) -> TaskGraphStateCategory {
+    match state {
+        ControlPlaneIssueRuntimeState::Idle => TaskGraphStateCategory::Todo,
+        ControlPlaneIssueRuntimeState::Running => TaskGraphStateCategory::InProgress,
+        ControlPlaneIssueRuntimeState::RetryQueued => TaskGraphStateCategory::InProgress,
+        ControlPlaneIssueRuntimeState::Releasing => TaskGraphStateCategory::InProgress,
+        ControlPlaneIssueRuntimeState::Completed => TaskGraphStateCategory::Done,
+        ControlPlaneIssueRuntimeState::Failed => TaskGraphStateCategory::Done,
+    }
+}
+
+fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> Option<TaskGraphRuntimeOverlay> {
+    let diff_summary = if issue.modified_files.is_empty() {
+        None
+    } else {
+        let added = issue.modified_files.iter().filter(|f| f.change_kind == ControlPlaneFileChangeKind::Created).count() as u32;
+        let modified = issue.modified_files.iter().filter(|f| f.change_kind == ControlPlaneFileChangeKind::Modified).count() as u32;
+        let removed = issue.modified_files.iter().filter(|f| f.change_kind == ControlPlaneFileChangeKind::Removed).count() as u32;
+        let lines_added: u32 = issue.modified_files.iter().map(|f| f.lines_added).sum();
+        let lines_removed: u32 = issue.modified_files.iter().map(|f| f.lines_removed).sum();
+
+        Some(DiffSummary {
+            files_added: added,
+            files_modified: modified,
+            files_removed: removed,
+            lines_added,
+            lines_removed,
+        })
+    };
+
+    let outcome = match issue.last_outcome {
+        ControlPlaneWorkerOutcome::Unknown => None,
+        ControlPlaneWorkerOutcome::Running => Some("running".into()),
+        ControlPlaneWorkerOutcome::Continued => Some("continued".into()),
+        ControlPlaneWorkerOutcome::Completed => Some("completed".into()),
+        ControlPlaneWorkerOutcome::Failed => Some("failed".into()),
+        ControlPlaneWorkerOutcome::Canceled => Some("canceled".into()),
+    };
+
+    let is_running = matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Running);
+
+    Some(TaskGraphRuntimeOverlay {
+        eligible: !issue.blocked,
+        queued: matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle),
+        active_run_id: is_running.then(|| issue.identifier.clone()),
+        last_outcome: outcome,
+        retry_count: issue.retry_count,
+        workspace_id: Some(issue.workspace_path_suffix.clone()),
+        harness_type: issue.server_base_url.is_some().then(|| "openhands".into()),
+        conversation_id: issue.server_base_url.as_ref().and_then(|_| {
+            (!issue.conversation_id_suffix.is_empty())
+                .then(|| format!("conv-{}", issue.conversation_id_suffix))
+        }),
+        last_event_at: Some(issue.last_event_at),
+        diff_summary,
+        validation_status: None,
+        blocker_summary: if issue.blocked {
+            Some("Blocked by dependency".into())
+        } else {
+            None
+        },
+    })
+}
+
+// ── Run endpoints ─────────────────────────────────────────────────────────────
+
+async fn get_run_detail(
+    State(store): State<SnapshotStore>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Json<RunDetail> {
+    let envelope = store.current().await;
+    let issue = match find_issue_snapshot(&envelope, &run_id) {
+        Some(issue) => issue,
+        None => {
+            return Json(RunDetail {
+                schema_version: SchemaVersion::v1(),
+                run_id,
+                issue_id: "unknown".into(),
+                issue_identifier: "unknown".into(),
+                worker_id: "unknown".into(),
+                status: RunStatus::Unclaimed,
+                lifecycle_state: RunLifecycleState::Eligible,
+                claimed_at: Utc::now(),
+                started_at: None,
+                finished_at: None,
+                release_reason: None,
+                turn_count: 0,
+                max_turns: 0,
+                retry_attempt: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                runtime_seconds: 0,
+                conversation_id: None,
+                workspace_id: None,
+                workspace_path: None,
+                harness_type: None,
+                summary: None,
+                blocker: None,
+                error: Some("Run not found".into()),
+                allowed_actions: Vec::new(),
+            });
+        }
+    };
+
+    let (status, lifecycle_state) = match issue.runtime_state {
+        ControlPlaneIssueRuntimeState::Idle => (RunStatus::Unclaimed, RunLifecycleState::Eligible),
+        ControlPlaneIssueRuntimeState::Running => (RunStatus::Running, RunLifecycleState::Running),
+        ControlPlaneIssueRuntimeState::RetryQueued => (RunStatus::RetryQueued, RunLifecycleState::Failed),
+        ControlPlaneIssueRuntimeState::Releasing => (RunStatus::Released, RunLifecycleState::Releasing),
+        ControlPlaneIssueRuntimeState::Completed => (RunStatus::Released, RunLifecycleState::Completed),
+        ControlPlaneIssueRuntimeState::Failed => (RunStatus::Released, RunLifecycleState::Failed),
+    };
+
+    let release_reason = match issue.last_outcome {
+        ControlPlaneWorkerOutcome::Completed => Some(ReleaseReason::Completed),
+        ControlPlaneWorkerOutcome::Canceled => Some(ReleaseReason::Cancelled),
+        ControlPlaneWorkerOutcome::Failed => Some(ReleaseReason::RetryExhausted),
+        _ => None,
+    };
+
+    Json(RunDetail {
+        schema_version: SchemaVersion::v1(),
+        run_id: issue.identifier.clone(),
+        issue_id: issue.identifier.clone(),
+        issue_identifier: issue.identifier.clone(),
+        worker_id: "default-worker".into(),
+        status,
+        lifecycle_state,
+        claimed_at: issue.last_event_at,
+        started_at: Some(issue.last_event_at),
+        finished_at: None,
+        release_reason,
+        turn_count: issue.retry_count,
+        max_turns: 8,
+        retry_attempt: (issue.retry_count > 0).then_some(issue.retry_count),
+        input_tokens: issue.input_tokens,
+        output_tokens: issue.output_tokens,
+        cache_read_tokens: issue.cache_read_tokens,
+        runtime_seconds: 0,
+        conversation_id: (!issue.conversation_id_suffix.is_empty())
+            .then(|| format!("conv-{}", issue.conversation_id_suffix)),
+        workspace_id: (!issue.workspace_path_suffix.is_empty())
+            .then(|| issue.workspace_path_suffix.clone()),
+        workspace_path: None,
+        harness_type: issue.server_base_url.as_ref().map(|_| "openhands".into()),
+        summary: None,
+        blocker: issue.blocked.then(|| "Blocked by dependency".into()),
+        error: None,
+        allowed_actions: Vec::new(),
+    })
+}
+
+async fn get_run_events(
+    State(store): State<SnapshotStore>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Json<RunEventPage> {
+    let envelope = store.current().await;
+    let events: Vec<RunEvent> = match find_issue_snapshot(&envelope, &run_id) {
+        Some(issue) => issue
+            .recent_events
+            .iter()
+            .enumerate()
+            .map(|(idx, evt)| RunEvent {
+                sequence: idx as u64 + 1,
+                event_id: evt.event_id.clone(),
+                happened_at: evt.happened_at,
+                kind: evt.kind.clone(),
+                summary: evt.summary.clone(),
+                payload: Some(json!({"kind": evt.kind})),
+                raw_payload: Some(json!({"kind": evt.kind, "summary": evt.summary})),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+
+    Json(RunEventPage {
+        schema_version: SchemaVersion::v1(),
+        run_id,
+        next_cursor: None,
+        events,
+    })
+}
+
+async fn get_run_files(
+    State(store): State<SnapshotStore>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Json<RunFilesPage> {
+    let envelope = store.current().await;
+    let workspace_root = envelope.snapshot.daemon.workspace_root.clone();
+    let files: Vec<ChangedFileEntry> = match find_issue_snapshot(&envelope, &run_id) {
+        Some(issue) => issue
+            .modified_files
+            .iter()
+            .map(|fc| ChangedFileEntry {
+                path: sanitize_file_path(&workspace_root, &fc.path),
+                change_kind: map_file_change_kind(fc.change_kind),
+                lines_added: fc.lines_added,
+                lines_removed: fc.lines_removed,
+                size_bytes: None,
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+
+    Json(RunFilesPage {
+        schema_version: SchemaVersion::v1(),
+        run_id,
+        next_cursor: None,
+        files,
+    })
+}
+
+async fn get_run_diffs(
+    State(store): State<SnapshotStore>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Json<FileDiffPage> {
+    let envelope = store.current().await;
+    let workspace_root = envelope.snapshot.daemon.workspace_root.clone();
+    let files: Vec<&ControlPlaneFileChange> = match find_issue_snapshot(&envelope, &run_id) {
+        Some(issue) => issue.modified_files.iter().collect(),
+        None => Vec::new(),
+    };
+
+    let file_path = files
+        .first()
+        .map(|fc| sanitize_file_path(&workspace_root, &fc.path));
+
+    let total_lines_added: u32 = files.iter().map(|f| f.lines_added).sum();
+    let total_lines_removed: u32 = files.iter().map(|f| f.lines_removed).sum();
+
+    Json(FileDiffPage {
+        schema_version: SchemaVersion::v1(),
+        run_id,
+        file_path: file_path.unwrap_or_default(),
+        next_cursor: None,
+        hunks: Vec::new(),
+        total_lines_added,
+        total_lines_removed,
+    })
 }
