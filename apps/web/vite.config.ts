@@ -59,7 +59,7 @@ export default defineConfig({
   },
   define: {
     __GATEWAY_URL__: JSON.stringify(
-      process.env.VITE_GATEWAY_URL ?? undefined
+      process.env.VITE_GATEWAY_URL ?? ""
     ),
   },
 });

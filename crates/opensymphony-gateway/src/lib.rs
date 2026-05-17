@@ -73,6 +73,7 @@ impl GatewayServer {
         // Attach static web asset routes if configured.
         if self.state.web_assets_dir.is_some() {
             router = router
+                .route("/app", get(web_asset_handler))
                 .route("/app/", get(web_asset_handler))
                 .route("/app/{*path}", get(web_asset_handler));
         }
@@ -418,8 +419,9 @@ async fn web_asset_handler(
         }
     }
 
-    // SPA fallback: if the path has no file extension, serve index.html.
-    if !rest.contains('.') {
+    // SPA fallback: if the path does not look like a static asset request,
+    // serve index.html so client-side routing works.
+    if !path_has_known_extension(&rest) {
         let index_path = base.join("index.html");
         match serve_file(&index_path).await {
             Ok(resp) => return resp,
@@ -428,6 +430,25 @@ async fn web_asset_handler(
     }
 
     StatusCode::NOT_FOUND.into_response()
+}
+
+/// Return true if the URL path segment looks like a request for a known static
+/// asset file.  Paths that do not match these extensions are treated as SPA
+/// routes and should fall back to `index.html`.
+fn path_has_known_extension(path: &str) -> bool {
+    if let Some(dot_pos) = path.rfind('.') {
+        if let Some(ext) = path.get(dot_pos + 1..) {
+            return matches!(
+                ext.to_lowercase().as_str(),
+                "html" | "css" | "js" | "json" | "png" | "jpg" | "jpeg"
+                    | "gif" | "svg" | "ico" | "woff" | "woff2" | "ttf"
+                    | "eot" | "otf" | "map" | "txt" | "xml" | "webp"
+                    | "mp4" | "webm" | "mp3" | "wav" | "flac" | "pdf"
+                    | "zip" | "gz" | "tar" | "bz2"
+            );
+        }
+    }
+    false
 }
 
 /// Read a file from disk and return it as an HTTP response with the correct

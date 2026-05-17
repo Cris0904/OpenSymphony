@@ -485,5 +485,37 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
         "path traversal must be rejected with 404"
     );
 
+    // SPA fallback for routes with dots (e.g. /user.profile) should serve index.html
+    let dot_route = client
+        .get(format!("http://{address}/app/user.profile"))
+        .send()
+        .await
+        .expect("fetch dot route");
+    assert!(
+        dot_route.status().is_success(),
+        "route with unknown extension should serve index.html via SPA fallback"
+    );
+    let dot_body = dot_route.text().await.expect("read dot route body");
+    assert!(
+        dot_body.contains("Web App"),
+        "dot route should serve index.html"
+    );
+
+    // Root /app (no trailing slash) should serve index.html
+    let root_app = client
+        .get(format!("http://{address}/app"))
+        .send()
+        .await
+        .expect("fetch /app without trailing slash");
+    assert!(
+        root_app.status().is_success(),
+        "/app without trailing slash should serve index.html"
+    );
+    let root_body = root_app.text().await.expect("read root app body");
+    assert!(
+        root_body.contains("Web App"),
+        "/app should serve index.html"
+    );
+
     server_task.abort();
 }
