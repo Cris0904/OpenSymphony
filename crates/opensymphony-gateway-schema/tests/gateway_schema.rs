@@ -88,6 +88,26 @@ fn gateway_envelope_roundtrips_with_raw_payload() {
 }
 
 #[test]
+fn gateway_envelope_from_raw_payload_roundtrips() {
+    let envelope = GatewayEnvelope::from_raw_payload(
+        StreamCursor::new(8, "unknown:run-2"),
+        EntityRef::run("run-2"),
+        "future_event",
+        json!({"unknown_field": 42}),
+    );
+    let json = must_serialize(&envelope);
+    let back: GatewayEnvelope = must_deserialize(&json);
+    assert_eq!(back.schema_version, SchemaVersion::v1());
+    assert_eq!(back.cursor.sequence, 8);
+    assert_eq!(back.entity_ref.kind, EntityKind::Run);
+    assert_eq!(back.entity_ref.id, "run-2");
+    assert_eq!(back.event_kind, "future_event");
+    assert!(back.payload.is_none());
+    assert!(back.raw_payload.is_some());
+    assert_eq!(back.raw_payload, Some(json!({"unknown_field": 42})));
+}
+
+#[test]
 fn dashboard_snapshot_roundtrips() {
     let snapshot = DashboardSnapshot {
         schema_version: SchemaVersion::v1(),
@@ -367,7 +387,7 @@ fn action_dispatch_roundtrips() {
         correlation_id: "corr-1".into(),
         action_kind: ActionKind::Retry,
         target_entity: ActionTarget {
-            entity_kind: "run".into(),
+            entity_kind: EntityKind::Run,
             entity_id: "run-1".into(),
         },
         payload: None,

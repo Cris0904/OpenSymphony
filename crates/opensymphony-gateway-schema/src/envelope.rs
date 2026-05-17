@@ -75,6 +75,27 @@ impl GatewayEnvelope {
             emitted_at: Utc::now(),
         }
     }
+
+    /// Create an envelope for an unknown/unmapped event kind.
+    ///
+    /// `payload` is `None`; only `raw_payload` is populated so the gateway
+    /// can forward future event kinds without forcing a typed parse.
+    pub fn from_raw_payload(
+        cursor: StreamCursor,
+        entity_ref: EntityRef,
+        event_kind: impl Into<String>,
+        raw_payload: Value,
+    ) -> Self {
+        Self {
+            schema_version: SchemaVersion::default(),
+            cursor,
+            entity_ref,
+            event_kind: event_kind.into(),
+            payload: None,
+            raw_payload: Some(raw_payload),
+            emitted_at: Utc::now(),
+        }
+    }
 }
 
 impl EntityRef {

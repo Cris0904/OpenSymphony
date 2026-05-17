@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::envelope::EntityKind;
 use super::version::SchemaVersion;
 
 /// Generic action dispatch payload accepted by
@@ -31,6 +32,6 @@ pub enum ActionKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionTarget {
-    pub entity_kind: String,
+    pub entity_kind: EntityKind,
     pub entity_id: String,
 }
