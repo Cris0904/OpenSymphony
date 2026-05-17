@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use serde_yaml::Mapping;
 
 use super::version::SchemaVersion;
 
@@ -131,6 +130,13 @@ pub enum TurnRole {
     System,
 }
 
+impl std::fmt::Display for TurnRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let serde_str = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        write!(f, "{}", serde_str.trim_matches('"'))
+    }
+}
+
 /// A single turn in the planning conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationTurn {
@@ -158,6 +164,13 @@ pub enum PlanningSessionStatus {
     Approved,
     Published,
     Archived,
+}
+
+impl std::fmt::Display for PlanningSessionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let serde_str = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        write!(f, "{}", serde_str.trim_matches('"'))
+    }
 }
 
 /// Full planning session state (superset of the summary).
@@ -215,7 +228,7 @@ impl PlanningSession {
     pub fn render_review_markdown(&self) -> String {
         let mut out = String::from("# Planning Review\n\n");
         out.push_str(&format!("**Session:** {}\n\n", self.title));
-        out.push_str(&format!("**Status:** {:?}\n\n", self.status));
+        out.push_str(&format!("**Status:** {}\n\n", self.status));
 
         if !self.artifacts.is_empty() {
             out.push_str("## Artifacts\n\n");
@@ -231,7 +244,7 @@ impl PlanningSession {
             out.push_str("## Conversation\n\n");
             for turn in &self.turns {
                 out.push_str(&format!(
-                    "**{:?}** (turn {})\n\n{}\n\n",
+                    "**{}** (turn {})\n\n{}\n\n",
                     turn.role, turn.turn_number, turn.content
                 ));
             }
@@ -271,7 +284,7 @@ impl PlanningSession {
                 turn.artifacts_modified.join(", ")
             };
             out.push_str(&format!(
-                "- {} [{:?}] turn={} modified=[{}]\n",
+                "- {} [{}] turn={} modified=[{}]\n",
                 turn.created_at.format("%Y-%m-%dT%H:%M:%SZ"),
                 turn.role,
                 turn.turn_number,
@@ -352,67 +365,79 @@ pub struct PublishedTask {
     pub file: String,
 }
 
+// ─── YAML output view structs ────────────────────────────────────────────────
+
+/// CamelCase view of a milestone for YAML serialization.
+#[derive(Serialize)]
+struct PublishedMilestoneYaml {
+    name: String,
+    #[serde(rename = "milestoneId")]
+    milestone_id: String,
+}
+
+/// CamelCase view of a task for YAML serialization.
+#[derive(Serialize)]
+struct PublishedTaskYaml {
+    #[serde(rename = "taskId")]
+    task_id: String,
+    issue: String,
+    #[serde(rename = "issueId")]
+    issue_id: String,
+    url: String,
+    file: String,
+}
+
+/// CamelCase view of the full receipt for YAML serialization.
+///
+/// Using a dedicated Serialize-derived struct guarantees the compiler will
+/// catch any field additions or renames — unlike manual Mapping builders.
+#[derive(Serialize)]
+struct LinearPublishReceiptYaml {
+    #[serde(rename = "planningWave")]
+    planning_wave: String,
+    #[serde(rename = "linearProject")]
+    linear_project: String,
+    #[serde(rename = "publishedAt")]
+    published_at: String,
+    milestones: Vec<PublishedMilestoneYaml>,
+    tasks: Vec<PublishedTaskYaml>,
+}
+
 impl LinearPublishReceipt {
     /// Render YAML string for the publish receipt using serde_yaml.
     ///
-    /// This replaces the previous hand-built `format!()` approach so that
-    /// YAML escaping rules and structural changes are handled correctly
-    /// by the serializer.
+    /// Delegates to a Serialize-derived view struct so the compiler
+    /// enforces field coverage and rename consistency.
     pub fn render_yaml(&self) -> String {
-        // Build a mapping with the same camelCase keys expected by the
-        // `docs/tasks/linear-publish.yaml` contract.
-        let mut mapping = Mapping::new();
-        mapping.insert(
-            "planningWave".into(),
-            serde_yaml::Value::String(self.planning_wave.clone()),
-        );
-        mapping.insert(
-            "linearProject".into(),
-            serde_yaml::Value::String(self.linear_project.clone()),
-        );
-        mapping.insert(
-            "publishedAt".into(),
-            serde_yaml::Value::String(
-                self.published_at
-                    .format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
-                    .to_string(),
-            ),
-        );
+        let yaml = LinearPublishReceiptYaml {
+            planning_wave: self.planning_wave.clone(),
+            linear_project: self.linear_project.clone(),
+            published_at: self
+                .published_at
+                .format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
+                .to_string(),
+            milestones: self
+                .milestones
+                .iter()
+                .map(|ms| PublishedMilestoneYaml {
+                    name: ms.name.clone(),
+                    milestone_id: ms.milestone_id.clone(),
+                })
+                .collect(),
+            tasks: self
+                .tasks
+                .iter()
+                .map(|t| PublishedTaskYaml {
+                    task_id: t.task_id.clone(),
+                    issue: t.issue.clone(),
+                    issue_id: t.issue_id.clone(),
+                    url: t.url.clone(),
+                    file: t.file.clone(),
+                })
+                .collect(),
+        };
 
-        let mut milestones = Vec::new();
-        for ms in &self.milestones {
-            let mut ms_mapping = Mapping::new();
-            ms_mapping.insert("name".into(), serde_yaml::Value::String(ms.name.clone()));
-            ms_mapping.insert(
-                "milestoneId".into(),
-                serde_yaml::Value::String(ms.milestone_id.clone()),
-            );
-            milestones.push(serde_yaml::Value::Mapping(ms_mapping));
-        }
-        mapping.insert("milestones".into(), serde_yaml::Value::Sequence(milestones));
-
-        let mut tasks = Vec::new();
-        for task in &self.tasks {
-            let mut t_mapping = Mapping::new();
-            t_mapping.insert(
-                "taskId".into(),
-                serde_yaml::Value::String(task.task_id.clone()),
-            );
-            t_mapping.insert(
-                "issue".into(),
-                serde_yaml::Value::String(task.issue.clone()),
-            );
-            t_mapping.insert(
-                "issueId".into(),
-                serde_yaml::Value::String(task.issue_id.clone()),
-            );
-            t_mapping.insert("url".into(), serde_yaml::Value::String(task.url.clone()));
-            t_mapping.insert("file".into(), serde_yaml::Value::String(task.file.clone()));
-            tasks.push(serde_yaml::Value::Mapping(t_mapping));
-        }
-        mapping.insert("tasks".into(), serde_yaml::Value::Sequence(tasks));
-
-        serde_yaml::to_string(&mapping)
+        serde_yaml::to_string(&yaml)
             .expect("LinearPublishReceipt yaml serialization should never fail")
     }
 }

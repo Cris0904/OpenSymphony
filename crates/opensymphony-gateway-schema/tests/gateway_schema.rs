@@ -806,7 +806,7 @@ fn planning_session_render_audit_history_lists_turns() {
     let session = sample_planning_session();
     let audit = session.render_audit_history();
     assert!(audit.contains("# Audit History"));
-    assert!(audit.contains("[Agent] turn=1"));
+    assert!(audit.contains("[agent] turn=1"));
 }
 
 #[test]
