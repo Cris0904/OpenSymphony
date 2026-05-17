@@ -162,7 +162,8 @@ Events that flow through the system use these entity references:
 
 ```text
 ControlPlaneRecentEvent
-├── issue_identifier: String (e.g. "COE-389")
+├── happened_at: DateTime<Utc>
+├── issue_identifier: Option<String> (e.g. "COE-389")
 ├── kind: enum
 └── summary: String
 
