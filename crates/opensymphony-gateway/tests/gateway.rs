@@ -426,9 +426,15 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
         .send()
         .await
         .expect("fetch /app/");
-    assert!(index_resp.status().is_success(), "index.html should be served");
+    assert!(
+        index_resp.status().is_success(),
+        "index.html should be served"
+    );
     let index_body = index_resp.text().await.expect("read index body");
-    assert!(index_body.contains("Web App"), "index.html content mismatch");
+    assert!(
+        index_body.contains("Web App"),
+        "index.html content mismatch"
+    );
 
     // Serve assets file directly
     let css_resp = client
@@ -446,9 +452,15 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
         .send()
         .await
         .expect("fetch SPA route");
-    assert!(spa_resp.status().is_success(), "SPA route should serve index.html");
+    assert!(
+        spa_resp.status().is_success(),
+        "SPA route should serve index.html"
+    );
     let spa_body = spa_resp.text().await.expect("read spa body");
-    assert!(spa_body.contains("Web App"), "SPA fallback should serve index.html");
+    assert!(
+        spa_body.contains("Web App"),
+        "SPA fallback should serve index.html"
+    );
 
     // 404 for non-existent file with extension
     let not_found = client
@@ -456,7 +468,10 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
         .send()
         .await
         .expect("fetch nonexistent.js");
-    assert!(not_found.status().is_client_error(), "nonexistent file should 404");
+    assert!(
+        not_found.status().is_client_error(),
+        "nonexistent file should 404"
+    );
 
     server_task.abort();
 }

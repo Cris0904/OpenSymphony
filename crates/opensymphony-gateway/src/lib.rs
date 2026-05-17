@@ -5,7 +5,10 @@ use axum::{
     Json, Router,
     extract::{Path as ExtractPath, State},
     http::StatusCode,
-    response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::get,
 };
 use tokio::{net::TcpListener, sync::broadcast};
@@ -412,11 +415,7 @@ async fn web_asset_handler(
 async fn serve_file(path: &Path) -> Result<Response, std::io::Error> {
     let bytes = tokio::fs::read(path).await?;
     let content_type = mime_type(path);
-    Ok((
-        [(axum::http::header::CONTENT_TYPE, content_type)],
-        bytes,
-    )
-        .into_response())
+    Ok(([(axum::http::header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
 
 /// Return a conservative MIME type for the given file extension.
