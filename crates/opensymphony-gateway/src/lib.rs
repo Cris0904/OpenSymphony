@@ -668,11 +668,12 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeO
         active_run_id: is_running.then(|| issue.identifier.clone()),
         last_outcome: outcome,
         retry_count: issue.retry_count,
-        workspace_id: Some(issue.workspace_path_suffix.clone()),
+        workspace_id: (!issue.workspace_path_suffix.is_empty())
+            .then(|| issue.workspace_path_suffix.clone()),
         harness_type: issue.server_base_url.is_some().then(|| "openhands".into()),
         conversation_id: (!issue.conversation_id_suffix.is_empty())
             .then(|| format!("conv-{}", issue.conversation_id_suffix)),
-        last_event_at: Some(issue.last_event_at),
+        last_event_at: (issue.last_event_at.timestamp() != 0).then_some(issue.last_event_at),
         diff_summary,
         validation_status: None,
         blocker_summary: if issue.blocked {
@@ -923,16 +924,18 @@ async fn get_run_diffs(
     let hunks: Vec<DiffHunk> = files
         .iter()
         .map(|fc| {
+            // Build a synthetic hunk header.  When a file is entirely new
+            // (0 lines removed) or entirely deleted (0 lines added), the
+            // header reflects the correct start,count pairs so parsers won't
+            // choke on `@@ -1,0 +1,N @@` or `@@ -1,N +1,0 @@`.
+            let old_start = if fc.lines_removed > 0 { 1 } else { 0 };
+            let new_start = if fc.lines_added > 0 { 1 } else { 0 };
             DiffHunk {
-                // Standard unified-diff hunk header: @@ -start,count +start,count @@
                 header: format!(
                     "@@ -{},{} +{},{} @@",
-                    1,
-                    fc.lines_removed.max(1),
-                    1,
-                    fc.lines_added.max(1)
+                    old_start, fc.lines_removed, new_start, fc.lines_added
                 ),
-                start_line: 1,
+                start_line: if fc.lines_removed > 0 { 1 } else { 0 },
                 old_line_count: fc.lines_removed,
                 new_line_count: fc.lines_added,
                 lines: Vec::new(),
