@@ -7,6 +7,8 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
+    http::StatusCode,
+    response::IntoResponse,
     response::sse::{Event, KeepAlive, Sse},
     routing::get,
 };
@@ -24,7 +26,7 @@ pub use crate::opensymphony_gateway_schema::{
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
     cursor::PageCursor,
     run::{
-        ChangedFileEntry, FileChangeKind, FileDiffPage, ReleaseReason, RunAction, RunDetail,
+        ChangedFileEntry, DiffHunk, DiffLine, FileChangeKind, FileDiffPage, ReleaseReason, RunAction, RunDetail,
         RunEvent, RunEventPage, RunFilesPage, RunLifecycleState, RunStatus,
     },
     snapshot::{
@@ -352,7 +354,6 @@ fn find_issue_snapshot<'a>(
         .find(|issue| {
             issue.identifier.eq_ignore_ascii_case(run_id)
                 || issue.conversation_id_suffix.eq_ignore_ascii_case(run_id)
-                || run_id.starts_with(&issue.identifier)
         })
 }
 
@@ -368,7 +369,7 @@ pub fn sanitize_file_path(workspace_root: &str, raw_path: &str) -> String {
             candidate
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| raw_path.to_string())
+                .unwrap_or_default()
         })
 }
 
@@ -424,7 +425,26 @@ async fn list_projects(State(store): State<SnapshotStore>) -> Json<ProjectList> 
 async fn get_project(
     State(store): State<SnapshotStore>,
     AxumPath(project_id): AxumPath<String>,
-) -> Json<ProjectDetail> {
+) -> impl IntoResponse {
+    // Only the "default" project is supported; reject unknown project IDs.
+    if project_id != "default" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ProjectDetail {
+                schema_version: SchemaVersion::v1(),
+                project_id,
+                name: String::new(),
+                milestone_count: 0,
+                issue_count: 0,
+                running_count: 0,
+                completed_count: 0,
+                failed_count: 0,
+                summary: Some("Project not found".into()),
+                milestones: Vec::new(),
+            }),
+        );
+    }
+
     let envelope = store.current().await;
     let snapshot = &envelope.snapshot;
     let issue_count = snapshot.issues.len() as u32;
@@ -444,18 +464,21 @@ async fn get_project(
         .filter(|i| matches!(i.last_outcome, ControlPlaneWorkerOutcome::Failed))
         .count() as u32;
 
-    Json(ProjectDetail {
-        schema_version: SchemaVersion::v1(),
-        project_id,
-        name: "OpenSymphony".into(),
-        milestone_count: 0,
-        issue_count,
-        running_count: running,
-        completed_count: completed,
-        failed_count: failed,
-        summary: Some("Current workspace issues".into()),
-        milestones: Vec::new(),
-    })
+    (
+        StatusCode::OK,
+        Json(ProjectDetail {
+            schema_version: SchemaVersion::v1(),
+            project_id,
+            name: "OpenSymphony".into(),
+            milestone_count: 0,
+            issue_count,
+            running_count: running,
+            completed_count: completed,
+            failed_count: failed,
+            summary: Some("Current workspace issues".into()),
+            milestones: Vec::new(),
+        }),
+    )
 }
 
 // ── Task Graph endpoint ───────────────────────────────────────────────────────
@@ -463,7 +486,21 @@ async fn get_project(
 async fn get_task_graph(
     State(store): State<SnapshotStore>,
     AxumPath(project_id): AxumPath<String>,
-) -> Json<TaskGraphSnapshot> {
+) -> impl IntoResponse {
+    // Only the "default" project is supported; reject unknown project IDs.
+    if project_id != "default" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(TaskGraphSnapshot {
+                schema_version: SchemaVersion::v1(),
+                project_id,
+                generated_at: Utc::now(),
+                nodes: Vec::new(),
+                root_ids: Vec::new(),
+            }),
+        );
+    }
+
     let envelope = store.current().await;
     let snapshot = &envelope.snapshot;
     let generated_at = Utc::now();
@@ -486,11 +523,9 @@ async fn get_task_graph(
                 priority: None,
                 parent_id: None,
                 children: Vec::new(),
-                blocked_by: if issue.blocked {
-                    vec![format!("blocked: {}", issue.identifier)]
-                } else {
-                    Vec::new()
-                },
+                // Dependency info not yet available from the control-plane snapshot;
+                // return an empty vector instead of self-referential placeholder data.
+                blocked_by: Vec::new(),
                 url: None,
                 branch_name: None,
                 labels: Vec::new(),
@@ -504,13 +539,16 @@ async fn get_task_graph(
 
     let root_ids: Vec<String> = snapshot.issues.iter().map(|i| i.identifier.clone()).collect();
 
-    Json(TaskGraphSnapshot {
-        schema_version: SchemaVersion::v1(),
-        project_id,
-        generated_at,
-        nodes,
-        root_ids,
-    })
+    (
+        StatusCode::OK,
+        Json(TaskGraphSnapshot {
+            schema_version: SchemaVersion::v1(),
+            project_id,
+            generated_at,
+            nodes,
+            root_ids,
+        }),
+    )
 }
 
 fn map_runtime_state_to_graph_category(state: &ControlPlaneIssueRuntimeState) -> TaskGraphStateCategory {
@@ -582,39 +620,42 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> Option<TaskGraphR
 async fn get_run_detail(
     State(store): State<SnapshotStore>,
     AxumPath(run_id): AxumPath<String>,
-) -> Json<RunDetail> {
+) -> impl IntoResponse {
     let envelope = store.current().await;
     let issue = match find_issue_snapshot(&envelope, &run_id) {
         Some(issue) => issue,
         None => {
-            return Json(RunDetail {
-                schema_version: SchemaVersion::v1(),
-                run_id,
-                issue_id: "unknown".into(),
-                issue_identifier: "unknown".into(),
-                worker_id: "unknown".into(),
-                status: RunStatus::Unclaimed,
-                lifecycle_state: RunLifecycleState::Eligible,
-                claimed_at: Utc::now(),
-                started_at: None,
-                finished_at: None,
-                release_reason: None,
-                turn_count: 0,
-                max_turns: 0,
-                retry_attempt: None,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                runtime_seconds: 0,
-                conversation_id: None,
-                workspace_id: None,
-                workspace_path: None,
-                harness_type: None,
-                summary: None,
-                blocker: None,
-                error: Some("Run not found".into()),
-                allowed_actions: Vec::new(),
-            });
+            return (
+                StatusCode::NOT_FOUND,
+                Json(RunDetail {
+                    schema_version: SchemaVersion::v1(),
+                    run_id,
+                    issue_id: String::new(),
+                    issue_identifier: String::new(),
+                    worker_id: String::new(),
+                    status: RunStatus::Unclaimed,
+                    lifecycle_state: RunLifecycleState::Eligible,
+                    claimed_at: Utc::now(),
+                    started_at: None,
+                    finished_at: None,
+                    release_reason: None,
+                    turn_count: 0,
+                    max_turns: 0,
+                    retry_attempt: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_tokens: 0,
+                    runtime_seconds: 0,
+                    conversation_id: None,
+                    workspace_id: None,
+                    workspace_path: None,
+                    harness_type: None,
+                    summary: None,
+                    blocker: None,
+                    error: Some("Run not found".into()),
+                    allowed_actions: Vec::new(),
+                }),
+            );
         }
     };
 
@@ -634,42 +675,45 @@ async fn get_run_detail(
         _ => None,
     };
 
-    Json(RunDetail {
-        schema_version: SchemaVersion::v1(),
-        run_id: issue.identifier.clone(),
-        issue_id: issue.identifier.clone(),
-        issue_identifier: issue.identifier.clone(),
-        worker_id: "default-worker".into(),
-        status,
-        lifecycle_state,
-        claimed_at: issue.last_event_at,
-        started_at: Some(issue.last_event_at),
-        finished_at: None,
-        release_reason,
-        turn_count: issue.retry_count,
-        max_turns: 8,
-        retry_attempt: (issue.retry_count > 0).then_some(issue.retry_count),
-        input_tokens: issue.input_tokens,
-        output_tokens: issue.output_tokens,
-        cache_read_tokens: issue.cache_read_tokens,
-        runtime_seconds: 0,
-        conversation_id: (!issue.conversation_id_suffix.is_empty())
-            .then(|| format!("conv-{}", issue.conversation_id_suffix)),
-        workspace_id: (!issue.workspace_path_suffix.is_empty())
-            .then(|| issue.workspace_path_suffix.clone()),
-        workspace_path: None,
-        harness_type: issue.server_base_url.as_ref().map(|_| "openhands".into()),
-        summary: None,
-        blocker: issue.blocked.then(|| "Blocked by dependency".into()),
-        error: None,
-        allowed_actions: Vec::new(),
-    })
+    (
+        StatusCode::OK,
+        Json(RunDetail {
+            schema_version: SchemaVersion::v1(),
+            run_id: issue.identifier.clone(),
+            issue_id: issue.identifier.clone(),
+            issue_identifier: issue.identifier.clone(),
+            worker_id: "default-worker".into(),
+            status,
+            lifecycle_state,
+            claimed_at: issue.last_event_at,
+            started_at: Some(issue.last_event_at),
+            finished_at: None,
+            release_reason,
+            turn_count: issue.retry_count,
+            max_turns: 8,
+            retry_attempt: (issue.retry_count > 0).then_some(issue.retry_count),
+            input_tokens: issue.input_tokens,
+            output_tokens: issue.output_tokens,
+            cache_read_tokens: issue.cache_read_tokens,
+            runtime_seconds: 0,
+            conversation_id: (!issue.conversation_id_suffix.is_empty())
+                .then(|| format!("conv-{}", issue.conversation_id_suffix)),
+            workspace_id: (!issue.workspace_path_suffix.is_empty())
+                .then(|| issue.workspace_path_suffix.clone()),
+            workspace_path: None,
+            harness_type: issue.server_base_url.as_ref().map(|_| "openhands".into()),
+            summary: None,
+            blocker: issue.blocked.then(|| "Blocked by dependency".into()),
+            error: None,
+            allowed_actions: Vec::new(),
+        }),
+    )
 }
 
 async fn get_run_events(
     State(store): State<SnapshotStore>,
     AxumPath(run_id): AxumPath<String>,
-) -> Json<RunEventPage> {
+) -> impl IntoResponse {
     let envelope = store.current().await;
     let events: Vec<RunEvent> = match find_issue_snapshot(&envelope, &run_id) {
         Some(issue) => issue
@@ -686,21 +730,34 @@ async fn get_run_events(
                 raw_payload: Some(json!({"kind": evt.kind, "summary": evt.summary})),
             })
             .collect(),
-        None => Vec::new(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(RunEventPage {
+                    schema_version: SchemaVersion::v1(),
+                    run_id,
+                    next_cursor: None,
+                    events: Vec::new(),
+                }),
+            );
+        }
     };
 
-    Json(RunEventPage {
-        schema_version: SchemaVersion::v1(),
-        run_id,
-        next_cursor: None,
-        events,
-    })
+    (
+        StatusCode::OK,
+        Json(RunEventPage {
+            schema_version: SchemaVersion::v1(),
+            run_id,
+            next_cursor: None,
+            events,
+        }),
+    )
 }
 
 async fn get_run_files(
     State(store): State<SnapshotStore>,
     AxumPath(run_id): AxumPath<String>,
-) -> Json<RunFilesPage> {
+) -> impl IntoResponse {
     let envelope = store.current().await;
     let workspace_root = envelope.snapshot.daemon.workspace_root.clone();
     let files: Vec<ChangedFileEntry> = match find_issue_snapshot(&envelope, &run_id) {
@@ -715,27 +772,75 @@ async fn get_run_files(
                 size_bytes: None,
             })
             .collect(),
-        None => Vec::new(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(RunFilesPage {
+                    schema_version: SchemaVersion::v1(),
+                    run_id,
+                    next_cursor: None,
+                    files: Vec::new(),
+                }),
+            );
+        }
     };
 
-    Json(RunFilesPage {
-        schema_version: SchemaVersion::v1(),
-        run_id,
-        next_cursor: None,
-        files,
-    })
+    (
+        StatusCode::OK,
+        Json(RunFilesPage {
+            schema_version: SchemaVersion::v1(),
+            run_id,
+            next_cursor: None,
+            files,
+        }),
+    )
 }
 
 async fn get_run_diffs(
     State(store): State<SnapshotStore>,
     AxumPath(run_id): AxumPath<String>,
-) -> Json<FileDiffPage> {
+) -> impl IntoResponse {
     let envelope = store.current().await;
     let workspace_root = envelope.snapshot.daemon.workspace_root.clone();
     let files: Vec<&ControlPlaneFileChange> = match find_issue_snapshot(&envelope, &run_id) {
         Some(issue) => issue.modified_files.iter().collect(),
-        None => Vec::new(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(FileDiffPage {
+                    schema_version: SchemaVersion::v1(),
+                    run_id,
+                    file_path: String::new(),
+                    next_cursor: None,
+                    hunks: Vec::new(),
+                    total_lines_added: 0,
+                    total_lines_removed: 0,
+                }),
+            );
+        }
     };
+
+    // Build a summary hunk per changed file from the control-plane metadata.
+    // Full unified diff content is not yet available from the snapshot;
+    // the hunk header and line counts provide callers with change summaries.
+    let hunks: Vec<DiffHunk> = files
+        .iter()
+        .map(|fc| {
+            let path = sanitize_file_path(&workspace_root, &fc.path);
+            let kind_label = match fc.change_kind {
+                ControlPlaneFileChangeKind::Created => "added",
+                ControlPlaneFileChangeKind::Modified => "modified",
+                ControlPlaneFileChangeKind::Removed => "removed",
+            };
+            DiffHunk {
+                header: format!("@@ -{} +{} @@  {}  ({})", fc.lines_removed, fc.lines_added, path, kind_label),
+                start_line: 1,
+                old_line_count: fc.lines_removed,
+                new_line_count: fc.lines_added,
+                lines: Vec::new(),
+            }
+        })
+        .collect();
 
     let file_path = files
         .first()
@@ -744,13 +849,16 @@ async fn get_run_diffs(
     let total_lines_added: u32 = files.iter().map(|f| f.lines_added).sum();
     let total_lines_removed: u32 = files.iter().map(|f| f.lines_removed).sum();
 
-    Json(FileDiffPage {
-        schema_version: SchemaVersion::v1(),
-        run_id,
-        file_path: file_path.unwrap_or_default(),
-        next_cursor: None,
-        hunks: Vec::new(),
-        total_lines_added,
-        total_lines_removed,
-    })
+    (
+        StatusCode::OK,
+        Json(FileDiffPage {
+            schema_version: SchemaVersion::v1(),
+            run_id,
+            file_path: file_path.unwrap_or_default(),
+            next_cursor: None,
+            hunks,
+            total_lines_added,
+            total_lines_removed,
+        }),
+    )
 }
