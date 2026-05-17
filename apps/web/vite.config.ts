@@ -1,5 +1,8 @@
 import { defineConfig } from "vite";
-import { resolve } from "path";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Vite configuration for the OpenSymphony web client.
@@ -51,15 +54,25 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@opensymphony/gateway-schema": resolve(__dirname, "../../packages/gateway-schema/src/index.ts"),
-      "@opensymphony/api-client": resolve(__dirname, "../../packages/api-client/src/index.ts"),
-      "@opensymphony/ui-core": resolve(__dirname, "../../packages/ui-core/src/index.ts"),
-      "@opensymphony/state": resolve(__dirname, "../../packages/state/src/index.ts"),
+      "@opensymphony/gateway-schema": resolve(
+        __dirname,
+        "../../packages/gateway-schema/src/index.ts"
+      ),
+      "@opensymphony/api-client": resolve(
+        __dirname,
+        "../../packages/api-client/src/index.ts"
+      ),
+      "@opensymphony/ui-core": resolve(
+        __dirname,
+        "../../packages/ui-core/src/index.ts"
+      ),
+      "@opensymphony/state": resolve(
+        __dirname,
+        "../../packages/state/src/index.ts"
+      ),
     },
   },
   define: {
-    __GATEWAY_URL__: JSON.stringify(
-      process.env.VITE_GATEWAY_URL ?? ""
-    ),
+    __GATEWAY_URL__: JSON.stringify(process.env.VITE_GATEWAY_URL ?? ""),
   },
 });
