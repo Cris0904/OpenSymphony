@@ -38,8 +38,8 @@ fn schema_version_roundtrips() {
     let json = must_serialize(&v);
     let back: SchemaVersion = must_deserialize(&json);
     assert_eq!(v, back);
-    assert_eq!(v.as_str(), "1.00.00");
-    assert_eq!(format!("{v}"), "1.00.00");
+    assert_eq!(v.as_str(), "1.0.0");
+    assert_eq!(format!("{v}"), "1.0.0");
 }
 
 #[test]
@@ -73,7 +73,6 @@ fn gateway_envelope_roundtrips_with_raw_payload() {
         StreamCursor::new(7, "terminal:run-1"),
         EntityRef::terminal("term-1"),
         "terminal_frame",
-        payload.clone(),
         payload,
     );
     let json = must_serialize(&envelope);

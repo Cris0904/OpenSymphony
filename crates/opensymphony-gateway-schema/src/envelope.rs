@@ -55,24 +55,23 @@ pub enum EntityKind {
 }
 
 impl GatewayEnvelope {
-    /// Create an envelope with separate typed and raw payloads.
+    /// Create an envelope with a typed payload.
     ///
-    /// If `payload` and `raw_payload` are the same value, pass the same `Value`
-    /// to both arguments (the caller controls whether to clone).
+    /// `raw_payload` is set to a clone of `payload` so future schema evolutions
+    /// can diverge without breaking round-trips.
     pub fn new(
         cursor: StreamCursor,
         entity_ref: EntityRef,
         event_kind: impl Into<String>,
         payload: Value,
-        raw_payload: Value,
     ) -> Self {
         Self {
             schema_version: SchemaVersion::default(),
             cursor,
             entity_ref,
             event_kind: event_kind.into(),
+            raw_payload: Some(payload.clone()),
             payload: Some(payload),
-            raw_payload: Some(raw_payload),
             emitted_at: Utc::now(),
         }
     }

@@ -24,7 +24,7 @@ impl SchemaVersion {
     }
 
     pub fn as_str(&self) -> String {
-        format!("{}.{:02}.{:02}", self.major, self.minor, self.patch)
+        format!("{}.{:1}.{:1}", self.major, self.minor, self.patch)
     }
 }
 
@@ -36,6 +36,6 @@ impl Default for SchemaVersion {
 
 impl std::fmt::Display for SchemaVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{:02}.{:02}", self.major, self.minor, self.patch)
+        write!(f, "{}.{:1}.{:1}", self.major, self.minor, self.patch)
     }
 }
