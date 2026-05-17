@@ -82,8 +82,8 @@
 | Item | Risk | Boundary Required | Owner | Notes |
 |:-----|:----:|:------------------|:------|:------|
 | `OpenHandsClient` | 🔴 | Never expose to gateway clients. Gateway should abstract harness interactions behind a `HarnessAdapter` trait. | `COE-390` + future harness work | Client has auth credentials, HTTP internals, and stream sockets. |
-| `LocalServerSupervisor` | 🔴 | Never expose to gateway clients. Server lifecycle is orchestrator-private. | `COE-390` + `COE-392` | |
-| `ConversationStore` | 🔴 | Never expose. File system paths and conversation storage are orchestrator-private. | `COE-390` + `COE-392` | |
+| `LocalServerSupervisor` | 🔴 | Never expose to gateway clients. Server lifecycle is orchestrator-private. | `COE-390` (gateway schemas / harness abstraction) | |
+| `ConversationStore` | 🔴 | Never expose. File system paths and conversation storage are orchestrator-private. | `COE-390` (gateway schemas / harness abstraction) | |
 | `EventEnvelope` | 🟡 | Raw harness event payload (`serde_json::Value`). Gateway should normalize to a stable event DTO while preserving raw payload references. | `COE-390` | Current `KnownEvent` enum is a good start but is harness-specific. Future gateway needs a harness-agnostic event envelope. |
 | `KnownEvent` | 🟡 | Harness-specific event parsing. Gateway should use a generic event DTO with `kind`, `payload`, and optional `harness_kind` field. | `COE-390` | |
 | `IssueSessionRunner` | 🔴 | Never expose. This is the orchestrator's worker backend implementation. | `COE-390` | |

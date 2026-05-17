@@ -1,6 +1,8 @@
 # Current Gateway API Inventory
 
 > Inventory of the existing OpenSymphony control plane, orchestrator surfaces, and runtime contracts. This document captures repo paths and representative payload shapes as of the current codebase. It is the deliverable for `P0.1` in `docs/host-client-implementation_plan.md`.
+>
+> **Note:** File paths and line numbers cited below are approximate and refer to the state of the repository as of this commit. They will drift over time; use the paths as module-level navigation hints rather than exact references.
 
 ## 1. Control Plane Server (`crates/opensymphony-control`)
 
