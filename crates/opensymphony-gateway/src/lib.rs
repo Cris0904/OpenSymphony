@@ -7,15 +7,12 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     routing::get,
 };
-use tokio::{
-    net::TcpListener,
-    sync::broadcast,
-};
+use tokio::{net::TcpListener, sync::broadcast};
 
 pub use crate::opensymphony_control::SnapshotStore;
 pub use crate::opensymphony_domain::{
     ControlPlaneAgentServerStatus, ControlPlaneDaemonSnapshot, ControlPlaneDaemonState,
-    ControlPlaneDaemonStatus, ControlPlaneIssueSnapshot, ControlPlaneIssueRuntimeState,
+    ControlPlaneDaemonStatus, ControlPlaneIssueRuntimeState, ControlPlaneIssueSnapshot,
     ControlPlaneMetricsSnapshot, ControlPlaneRecentEvent, ControlPlaneRecentEventKind,
     ControlPlaneWorkerOutcome, SnapshotEnvelope,
 };
@@ -56,9 +53,7 @@ impl GatewayServer {
 }
 
 /// Map internal control-plane state into the public dashboard snapshot DTO.
-pub fn control_plane_to_dashboard_snapshot(
-    envelope: &SnapshotEnvelope,
-) -> DashboardSnapshot {
+pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> DashboardSnapshot {
     let snapshot = &envelope.snapshot;
     let health = daemon_state_to_gateway_health(snapshot.daemon.state);
     let metrics = GatewayMetrics {
@@ -293,7 +288,8 @@ async fn events(
 }
 
 fn snapshot_event(envelope: &SnapshotEnvelope) -> Option<Event> {
-    let payload = serde_json::to_string(envelope).ok()?;
+    let dashboard = control_plane_to_dashboard_snapshot(envelope);
+    let payload = serde_json::to_string(&dashboard).ok()?;
     Some(
         Event::default()
             .event("snapshot")

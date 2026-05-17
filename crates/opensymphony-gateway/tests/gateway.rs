@@ -1,4 +1,5 @@
 use chrono::Utc;
+use futures_util::StreamExt;
 use opensymphony::opensymphony_control::{ControlPlaneServer, SnapshotStore};
 use opensymphony::opensymphony_domain::{
     ControlPlaneAgentServerStatus as AgentServerStatus,
@@ -9,7 +10,7 @@ use opensymphony::opensymphony_domain::{
     ControlPlaneWorkerOutcome as WorkerOutcome, SnapshotEnvelope,
 };
 use opensymphony::opensymphony_gateway::{
-    control_plane_to_dashboard_snapshot, GatewayCapabilities, GatewayServer,
+    GatewayCapabilities, GatewayServer, control_plane_to_dashboard_snapshot,
 };
 use tokio::net::TcpListener;
 use url::Url;
@@ -128,16 +129,18 @@ fn control_plane_to_dashboard_snapshot_handles_empty_issues() {
 
 #[test]
 fn gateway_capabilities_json_fixture_roundtrips() {
-    let caps = opensymphony::opensymphony_gateway::GatewayCapabilities {
+    let caps = GatewayCapabilities {
         schema_version: opensymphony::opensymphony_gateway_schema::version::SchemaVersion::v1(),
         gateway_version: "1.6.0".into(),
         supported_api_versions: vec!["1.0.0".into()],
-        transports: vec![opensymphony::opensymphony_gateway_schema::capability::TransportCapability {
-            transport: "sse".into(),
-            modes: vec!["snapshot".into()],
-            supported_encodings: vec!["utf-8".into()],
-            bidirectional: false,
-        }],
+        transports: vec![
+            opensymphony::opensymphony_gateway_schema::capability::TransportCapability {
+                transport: "sse".into(),
+                modes: vec!["snapshot".into()],
+                supported_encodings: vec!["utf-8".into()],
+                bidirectional: false,
+            },
+        ],
         features: vec![
             opensymphony::opensymphony_gateway_schema::capability::FeatureCapability {
                 feature: "planning".into(),
@@ -155,8 +158,7 @@ fn gateway_capabilities_json_fixture_roundtrips() {
     };
 
     let json = serde_json::to_string_pretty(&caps).expect("serialize capabilities");
-    let back: GatewayCapabilities =
-        serde_json::from_str(&json).expect("deserialize capabilities");
+    let back: GatewayCapabilities = serde_json::from_str(&json).expect("deserialize capabilities");
 
     assert_eq!(back.gateway_version, "1.6.0");
     assert_eq!(back.supported_api_versions, vec!["1.0.0"]);
@@ -238,21 +240,9 @@ async fn gateway_events_stream_yields_snapshot_updates() {
             .expect("test gateway server should serve")
     });
 
-    let caps_url = format!("http://{address}/api/v1/capabilities");
-    let caps_response = reqwest::Client::new()
-        .get(&caps_url)
-        .send()
-        .await
-        .expect("fetch capabilities")
-        .json::<GatewayCapabilities>()
-        .await
-        .expect("decode capabilities");
-
-    let mut events_url = Url::parse(&format!("http://{address}/api/v1/events"))
-        .expect("valid events url");
-    events_url
-        .query_pairs_mut()
-        .append_pair("transport", "sse");
+    let mut events_url =
+        Url::parse(&format!("http://{address}/api/v1/events")).expect("valid events url");
+    events_url.query_pairs_mut().append_pair("transport", "sse");
 
     let client = reqwest::Client::new();
     let response = client
@@ -271,6 +261,44 @@ async fn gateway_events_stream_yields_snapshot_updates() {
         "text/event-stream"
     );
 
+    // Read initial snapshot event from the body stream.
+    let mut stream = response.bytes_stream();
+    let first_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("receive initial event before timeout")
+        .expect("stream yields initial event")
+        .expect("initial event bytes ok");
+    let first_text = String::from_utf8(first_chunk.to_vec()).expect("valid utf-8");
+    assert!(
+        first_text.contains("event: snapshot"),
+        "first SSE event should be a snapshot"
+    );
+
+    // Publish a new snapshot through the store and expect a second event.
+    let new_snapshot = fixture_snapshot(1);
+    store.publish(new_snapshot).await;
+
+    let second_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("receive update event before timeout")
+        .expect("stream yields update event")
+        .expect("update event bytes ok");
+    let second_text = String::from_utf8(second_chunk.to_vec()).expect("valid utf-8");
+    assert!(
+        second_text.contains("event: snapshot"),
+        "second SSE event should be a snapshot"
+    );
+
+    // Verify the payload in the second event is a valid DashboardSnapshot.
+    let data_line = second_text
+        .lines()
+        .find(|l| l.starts_with("data:"))
+        .expect("second event contains data line");
+    let json_payload = data_line.trim_start_matches("data:").trim();
+    let dashboard: opensymphony::opensymphony_gateway_schema::snapshot::DashboardSnapshot =
+        serde_json::from_str(json_payload).expect("deserialize SSE payload as DashboardSnapshot");
+    assert_eq!(dashboard.sequence, 2);
+
     server_task.abort();
 }
 
@@ -280,16 +308,30 @@ async fn gateway_router_isolation_from_control_plane() {
     let gateway = GatewayServer::new(store.clone());
     let control = ControlPlaneServer::new(store);
 
-    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind gateway listener");
-    let gateway_address = gateway_listener.local_addr().expect("gateway listener address");
+    let gateway_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind gateway listener");
+    let gateway_address = gateway_listener
+        .local_addr()
+        .expect("gateway listener address");
     let gateway_task = tokio::spawn(async move {
-        gateway.serve(gateway_listener).await.expect("gateway serve")
+        gateway
+            .serve(gateway_listener)
+            .await
+            .expect("gateway serve")
     });
 
-    let control_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind control listener");
-    let control_address = control_listener.local_addr().expect("control listener address");
+    let control_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind control listener");
+    let control_address = control_listener
+        .local_addr()
+        .expect("control listener address");
     let control_task = tokio::spawn(async move {
-        control.serve(control_listener).await.expect("control serve")
+        control
+            .serve(control_listener)
+            .await
+            .expect("control serve")
     });
 
     let client = reqwest::Client::new();
@@ -302,7 +344,9 @@ async fn gateway_router_isolation_from_control_plane() {
     assert!(gateway_caps.status().is_success());
 
     let gateway_snapshot = client
-        .get(format!("http://{gateway_address}/api/v1/dashboard/snapshot"))
+        .get(format!(
+            "http://{gateway_address}/api/v1/dashboard/snapshot"
+        ))
         .send()
         .await
         .expect("gateway dashboard snapshot reachable");
