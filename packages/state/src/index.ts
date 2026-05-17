@@ -135,11 +135,11 @@ export function gatewayReducer(
       }
       return {
         ...state,
-        terminal: { ...state.terminal, frames, cursor, error: state.terminal.error },
+        terminal: { ...state.terminal, frames, cursor, loading: false, error: null },
       };
     }
 
-    case "APPROVAL_RECEIVED":
+    case "APPROVAL_RECEIVED": {
       return {
         ...state,
         approval: {
@@ -149,8 +149,11 @@ export function gatewayReducer(
           )
             ? state.approval.pending
             : [...state.approval.pending, action.payload],
+          loading: false,
+          error: null,
         },
       };
+    }
 
     case "APPROVAL_RESOLVED": {
       const resolved = new Map(state.approval.resolved);
@@ -161,6 +164,8 @@ export function gatewayReducer(
           ...state.approval,
           pending: state.approval.pending.filter((a) => a.approval_id !== action.approvalId),
           resolved,
+          loading: false,
+          error: null,
         },
       };
     }

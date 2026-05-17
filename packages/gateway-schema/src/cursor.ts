@@ -15,11 +15,11 @@ export function streamCursor(
 
 /** Pagination cursor for detail reads. */
 export interface PageCursor {
-  page_token: string | null;
+  page_token?: string;
   page_size: number;
 }
 
-/** Return a cursor that requests the first page (null token = start). */
+/** Return a cursor that requests the first page (token omitted = start). */
 export function pageCursorFirst(pageSize: number): PageCursor {
-  return { page_token: null, page_size: pageSize };
+  return { page_size: pageSize };
 }
