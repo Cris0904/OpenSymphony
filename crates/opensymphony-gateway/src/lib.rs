@@ -436,41 +436,41 @@ async fn web_asset_handler(
 /// asset file.  Paths that do not match these extensions are treated as SPA
 /// routes and should fall back to `index.html`.
 fn path_has_known_extension(path: &str) -> bool {
-    if let Some(dot_pos) = path.rfind('.') {
-        if let Some(ext) = path.get(dot_pos + 1..) {
-            return matches!(
-                ext.to_lowercase().as_str(),
-                "html"
-                    | "css"
-                    | "js"
-                    | "json"
-                    | "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "gif"
-                    | "svg"
-                    | "ico"
-                    | "woff"
-                    | "woff2"
-                    | "ttf"
-                    | "eot"
-                    | "otf"
-                    | "map"
-                    | "txt"
-                    | "xml"
-                    | "webp"
-                    | "mp4"
-                    | "webm"
-                    | "mp3"
-                    | "wav"
-                    | "flac"
-                    | "pdf"
-                    | "zip"
-                    | "gz"
-                    | "tar"
-                    | "bz2"
-            );
-        }
+    if let Some(dot_pos) = path.rfind('.')
+        && let Some(ext) = path.get(dot_pos + 1..)
+    {
+        return matches!(
+            ext.to_lowercase().as_str(),
+            "html"
+                | "css"
+                | "js"
+                | "json"
+                | "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "svg"
+                | "ico"
+                | "woff"
+                | "woff2"
+                | "ttf"
+                | "eot"
+                | "otf"
+                | "map"
+                | "txt"
+                | "xml"
+                | "webp"
+                | "mp4"
+                | "webm"
+                | "mp3"
+                | "wav"
+                | "flac"
+                | "pdf"
+                | "zip"
+                | "gz"
+                | "tar"
+                | "bz2"
+        );
     }
     false
 }
