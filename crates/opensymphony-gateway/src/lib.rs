@@ -102,8 +102,9 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
     let recent_events = snapshot
         .recent_events
         .iter()
-        .map(|e| SnapshotEventSummary {
-            sequence: envelope.sequence,
+        .enumerate()
+        .map(|(idx, e)| SnapshotEventSummary {
+            sequence: idx as u64,
             happened_at: e.happened_at,
             issue_identifier: e.issue_identifier.clone(),
             kind: recent_event_kind_to_snapshot_event_kind(&e.kind),
@@ -268,15 +269,11 @@ async fn events(
     let initial = store.current().await;
     let stream = stream! {
         let mut last_sent_sequence = initial.sequence;
-        if let Some(event) = snapshot_event(&initial) {
-            yield Ok(event);
-        }
+        yield Ok(snapshot_event(&initial));
         while let Some(envelope) =
             next_snapshot_envelope(&store, &mut receiver, &mut last_sent_sequence).await
         {
-            if let Some(event) = snapshot_event(&envelope) {
-                yield Ok(event);
-            }
+            yield Ok(snapshot_event(&envelope));
         }
     };
 
@@ -287,15 +284,14 @@ async fn events(
     )
 }
 
-fn snapshot_event(envelope: &SnapshotEnvelope) -> Option<Event> {
+fn snapshot_event(envelope: &SnapshotEnvelope) -> Event {
     let dashboard = control_plane_to_dashboard_snapshot(envelope);
-    let payload = serde_json::to_string(&dashboard).ok()?;
-    Some(
-        Event::default()
-            .event("snapshot")
-            .id(envelope.sequence.to_string())
-            .data(payload),
-    )
+    let payload =
+        serde_json::to_string(&dashboard).expect("DashboardSnapshot is always serializable");
+    Event::default()
+        .event("snapshot")
+        .id(envelope.sequence.to_string())
+        .data(payload)
 }
 
 async fn next_snapshot_envelope(

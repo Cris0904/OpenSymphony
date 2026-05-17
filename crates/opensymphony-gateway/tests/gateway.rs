@@ -240,9 +240,8 @@ async fn gateway_events_stream_yields_snapshot_updates() {
             .expect("test gateway server should serve")
     });
 
-    let mut events_url =
+    let events_url =
         Url::parse(&format!("http://{address}/api/v1/events")).expect("valid events url");
-    events_url.query_pairs_mut().append_pair("transport", "sse");
 
     let client = reqwest::Client::new();
     let response = client
@@ -320,7 +319,7 @@ async fn gateway_events_stream_yields_snapshot_updates() {
 }
 
 #[tokio::test]
-async fn gateway_router_isolation_from_control_plane() {
+async fn gateway_and_control_plane_are_reachable() {
     let store = SnapshotStore::new(fixture_snapshot(0));
     let gateway = GatewayServer::new(store.clone());
     let control = ControlPlaneServer::new(store);
