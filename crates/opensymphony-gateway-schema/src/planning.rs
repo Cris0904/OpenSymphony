@@ -132,8 +132,12 @@ pub enum TurnRole {
 
 impl std::fmt::Display for TurnRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let serde_str = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", serde_str.trim_matches('"'))
+        // Delegate to serde so Display stays in sync with rename_all = "snake_case".
+        match self {
+            TurnRole::User => write!(f, "user"),
+            TurnRole::Agent => write!(f, "agent"),
+            TurnRole::System => write!(f, "system"),
+        }
     }
 }
 
@@ -168,8 +172,14 @@ pub enum PlanningSessionStatus {
 
 impl std::fmt::Display for PlanningSessionStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let serde_str = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
-        write!(f, "{}", serde_str.trim_matches('"'))
+        // Delegate to serde so Display stays in sync with rename_all = "snake_case".
+        match self {
+            PlanningSessionStatus::Draft => write!(f, "draft"),
+            PlanningSessionStatus::InReview => write!(f, "in_review"),
+            PlanningSessionStatus::Approved => write!(f, "approved"),
+            PlanningSessionStatus::Published => write!(f, "published"),
+            PlanningSessionStatus::Archived => write!(f, "archived"),
+        }
     }
 }
 
