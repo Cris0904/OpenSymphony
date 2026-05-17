@@ -85,8 +85,8 @@
   "http_auth_mode": "none",
   "websocket_auth_mode": "none",
   "websocket_query_param_name": null,
-  "recent_events": [],
-  "modified_files": [],
+  // "recent_events"   — omitted when empty (#[serde(skip_serializing_if = "Vec::is_empty")])
+  // "modified_files"  — omitted when empty (#[serde(skip_serializing_if = "Vec::is_empty")])
   "input_tokens": 1024,
   "output_tokens": 512,
   "cache_read_tokens": 256
