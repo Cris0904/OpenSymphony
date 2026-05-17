@@ -484,7 +484,10 @@ async fn gateway_serves_task_graph() {
     assert_eq!(response.nodes[0].identifier, "COE-255");
     // Verify runtime overlay is present
     assert!(response.nodes[0].runtime_overlay.is_some());
-    let overlay = response.nodes[0].runtime_overlay.as_ref().unwrap();
+    let overlay = response.nodes[0]
+        .runtime_overlay
+        .as_ref()
+        .expect("task graph node should have runtime overlay");
     assert!(overlay.eligible);
     assert_eq!(overlay.active_run_id, Some("COE-255".into()));
 
