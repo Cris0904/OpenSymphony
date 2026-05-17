@@ -400,7 +400,8 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
     writeln!(index_file, "<html><body>Web App</body></html>").expect("write index.html");
 
     let css_path = temp_dir.path().join("assets").join("style.css");
-    fs::create_dir_all(css_path.parent().expect("assets dir has parent")).expect("create assets dir");
+    fs::create_dir_all(css_path.parent().expect("assets dir has parent"))
+        .expect("create assets dir");
     let mut css_file = fs::File::create(&css_path).expect("create style.css");
     writeln!(css_file, "body {{ color: red; }}").expect("write style.css");
 
