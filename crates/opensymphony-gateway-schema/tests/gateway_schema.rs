@@ -1012,6 +1012,27 @@ fn linear_publish_receipt_render_yaml_is_valid_yaml() {
     );
     assert_eq!(parsed["tasks"][0]["taskId"].as_str(), Some("OSYM-730"));
     assert_eq!(parsed["tasks"][0]["issue"].as_str(), Some("COE-395"));
+    // Assert publishedAt is present
+    assert!(
+        parsed["publishedAt"].as_str().is_some(),
+        "publishedAt must be present"
+    );
+    // Ensure no unexpected keys are present
+    let top_keys: std::collections::HashSet<&str> = parsed
+        .as_mapping()
+        .expect("top-level YAML must be a mapping")
+        .keys()
+        .filter_map(|k| k.as_str())
+        .collect();
+    let expected_keys: std::collections::HashSet<&str> = [
+        "planningWave",
+        "linearProject",
+        "publishedAt",
+        "milestones",
+        "tasks",
+    ]
+    .into();
+    assert_eq!(top_keys, expected_keys, "unexpected YAML keys");
 }
 
 // ─── Compile-time gate for all planning types ─────────────────────────────
