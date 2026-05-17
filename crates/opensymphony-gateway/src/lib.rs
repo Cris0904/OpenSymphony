@@ -26,13 +26,13 @@ pub use crate::opensymphony_gateway_schema::{
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
     cursor::PageCursor,
     run::{
-        ChangedFileEntry, DiffHunk, DiffLine, FileChangeKind, FileDiffPage, ReleaseReason, RunAction, RunDetail,
-        RunEvent, RunEventPage, RunFilesPage, RunLifecycleState, RunStatus,
+        ChangedFileEntry, DiffHunk, DiffLine, FileChangeKind, FileDiffPage, ReleaseReason,
+        RunAction, RunDetail, RunEvent, RunEventPage, RunFilesPage, RunLifecycleState, RunStatus,
     },
     snapshot::{
         DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectDetail, ProjectIssueSummary,
-        ProjectIssuesPage, ProjectList, ProjectMilestoneSummary, ProjectSummary,
-        SnapshotEventKind, SnapshotEventSummary,
+        ProjectIssuesPage, ProjectList, ProjectMilestoneSummary, ProjectSummary, SnapshotEventKind,
+        SnapshotEventSummary,
     },
     task_graph::{DiffSummary, TaskGraphRuntimeOverlay, TaskGraphSnapshot, TaskGraphStateCategory},
     version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
@@ -59,7 +59,10 @@ impl GatewayServer {
             .route("/api/v1/events", get(events))
             .route("/api/v1/projects", get(list_projects))
             .route("/api/v1/projects/{project_id}", get(get_project))
-            .route("/api/v1/projects/{project_id}/taskgraph", get(get_task_graph))
+            .route(
+                "/api/v1/projects/{project_id}/taskgraph",
+                get(get_task_graph),
+            )
             .route("/api/v1/runs/{run_id}", get(get_run_detail))
             .route("/api/v1/runs/{run_id}/events", get(get_run_events))
             .route("/api/v1/runs/{run_id}/files", get(get_run_files))
@@ -347,14 +350,10 @@ fn find_issue_snapshot<'a>(
     envelope: &'a SnapshotEnvelope,
     run_id: &'a str,
 ) -> Option<&'a ControlPlaneIssueSnapshot> {
-    envelope
-        .snapshot
-        .issues
-        .iter()
-        .find(|issue| {
-            issue.identifier.eq_ignore_ascii_case(run_id)
-                || issue.conversation_id_suffix.eq_ignore_ascii_case(run_id)
-        })
+    envelope.snapshot.issues.iter().find(|issue| {
+        issue.identifier.eq_ignore_ascii_case(run_id)
+            || issue.conversation_id_suffix.eq_ignore_ascii_case(run_id)
+    })
 }
 
 /// Strip the workspace root from a raw absolute path so that the public API
@@ -537,7 +536,11 @@ async fn get_task_graph(
         })
         .collect();
 
-    let root_ids: Vec<String> = snapshot.issues.iter().map(|i| i.identifier.clone()).collect();
+    let root_ids: Vec<String> = snapshot
+        .issues
+        .iter()
+        .map(|i| i.identifier.clone())
+        .collect();
 
     (
         StatusCode::OK,
@@ -551,7 +554,9 @@ async fn get_task_graph(
     )
 }
 
-fn map_runtime_state_to_graph_category(state: &ControlPlaneIssueRuntimeState) -> TaskGraphStateCategory {
+fn map_runtime_state_to_graph_category(
+    state: &ControlPlaneIssueRuntimeState,
+) -> TaskGraphStateCategory {
     match state {
         ControlPlaneIssueRuntimeState::Idle => TaskGraphStateCategory::Todo,
         ControlPlaneIssueRuntimeState::Running => TaskGraphStateCategory::InProgress,
@@ -566,9 +571,21 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> Option<TaskGraphR
     let diff_summary = if issue.modified_files.is_empty() {
         None
     } else {
-        let added = issue.modified_files.iter().filter(|f| f.change_kind == ControlPlaneFileChangeKind::Created).count() as u32;
-        let modified = issue.modified_files.iter().filter(|f| f.change_kind == ControlPlaneFileChangeKind::Modified).count() as u32;
-        let removed = issue.modified_files.iter().filter(|f| f.change_kind == ControlPlaneFileChangeKind::Removed).count() as u32;
+        let added = issue
+            .modified_files
+            .iter()
+            .filter(|f| f.change_kind == ControlPlaneFileChangeKind::Created)
+            .count() as u32;
+        let modified = issue
+            .modified_files
+            .iter()
+            .filter(|f| f.change_kind == ControlPlaneFileChangeKind::Modified)
+            .count() as u32;
+        let removed = issue
+            .modified_files
+            .iter()
+            .filter(|f| f.change_kind == ControlPlaneFileChangeKind::Removed)
+            .count() as u32;
         let lines_added: u32 = issue.modified_files.iter().map(|f| f.lines_added).sum();
         let lines_removed: u32 = issue.modified_files.iter().map(|f| f.lines_removed).sum();
 
@@ -662,9 +679,15 @@ async fn get_run_detail(
     let (status, lifecycle_state) = match issue.runtime_state {
         ControlPlaneIssueRuntimeState::Idle => (RunStatus::Unclaimed, RunLifecycleState::Eligible),
         ControlPlaneIssueRuntimeState::Running => (RunStatus::Running, RunLifecycleState::Running),
-        ControlPlaneIssueRuntimeState::RetryQueued => (RunStatus::RetryQueued, RunLifecycleState::Failed),
-        ControlPlaneIssueRuntimeState::Releasing => (RunStatus::Released, RunLifecycleState::Releasing),
-        ControlPlaneIssueRuntimeState::Completed => (RunStatus::Released, RunLifecycleState::Completed),
+        ControlPlaneIssueRuntimeState::RetryQueued => {
+            (RunStatus::RetryQueued, RunLifecycleState::Failed)
+        }
+        ControlPlaneIssueRuntimeState::Releasing => {
+            (RunStatus::Released, RunLifecycleState::Releasing)
+        }
+        ControlPlaneIssueRuntimeState::Completed => {
+            (RunStatus::Released, RunLifecycleState::Completed)
+        }
         ControlPlaneIssueRuntimeState::Failed => (RunStatus::Released, RunLifecycleState::Failed),
     };
 
@@ -833,7 +856,10 @@ async fn get_run_diffs(
                 ControlPlaneFileChangeKind::Removed => "removed",
             };
             DiffHunk {
-                header: format!("@@ -{} +{} @@  {}  ({})", fc.lines_removed, fc.lines_added, path, kind_label),
+                header: format!(
+                    "@@ -{} +{} @@  {}  ({})",
+                    fc.lines_removed, fc.lines_added, path, kind_label
+                ),
                 start_line: 1,
                 old_line_count: fc.lines_removed,
                 new_line_count: fc.lines_added,

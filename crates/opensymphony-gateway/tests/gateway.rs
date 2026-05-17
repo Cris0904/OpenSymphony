@@ -468,7 +468,9 @@ async fn gateway_serves_task_graph() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(format!("http://{address}/api/v1/projects/default/taskgraph"))
+        .get(format!(
+            "http://{address}/api/v1/projects/default/taskgraph"
+        ))
         .send()
         .await
         .expect("fetch task graph")
@@ -624,8 +626,10 @@ async fn gateway_serves_run_diffs() {
 
 #[test]
 fn sanitize_file_path_strips_workspace_root() {
-    let result =
-        opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/tmp/opensymphony/COE-255/src/main.rs");
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony",
+        "/tmp/opensymphony/COE-255/src/main.rs",
+    );
     assert_eq!(result, "COE-255/src/main.rs");
 }
 
