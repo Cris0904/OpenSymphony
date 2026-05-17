@@ -261,16 +261,25 @@ async fn gateway_events_stream_yields_snapshot_updates() {
         "text/event-stream"
     );
 
-    // Read initial snapshot event from the body stream.
     let mut stream = response.bytes_stream();
-    let first_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
-        .await
-        .expect("receive initial event before timeout")
-        .expect("stream yields initial event")
-        .expect("initial event bytes ok");
-    let first_text = String::from_utf8(first_chunk.to_vec()).expect("valid utf-8");
+
+    // Read the initial snapshot event into a buffer.
+    let mut first_buf = String::new();
+    let timeout_dur = std::time::Duration::from_secs(2);
+    #[allow(clippy::while_let_loop)]
+    loop {
+        match tokio::time::timeout(timeout_dur, stream.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                first_buf.push_str(&String::from_utf8_lossy(&chunk));
+                if first_buf.ends_with("\n\n") || first_buf.ends_with("\r\n\r\n") {
+                    break;
+                }
+            }
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+        }
+    }
     assert!(
-        first_text.contains("event: snapshot"),
+        !first_buf.is_empty() && first_buf.contains("event: snapshot"),
         "first SSE event should be a snapshot"
     );
 
@@ -278,19 +287,27 @@ async fn gateway_events_stream_yields_snapshot_updates() {
     let new_snapshot = fixture_snapshot(1);
     store.publish(new_snapshot).await;
 
-    let second_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
-        .await
-        .expect("receive update event before timeout")
-        .expect("stream yields update event")
-        .expect("update event bytes ok");
-    let second_text = String::from_utf8(second_chunk.to_vec()).expect("valid utf-8");
+    // Read the second event into a buffer.
+    let mut second_buf = String::new();
+    #[allow(clippy::while_let_loop)]
+    loop {
+        match tokio::time::timeout(timeout_dur, stream.next()).await {
+            Ok(Some(Ok(chunk))) => {
+                second_buf.push_str(&String::from_utf8_lossy(&chunk));
+                if second_buf.ends_with("\n\n") || second_buf.ends_with("\r\n\r\n") {
+                    break;
+                }
+            }
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+        }
+    }
     assert!(
-        second_text.contains("event: snapshot"),
+        !second_buf.is_empty() && second_buf.contains("event: snapshot"),
         "second SSE event should be a snapshot"
     );
 
     // Verify the payload in the second event is a valid DashboardSnapshot.
-    let data_line = second_text
+    let data_line = second_buf
         .lines()
         .find(|l| l.starts_with("data:"))
         .expect("second event contains data line");

@@ -65,8 +65,8 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
         total_cost_micros: snapshot.metrics.total_cost_micros,
     };
 
-    // Linear sync health is encoded as a synthetic project summary for the first project found,
-    // or a default entry when no issues are present yet.
+    // Linear sync health is encoded as a synthetic project summary for the first project found.
+    // When no issues are present, the projects list is empty (no default entry is needed for v1).
     let projects = if snapshot.issues.is_empty() {
         Vec::new()
     } else {
@@ -103,7 +103,7 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
         .recent_events
         .iter()
         .map(|e| SnapshotEventSummary {
-            sequence: 0, // sequence is per-envelope in the gateway model
+            sequence: envelope.sequence,
             happened_at: e.happened_at,
             issue_identifier: e.issue_identifier.clone(),
             kind: recent_event_kind_to_snapshot_event_kind(&e.kind),
@@ -313,9 +313,7 @@ async fn next_snapshot_envelope(
                 return Some(envelope);
             }
             Err(broadcast::error::RecvError::Lagged(_)) => {
-                if let Some(envelope) =
-                    catch_up_lagged_receiver(store, receiver, *last_sent_sequence).await
-                {
+                if let Some(envelope) = latest_from_store(store, *last_sent_sequence).await {
                     *last_sent_sequence = envelope.sequence;
                     return Some(envelope);
                 }
@@ -325,9 +323,8 @@ async fn next_snapshot_envelope(
     }
 }
 
-async fn catch_up_lagged_receiver(
+async fn latest_from_store(
     store: &SnapshotStore,
-    _receiver: &mut broadcast::Receiver<SnapshotEnvelope>,
     last_sent_sequence: u64,
 ) -> Option<SnapshotEnvelope> {
     let latest = store.current().await;
