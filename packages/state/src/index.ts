@@ -133,10 +133,10 @@ export function gatewayReducer(
       frames.set(action.runId, [...existing, ...newFrames]);
       const cursor = new Map(state.terminal.cursor);
       if (newFrames.length > 0) {
-        const lastSeq = newFrames[newFrames.length - 1].frame_sequence;
-        // Use Math.max so cursor always advances even if frames arrive out of order.
+        // Use max over ALL new frames to handle unsorted batches.
+        const maxSeq = Math.max(...newFrames.map((f) => f.frame_sequence));
         const prevCursor = cursor.get(action.runId) ?? 0;
-        cursor.set(action.runId, Math.max(prevCursor, lastSeq));
+        cursor.set(action.runId, Math.max(prevCursor, maxSeq));
       }
       return {
         ...state,

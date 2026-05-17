@@ -198,6 +198,17 @@ describe("gatewayReducer", () => {
     expect(state.terminal.cursor.get("run-1")).toBe(5);
   });
 
+  it("TERMINAL_FRAMES_RECEIVED cursor uses max over unsorted batch", () => {
+    // Batch arrives with frames 2, 1 (unsorted within batch).
+    const state = gatewayReducer(initialState, {
+      type: "TERMINAL_FRAMES_RECEIVED",
+      runId: "run-1",
+      frames: [makeFrame(2), makeFrame(1)],
+    });
+    // Cursor should be 2 (max of batch), not 1 (last element).
+    expect(state.terminal.cursor.get("run-1")).toBe(2);
+  });
+
   it("TERMINAL_FRAMES_RECEIVED does not reset cursor for empty batch", () => {
     let state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
