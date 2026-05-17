@@ -263,22 +263,24 @@ async fn gateway_events_stream_yields_snapshot_updates() {
     let mut stream = response.bytes_stream();
 
     // Read the initial snapshot event into a buffer.
-    let mut first_buf = String::new();
+    let mut first_buf = Vec::new();
     let timeout_dur = std::time::Duration::from_secs(2);
     #[allow(clippy::while_let_loop)]
     loop {
         match tokio::time::timeout(timeout_dur, stream.next()).await {
             Ok(Some(Ok(chunk))) => {
-                first_buf.push_str(&String::from_utf8_lossy(&chunk));
-                if first_buf.ends_with("\n\n") || first_buf.ends_with("\r\n\r\n") {
+                first_buf.extend_from_slice(&chunk);
+                if first_buf.ends_with(b"\n\n") || first_buf.ends_with(b"\r\n\r\n") {
                     break;
                 }
             }
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         }
     }
+    let first_text =
+        String::from_utf8(first_buf).expect("SSE event is valid UTF-8 when fully assembled");
     assert!(
-        !first_buf.is_empty() && first_buf.contains("event: snapshot"),
+        !first_text.is_empty() && first_text.contains("event: snapshot"),
         "first SSE event should be a snapshot"
     );
 
@@ -287,26 +289,28 @@ async fn gateway_events_stream_yields_snapshot_updates() {
     store.publish(new_snapshot).await;
 
     // Read the second event into a buffer.
-    let mut second_buf = String::new();
+    let mut second_buf = Vec::new();
     #[allow(clippy::while_let_loop)]
     loop {
         match tokio::time::timeout(timeout_dur, stream.next()).await {
             Ok(Some(Ok(chunk))) => {
-                second_buf.push_str(&String::from_utf8_lossy(&chunk));
-                if second_buf.ends_with("\n\n") || second_buf.ends_with("\r\n\r\n") {
+                second_buf.extend_from_slice(&chunk);
+                if second_buf.ends_with(b"\n\n") || second_buf.ends_with(b"\r\n\r\n") {
                     break;
                 }
             }
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         }
     }
+    let second_text =
+        String::from_utf8(second_buf).expect("SSE event is valid UTF-8 when fully assembled");
     assert!(
-        !second_buf.is_empty() && second_buf.contains("event: snapshot"),
+        !second_text.is_empty() && second_text.contains("event: snapshot"),
         "second SSE event should be a snapshot"
     );
 
     // Verify the payload in the second event is a valid DashboardSnapshot.
-    let data_line = second_buf
+    let data_line = second_text
         .lines()
         .find(|l| l.starts_with("data:"))
         .expect("second event contains data line");

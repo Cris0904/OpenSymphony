@@ -65,13 +65,11 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
         total_cost_micros: snapshot.metrics.total_cost_micros,
     };
 
-    // Linear sync health is encoded as a synthetic project summary for the first project found.
-    // When no issues are present, the projects list is empty (no default entry is needed for v1).
+    // For v1 we flatten all issues into a single synthetic project because the
+    // control-plane does not yet expose per-project grouping.
     let projects = if snapshot.issues.is_empty() {
         Vec::new()
     } else {
-        // For v1 we flatten all issues into a single synthetic project because the
-        // control-plane does not yet expose per-project grouping.
         let running = snapshot
             .issues
             .iter()
@@ -102,9 +100,7 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
     let recent_events = snapshot
         .recent_events
         .iter()
-        .enumerate()
-        .map(|(idx, e)| SnapshotEventSummary {
-            sequence: idx as u64,
+        .map(|e| SnapshotEventSummary {
             happened_at: e.happened_at,
             issue_identifier: e.issue_identifier.clone(),
             kind: recent_event_kind_to_snapshot_event_kind(&e.kind),
