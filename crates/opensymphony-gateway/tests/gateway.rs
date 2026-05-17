@@ -206,6 +206,29 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 output_tokens: 128,
                 cache_read_tokens: 0,
             },
+            // RetryQueued issue: queued but NOT eligible (not idle)
+            IssueSnapshot {
+                identifier: "COE-303".to_owned(),
+                title: "Retry queued task".to_owned(),
+                tracker_state: "In Progress".to_owned(),
+                runtime_state: IssueRuntimeState::RetryQueued,
+                last_outcome: WorkerOutcome::Failed,
+                last_event_at: now,
+                conversation_id_suffix: "c0e303".to_owned(),
+                workspace_path_suffix: "COE-303".to_owned(),
+                retry_count: 1,
+                blocked: false,
+                server_base_url: Some("http://127.0.0.1:3003".to_owned()),
+                transport_target: Some("loopback".to_owned()),
+                http_auth_mode: Some("none".to_owned()),
+                websocket_auth_mode: Some("none".to_owned()),
+                websocket_query_param_name: None,
+                recent_events: Vec::new(),
+                modified_files: Vec::new(),
+                input_tokens: 256,
+                output_tokens: 64,
+                cache_read_tokens: 0,
+            },
         ],
         recent_events: vec![RecentEvent {
             happened_at: now,
@@ -1198,6 +1221,99 @@ async fn gateway_run_detail_completed_state() {
         Some(opensymphony::opensymphony_gateway_schema::run::ReleaseReason::Completed)
     );
     assert!(response.finished_at.is_some());
+
+    server_task.abort();
+}
+
+// ── Runtime overlay: queued vs eligible semantics ──────────────────────────────
+
+#[tokio::test]
+async fn gateway_task_graph_queued_vs_eligible() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!(
+            "http://{address}/api/v1/projects/default/taskgraph"
+        ))
+        .send()
+        .await
+        .expect("fetch task graph")
+        .json::<opensymphony::opensymphony_gateway_schema::task_graph::TaskGraphSnapshot>()
+        .await
+        .expect("decode task graph");
+
+    // Idle + not blocked → eligible AND queued
+    let idle_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-300")
+        .expect("COE-300 node should exist");
+    let idle_overlay = idle_node.runtime_overlay.as_ref().expect("overlay present");
+    assert!(
+        idle_overlay.eligible,
+        "Idle unblocked issue should be eligible"
+    );
+    assert!(idle_overlay.queued, "Idle unblocked issue should be queued");
+
+    // RetryQueued → queued BUT NOT eligible (not in Idle state)
+    let retry_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-303")
+        .expect("COE-303 node should exist");
+    let retry_overlay = retry_node
+        .runtime_overlay
+        .as_ref()
+        .expect("overlay present");
+    assert!(
+        !retry_overlay.eligible,
+        "RetryQueued issue must NOT be eligible (not idle)"
+    );
+    assert!(
+        retry_overlay.queued,
+        "RetryQueued issue must be queued (waiting for retry)"
+    );
+
+    // Completed → neither eligible nor queued
+    let done_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-301")
+        .expect("COE-301 node should exist");
+    let done_overlay = done_node.runtime_overlay.as_ref().expect("overlay present");
+    assert!(
+        !done_overlay.eligible,
+        "Completed issue must not be eligible"
+    );
+    assert!(!done_overlay.queued, "Completed issue must not be queued");
+
+    // Failed → neither eligible nor queued
+    let failed_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-302")
+        .expect("COE-302 node should exist");
+    let failed_overlay = failed_node
+        .runtime_overlay
+        .as_ref()
+        .expect("overlay present");
+    assert!(
+        !failed_overlay.eligible,
+        "Failed issue must not be eligible"
+    );
+    assert!(!failed_overlay.queued, "Failed issue must not be queued");
 
     server_task.abort();
 }

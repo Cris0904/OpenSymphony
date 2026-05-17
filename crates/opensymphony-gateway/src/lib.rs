@@ -657,8 +657,14 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeO
     // blocked.  Completed and failed issues must not appear eligible.
     let is_eligible =
         !issue.blocked && matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle);
-    // A blocked issue cannot be queued even if its runtime state is Idle.
-    let is_queued = is_eligible;
+    // Queued means the issue is actively waiting to be picked up by a worker.
+    // This covers both idle+unblocked issues and issues that have been
+    // explicitly placed on the retry queue.
+    let is_queued = is_eligible
+        || matches!(
+            issue.runtime_state,
+            ControlPlaneIssueRuntimeState::RetryQueued
+        );
 
     TaskGraphRuntimeOverlay {
         eligible: is_eligible,
