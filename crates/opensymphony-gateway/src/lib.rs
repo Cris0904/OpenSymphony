@@ -268,7 +268,7 @@ fn build_capabilities() -> GatewayCapabilities {
             },
             FeatureCapability {
                 feature: "hosted_mode".into(),
-                available: false,
+                available: true,
                 requires_auth: true,
                 requires_plan: None,
             },
