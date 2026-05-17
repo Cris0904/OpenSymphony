@@ -3,7 +3,6 @@
 import {
   gatewayReducer,
   initialState,
-  type GatewayAction,
 } from "@opensymphony/state";
 import type {
   DashboardSnapshot,
@@ -15,13 +14,22 @@ import type {
   GatewayEnvelope,
 } from "@opensymphony/gateway-schema";
 
-// -- Helpers --
+// -- Helpers — typed factories aligned with gateway-schema interfaces --
 
 function makeSnapshot(): DashboardSnapshot {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
-    health: { status: "ok", version: "1.0.0" },
-    metrics: { active_runs: 0 },
+    generated_at: "2025-01-01T00:00:00Z",
+    sequence: 1,
+    health: "healthy",
+    metrics: {
+      running_issue_count: 0,
+      retry_queue_depth: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cost_micros: 0,
+    },
     projects: [],
     recent_events: [],
   };
@@ -30,6 +38,8 @@ function makeSnapshot(): DashboardSnapshot {
 function makeTaskGraphSnapshot(): TaskGraphSnapshot {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
+    project_id: "proj-1",
+    generated_at: "2025-01-01T00:00:00Z",
     nodes: [],
     root_ids: [],
   };
@@ -39,13 +49,17 @@ function makeRunDetail(): RunDetail {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
     run_id: "run-1",
-    project_id: "proj-1",
-    status: "completed",
-    created_at: "2025-01-01T00:00:00Z",
-    updated_at: "2025-01-01T00:00:00Z",
-    completed_at: null,
-    error: null,
-    metadata: {},
+    issue_id: "issue-1",
+    issue_identifier: "COE-001",
+    worker_id: "worker-1",
+    status: "running",
+    claimed_at: "2025-01-01T00:00:00Z",
+    turn_count: 0,
+    max_turns: 50,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    runtime_seconds: 0,
   };
 }
 
@@ -53,10 +67,13 @@ function makeFrame(sequence: number): TerminalFrame {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
     frame_sequence: sequence,
+    stream_id: "stream-1",
     run_id: "run-1",
-    terminal_id: "term-1",
-    output: `line ${sequence}`,
-    emitted_at: "2025-01-01T00:00:00Z",
+    terminal_session_id: "term-1",
+    frame_kind: "stdout",
+    encoding: "utf8",
+    content: `line ${sequence}`,
+    timestamp: "2025-01-01T00:00:00Z",
   };
 }
 
@@ -65,11 +82,13 @@ function makeApproval(id: string): ApprovalRequest {
     schema_version: { major: 1, minor: 0, patch: 0 },
     approval_id: id,
     run_id: "run-1",
-    prompt: "Approve?",
+    issue_id: "issue-1",
+    kind: "tool_use",
+    title: "Approve action",
+    description: "Should we proceed?",
+    requested_at: "2025-01-01T00:00:00Z",
     status: "pending",
-    created_at: "2025-01-01T00:00:00Z",
-    resolved_at: null,
-    action_taken: null,
+    correlation_id: "corr-1",
   };
 }
 
@@ -77,9 +96,10 @@ function makePlanningSummary(): PlanningSessionSummary {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
     session_id: "sess-1",
-    run_id: "run-1",
-    status: "completed",
-    artifacts: [],
+    project_id: "proj-1",
+    title: "Planning session",
+    status: "draft",
+    artifact_count: 0,
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
   };
