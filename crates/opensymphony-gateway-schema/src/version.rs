@@ -24,7 +24,7 @@ impl SchemaVersion {
     }
 
     pub fn as_str(&self) -> String {
-        format!("{}.{}.{}", self.major, self.minor, self.patch)
+        format!("{}.{:02}.{:02}", self.major, self.minor, self.patch)
     }
 }
 

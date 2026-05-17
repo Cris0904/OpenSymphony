@@ -38,7 +38,7 @@ fn schema_version_roundtrips() {
     let json = must_serialize(&v);
     let back: SchemaVersion = must_deserialize(&json);
     assert_eq!(v, back);
-    assert_eq!(v.as_str(), "1.0.0");
+    assert_eq!(v.as_str(), "1.00.00");
     assert_eq!(format!("{v}"), "1.00.00");
 }
 
@@ -68,11 +68,13 @@ fn page_cursor_roundtrips() {
 
 #[test]
 fn gateway_envelope_roundtrips_with_raw_payload() {
+    let payload = json!({"content": "hello"});
     let envelope = GatewayEnvelope::new(
         StreamCursor::new(7, "terminal:run-1"),
         EntityRef::terminal("term-1"),
         "terminal_frame",
-        json!({"content": "hello"}),
+        payload.clone(),
+        payload,
     );
     let json = must_serialize(&envelope);
     let back: GatewayEnvelope = must_deserialize(&json);
@@ -146,7 +148,7 @@ fn task_graph_node_roundtrips() {
         labels: vec!["foundation".into(), "contracts".into()],
         created_at: Some(Utc::now()),
         updated_at: Some(Utc::now()),
-        estimate: Some(5.0),
+        estimate_minutes: Some(300),
     };
     let json = must_serialize(&node);
     let back: TaskGraphNode = must_deserialize(&json);
@@ -386,7 +388,7 @@ fn transport_recommendation_roundtrips() {
         priority: 1,
         description: "Fastest local path".into(),
         expected_latency_ms: 0,
-        expected_throughput_mbps: 1000.0,
+        expected_throughput_kbps: 1_000_000,
         reconnect_support: false,
         replay_support: false,
         binary_frame_support: true,

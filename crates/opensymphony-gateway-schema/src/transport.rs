@@ -9,7 +9,8 @@ pub struct TransportRecommendation {
     pub priority: u8,
     pub description: String,
     pub expected_latency_ms: u32,
-    pub expected_throughput_mbps: f32,
+    /// Expected throughput in kilobits per second.
+    pub expected_throughput_kbps: u64,
     pub reconnect_support: bool,
     pub replay_support: bool,
     pub binary_frame_support: bool,

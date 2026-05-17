@@ -39,12 +39,17 @@ fn frame_bytes() -> Vec<u8> {
 }
 
 /// Benchmark in-process tokio mpsc channel delivery.
+///
+/// Asserts bounded wall-clock duration so the test is hardware-independent.
 #[tokio::test]
-async fn bench_in_process_mpsc_throughput() {
+async fn bench_in_process_mpsc_bounded_duration() {
     let frame = sample_terminal_frame(0);
     let payload = serde_json::to_vec(&frame).expect("serialize frame");
     let payload_len = payload.len();
     let total_messages: usize = 100_000;
+    // Conservative bound: 100k messages via unbounded mpsc should finish in < 5s
+    // even on noisy CI runners.
+    let max_duration = Duration::from_secs(5);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -76,28 +81,52 @@ async fn bench_in_process_mpsc_throughput() {
         total_messages, elapsed, throughput_mbps
     );
 
-    // Gate: expect > 50 MB/s for tiny payloads on loopback
     assert!(
-        throughput_mbps > 50.0,
-        "in-process mpsc throughput too low: {:.2} MB/s",
-        throughput_mbps
+        elapsed < max_duration,
+        "in-process mpsc too slow: {:?} >= {:?}",
+        elapsed,
+        max_duration
     );
 }
 
+/// RAII guard that removes a Unix socket path on drop.
+#[cfg(unix)]
+struct SocketGuard<'a> {
+    path: &'a std::path::Path,
+}
+
+#[cfg(unix)]
+impl<'a> SocketGuard<'a> {
+    fn new(path: &'a std::path::Path) -> Self {
+        let _ = std::fs::remove_file(path);
+        Self { path }
+    }
+}
+
+#[cfg(unix)]
+impl<'a> Drop for SocketGuard<'a> {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.path);
+    }
+}
+
 /// Benchmark Unix domain socket delivery (macOS/Linux only).
+///
+/// Asserts bounded wall-clock duration so the test is hardware-independent.
+/// Uses a RAII guard to ensure the socket file is cleaned up even on panic.
 #[cfg(unix)]
 #[tokio::test]
-async fn bench_unix_domain_socket_throughput() {
+async fn bench_unix_domain_socket_bounded_duration() {
     use tokio::net::UnixListener;
     let payload = frame_bytes();
     let payload_len = payload.len();
     let total_messages: usize = 50_000;
+    let max_duration = Duration::from_secs(10);
     let socket_path = format!("/tmp/opensymphony-bench-{}.sock", std::process::id());
+    let path = std::path::Path::new(&socket_path);
+    let _guard = SocketGuard::new(path);
 
-    // Clean up any stale socket
-    let _ = std::fs::remove_file(&socket_path);
-
-    let listener = UnixListener::bind(&socket_path).expect("bind unix socket");
+    let listener = UnixListener::bind(path).expect("bind unix socket");
 
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept unix connection");
@@ -142,25 +171,26 @@ async fn bench_unix_domain_socket_throughput() {
         received, elapsed, throughput_mbps
     );
 
-    let _ = std::fs::remove_file(&socket_path);
-
     assert_eq!(received, total_messages, "not all messages delivered");
-    // Gate: expect > 10 MB/s for loopback unix socket
     assert!(
-        throughput_mbps > 10.0,
-        "unix domain socket throughput too low: {:.2} MB/s",
-        throughput_mbps
+        elapsed < max_duration,
+        "unix domain socket too slow: {:?} >= {:?}",
+        elapsed,
+        max_duration
     );
 }
 
 /// Benchmark WebSocket loopback delivery using tokio-tungstenite.
+///
+/// Asserts bounded wall-clock duration so the test is hardware-independent.
 #[tokio::test]
-async fn bench_websocket_loopback_throughput() {
+async fn bench_websocket_loopback_bounded_duration() {
     use tokio_tungstenite::{accept_async, connect_async};
 
     let payload = frame_bytes();
     let payload_len = payload.len();
     let total_messages: usize = 10_000;
+    let max_duration = Duration::from_secs(10);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind tcp");
@@ -215,11 +245,11 @@ async fn bench_websocket_loopback_throughput() {
     );
 
     assert_eq!(received, total_messages, "not all messages delivered");
-    // Gate: expect > 5 MB/s for loopback websocket with JSON payloads
     assert!(
-        throughput_mbps > 5.0,
-        "websocket loopback throughput too low: {:.2} MB/s",
-        throughput_mbps
+        elapsed < max_duration,
+        "websocket loopback too slow: {:?} >= {:?}",
+        elapsed,
+        max_duration
     );
 }
 

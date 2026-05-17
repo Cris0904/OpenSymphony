@@ -22,7 +22,8 @@ pub struct TaskGraphNode {
     pub labels: Vec<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
-    pub estimate: Option<f32>,
+    /// Estimated effort in minutes.
+    pub estimate_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
