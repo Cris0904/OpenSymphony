@@ -6,6 +6,7 @@ import type {
   TerminalSnapshot,
   TaskGraphSnapshot,
   GatewayCapabilities,
+  TransportProfile,
 } from "@opensymphony/gateway-schema";
 
 /** Transport adapter interface for all gateway communication. */
@@ -31,5 +32,5 @@ export interface GatewayTransport {
 export interface GatewayTransportConfig {
   baseUri: string;
   authToken?: string;
-  transport?: "websocket" | "sse" | "http";
+  transport?: TransportProfile;
 }
