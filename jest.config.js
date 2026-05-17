@@ -13,8 +13,7 @@ export default {
   extensionsToTreatAsEsm: [".ts"],
   moduleNameMapper: {
     "^(\\.{1,2}/.*)\\.js$": "$1",
-    "^@opensymphony/gateway-schema$": "<rootDir>/packages/gateway-schema/src/index.ts",
-    "^@opensymphony/gateway-schema/(.+)$": "<rootDir>/packages/gateway-schema/src/$1",
+    "^@opensymphony/(.+)$": "<rootDir>/packages/$1/src/index.ts",
   },
   testMatch: ["**/__tests__/**/*.test.ts"],
   transformIgnorePatterns: ["/node_modules/"],

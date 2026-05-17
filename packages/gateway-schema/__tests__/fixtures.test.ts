@@ -70,6 +70,10 @@ describe("schema version", () => {
   test("schemaVersionFromString throws on non-numeric string", () => {
     expect(() => schemaVersionFromString("a.b.c")).toThrow(/Invalid schema version/);
   });
+
+  test("schemaVersionFromString throws on extra components", () => {
+    expect(() => schemaVersionFromString("1.2.3.4")).toThrow(/Invalid schema version/);
+  });
 });
 
 // -- Batch validation tests --

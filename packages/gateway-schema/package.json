@@ -11,7 +11,7 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "src", "__tests__"],
+  "files": ["dist"],
   "scripts": {
     "build": "tsc --build tsconfig.json",
     "type-check": "tsc --noEmit",

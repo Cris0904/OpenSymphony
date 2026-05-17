@@ -128,11 +128,13 @@ export function gatewayReducer(
       const existing = frames.get(action.runId) ?? [];
       frames.set(action.runId, [...existing, ...action.frames]);
       const cursor = new Map(state.terminal.cursor);
-      const lastSeq = action.frames[action.frames.length - 1]?.frame_sequence ?? 0;
-      cursor.set(action.runId, lastSeq);
+      if (action.frames.length > 0) {
+        const lastSeq = action.frames[action.frames.length - 1].frame_sequence;
+        cursor.set(action.runId, lastSeq);
+      }
       return {
         ...state,
-        terminal: { ...state.terminal, frames, cursor },
+        terminal: { ...state.terminal, frames, cursor, error: state.terminal.error },
       };
     }
 
@@ -141,7 +143,11 @@ export function gatewayReducer(
         ...state,
         approval: {
           ...state.approval,
-          pending: [...state.approval.pending, action.payload],
+          pending: state.approval.pending.some(
+            (a) => a.approval_id === action.payload.approval_id,
+          )
+            ? state.approval.pending
+            : [...state.approval.pending, action.payload],
         },
       };
 
