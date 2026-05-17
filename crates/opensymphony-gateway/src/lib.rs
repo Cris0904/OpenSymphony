@@ -1,4 +1,8 @@
-use std::{convert::Infallible, path::Path as StdPath, time::Duration};
+use std::{
+    convert::Infallible,
+    path::{Path as StdPath, PathBuf},
+    time::Duration,
+};
 
 use chrono::Utc;
 use serde_json::json;
@@ -356,12 +360,54 @@ fn find_issue_snapshot<'a>(
     })
 }
 
+/// Resolve `..` and `.` components in a path without touching the filesystem.
+///
+/// A crafted path like `/tmp/opensymphony/../etc/passwd` becomes `/tmp/etc/passwd`.
+fn normalize_path(path: &StdPath) -> PathBuf {
+    let mut components: Vec<_> = path.components().collect();
+    let is_absolute = components
+        .first()
+        .is_some_and(|c| matches!(c, std::path::Component::RootDir));
+
+    let mut stack: Vec<_> = Vec::new();
+    if is_absolute {
+        // Preserve the leading root dir (first component); skip CurDir entries.
+        stack.push(components.remove(0));
+    }
+
+    for comp in components {
+        match &comp {
+            std::path::Component::CurDir => continue,
+            std::path::Component::ParentDir => {
+                // Pop only if we are not at the root.
+                if let Some(last) = stack.last()
+                    && matches!(last, std::path::Component::RootDir)
+                {
+                    continue;
+                }
+                stack.pop();
+            }
+            _ => stack.push(comp),
+        }
+    }
+    stack.into_iter().collect()
+}
+
 /// Strip the workspace root from a raw absolute path so that the public API
 /// never leaks a local filesystem path outside the workspace boundary.
+///
+/// Normalizes `..` and `.` components before stripping so that crafted paths
+/// such as `/tmp/opensymphony/../etc/passwd` cannot bypass the workspace guard.
 pub fn sanitize_file_path(workspace_root: &str, raw_path: &str) -> String {
     let root = StdPath::new(workspace_root);
     let candidate = StdPath::new(raw_path);
-    candidate
+
+    // Normalize the path by resolving `.` and `..` components so that a crafted
+    // path like `/tmp/opensymphony/../etc/passwd` becomes `/tmp/etc/passwd` and
+    // then fails `strip_prefix`, falling back to the safe basename.
+    let normalized = normalize_path(candidate);
+
+    normalized
         .strip_prefix(root)
         .map(|rel: &StdPath| rel.to_string_lossy().to_string())
         .unwrap_or_else(|_| {
@@ -536,11 +582,10 @@ async fn get_task_graph(
         })
         .collect();
 
-    let root_ids: Vec<String> = snapshot
-        .issues
-        .iter()
-        .map(|i| i.identifier.clone())
-        .collect();
+    // Parent/child relationship data is not yet available from the control-plane
+    // snapshot, so every node is treated as a standalone leaf. Returning an empty
+    // root_ids prevents clients from building an incorrect flat-forest layout.
+    let root_ids: Vec<String> = Vec::new();
 
     (
         StatusCode::OK,
@@ -610,7 +655,10 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeO
     let is_running = matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Running);
 
     TaskGraphRuntimeOverlay {
-        eligible: !issue.blocked,
+        // An issue is eligible only when it is idle (not yet started) and not
+        // blocked.  Completed and failed issues must not appear eligible.
+        eligible: !issue.blocked
+            && matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle),
         queued: matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle),
         active_run_id: is_running.then(|| issue.identifier.clone()),
         last_outcome: outcome,

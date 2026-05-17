@@ -488,7 +488,8 @@ async fn gateway_serves_task_graph() {
         .runtime_overlay
         .as_ref()
         .expect("task graph node should have runtime overlay");
-    assert!(overlay.eligible);
+    // Running issues are NOT eligible (only Idle issues are eligible).
+    assert!(!overlay.eligible);
     assert_eq!(overlay.active_run_id, Some("COE-255".into()));
 
     server_task.abort();
@@ -641,4 +642,192 @@ fn sanitize_file_path_falls_back_to_basename_for_unsafe_path() {
     let result =
         opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/etc/passwd");
     assert_eq!(result, "passwd");
+}
+
+// ── Path traversal tests ─────────────────────────────────────────────────────
+
+#[test]
+fn sanitize_file_path_blocks_path_traversal_via_dotdot() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony",
+        "/tmp/opensymphony/../etc/passwd",
+    );
+    // The traversal escapes the workspace root, so the fallback basename
+    // (`passwd`) is returned instead of leaking `../etc/passwd`.
+    assert_eq!(result, "passwd");
+}
+
+#[test]
+fn sanitize_file_path_blocks_nested_path_traversal() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony",
+        "/tmp/opensymphony/COE-255/../../etc/passwd",
+    );
+    assert_eq!(result, "passwd");
+}
+
+// ── 404 negative-path tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_project() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/projects/nonexistent"))
+        .send()
+        .await
+        .expect("fetch unknown project");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_project_task_graph() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "http://{address}/api/v1/projects/nonexistent/taskgraph"
+        ))
+        .send()
+        .await
+        .expect("fetch unknown task graph");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999"))
+        .send()
+        .await
+        .expect("fetch unknown run");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_events() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999/events"))
+        .send()
+        .await
+        .expect("fetch unknown run events");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_files() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999/files"))
+        .send()
+        .await
+        .expect("fetch unknown run files");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_diffs() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999/diffs"))
+        .send()
+        .await
+        .expect("fetch unknown run diffs");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
 }
