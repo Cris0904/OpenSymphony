@@ -382,3 +382,256 @@ async fn gateway_and_control_plane_are_reachable() {
     gateway_task.abort();
     control_task.abort();
 }
+
+// ── Read API endpoint tests ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn gateway_serves_project_list() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/projects"))
+        .send()
+        .await
+        .expect("fetch projects")
+        .json::<opensymphony::opensymphony_gateway_schema::snapshot::ProjectList>()
+        .await
+        .expect("decode project list");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.projects.len(), 1);
+    assert_eq!(response.projects[0].project_id, "default");
+    assert_eq!(response.projects[0].name, "OpenSymphony");
+    assert_eq!(response.projects[0].issue_count, 1);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_project_detail() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/projects/default"))
+        .send()
+        .await
+        .expect("fetch project detail")
+        .json::<opensymphony::opensymphony_gateway_schema::snapshot::ProjectDetail>()
+        .await
+        .expect("decode project detail");
+
+    assert_eq!(response.project_id, "default");
+    assert_eq!(response.name, "OpenSymphony");
+    assert_eq!(response.issue_count, 1);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_task_graph() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/projects/default/taskgraph"))
+        .send()
+        .await
+        .expect("fetch task graph")
+        .json::<opensymphony::opensymphony_gateway_schema::task_graph::TaskGraphSnapshot>()
+        .await
+        .expect("decode task graph");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.project_id, "default");
+    assert_eq!(response.nodes.len(), 1);
+    assert_eq!(response.nodes[0].identifier, "COE-255");
+    // Verify runtime overlay is present
+    assert!(response.nodes[0].runtime_overlay.is_some());
+    let overlay = response.nodes[0].runtime_overlay.as_ref().unwrap();
+    assert!(overlay.eligible);
+    assert_eq!(overlay.active_run_id, Some("COE-255".into()));
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_detail() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255"))
+        .send()
+        .await
+        .expect("fetch run detail")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunDetail>()
+        .await
+        .expect("decode run detail");
+
+    assert_eq!(response.run_id, "COE-255");
+    assert_eq!(response.issue_identifier, "COE-255");
+    assert_eq!(
+        response.status,
+        opensymphony::opensymphony_gateway_schema::run::RunStatus::Running
+    );
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_events() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255/events"))
+        .send()
+        .await
+        .expect("fetch run events")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunEventPage>()
+        .await
+        .expect("decode run events");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.run_id, "COE-255");
+    // The fixture has no recent_events for the issue, so page is empty
+    assert!(response.events.is_empty());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_files() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255/files"))
+        .send()
+        .await
+        .expect("fetch run files")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunFilesPage>()
+        .await
+        .expect("decode run files");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.run_id, "COE-255");
+    // The fixture has no modified_files, so page is empty
+    assert!(response.files.is_empty());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_diffs() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255/diffs"))
+        .send()
+        .await
+        .expect("fetch run diffs")
+        .json::<opensymphony::opensymphony_gateway_schema::run::FileDiffPage>()
+        .await
+        .expect("decode run diffs");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.run_id, "COE-255");
+    assert!(response.hunks.is_empty());
+
+    server_task.abort();
+}
+
+#[test]
+fn sanitize_file_path_strips_workspace_root() {
+    let result =
+        opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/tmp/opensymphony/COE-255/src/main.rs");
+    assert_eq!(result, "COE-255/src/main.rs");
+}
+
+#[test]
+fn sanitize_file_path_falls_back_to_basename_for_unsafe_path() {
+    let result =
+        opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/etc/passwd");
+    assert_eq!(result, "passwd");
+}
