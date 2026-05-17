@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/gateway-schema" },
+    { "path": "packages/api-client" },
+    { "path": "packages/ui-core" },
+    { "path": "packages/state" },
+    { "path": "apps/desktop" },
+    { "path": "apps/web" }
+  ]
+}
