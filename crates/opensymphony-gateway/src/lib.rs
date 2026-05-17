@@ -531,7 +531,7 @@ async fn get_task_graph(
                 created_at: None,
                 updated_at: None,
                 estimate_minutes: None,
-                runtime_overlay,
+                runtime_overlay: Some(runtime_overlay),
             }
         })
         .collect();
@@ -567,7 +567,7 @@ fn map_runtime_state_to_graph_category(
     }
 }
 
-fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> Option<TaskGraphRuntimeOverlay> {
+fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeOverlay {
     let diff_summary = if issue.modified_files.is_empty() {
         None
     } else {
@@ -609,7 +609,7 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> Option<TaskGraphR
 
     let is_running = matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Running);
 
-    Some(TaskGraphRuntimeOverlay {
+    TaskGraphRuntimeOverlay {
         eligible: !issue.blocked,
         queued: matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle),
         active_run_id: is_running.then(|| issue.identifier.clone()),
@@ -629,7 +629,7 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> Option<TaskGraphR
         } else {
             None
         },
-    })
+    }
 }
 
 // ── Run endpoints ─────────────────────────────────────────────────────────────
