@@ -12,8 +12,8 @@ use axum::{
     Json, Router,
     extract::{Path as AxumPath, Path as ExtractPath, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
     response::sse::{Event, KeepAlive, Sse},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use tokio::{net::TcpListener, sync::broadcast};
@@ -1169,4 +1169,3 @@ fn mime_type(path: &Path) -> &'static str {
         Some(_) | None => "application/octet-stream",
     }
 }
-
