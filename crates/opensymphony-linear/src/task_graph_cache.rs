@@ -108,7 +108,7 @@ impl TaskGraphCache {
         self.overlays.remove(issue_id);
     }
 
-    /// Get an entity by Linear ID or issue identifier.
+    /// Get a cached entity by its Linear ID.
     pub fn get_entity(&self, id: &str) -> Option<&CachedLinearEntity> {
         self.entities.get(id)
     }
