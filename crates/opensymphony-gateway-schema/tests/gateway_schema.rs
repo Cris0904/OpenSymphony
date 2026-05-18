@@ -11,7 +11,9 @@ use opensymphony::opensymphony_gateway_schema::{
         PlanningWave, PublishedMilestone, PublishedTask, ReviewComment, TaskEntry,
         TaskPackageProjection, TurnRole,
     },
-    run::{ReleaseReason, RunDetail, RunEvent, RunEventPage, RunStatus},
+    run::{
+        ReleaseReason, RunDetail, RunEvent, RunEventPage, RunLifecycleState, RunStatus,
+    },
     snapshot::{
         DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind,
         SnapshotEventSummary,
@@ -170,6 +172,7 @@ fn task_graph_node_roundtrips() {
         created_at: Some(Utc::now()),
         updated_at: Some(Utc::now()),
         estimate_minutes: Some(300),
+        runtime_overlay: None,
     };
     let json = must_serialize(&node);
     let back: TaskGraphNode = must_deserialize(&json);
@@ -188,6 +191,7 @@ fn run_detail_roundtrips() {
         issue_identifier: "COE-390".into(),
         worker_id: "worker-1".into(),
         status: RunStatus::Running,
+        lifecycle_state: RunLifecycleState::Running,
         claimed_at: Utc::now(),
         started_at: Some(Utc::now()),
         finished_at: None,
@@ -200,8 +204,13 @@ fn run_detail_roundtrips() {
         cache_read_tokens: 256,
         runtime_seconds: 120,
         conversation_id: Some("conv-1".into()),
-        workspace_path: Some("/tmp/workspaces/COE-390".into()),
+        workspace_id: None,
+        workspace_path: None,
+        harness_type: None,
+        summary: None,
+        blocker: None,
         error: None,
+        allowed_actions: Vec::new(),
     };
     let json = must_serialize(&run);
     let back: RunDetail = must_deserialize(&json);
