@@ -234,8 +234,8 @@ impl LinearClient {
             std::collections::HashMap::new();
 
         for type_name in &type_names {
-            let fields = self.introspect_type(*type_name).await?;
-            remote_fields.insert((*type_name).to_string(), fields.into_iter().collect());
+            let fields = self.introspect_type(type_name).await?;
+            remote_fields.insert(type_name.to_string(), fields.into_iter().collect());
         }
 
         let checked_at = Some(chrono::Utc::now());

@@ -368,7 +368,7 @@ mod tests {
         let issue = build_test_issue("lin-1", "COE-1", "Done");
         let entity: CachedLinearEntity = issue.into();
         assert!(entity.project_milestone.is_some());
-        let milestone = entity.project_milestone.unwrap();
+        let milestone = entity.project_milestone.expect("test issue should have milestone");
         assert_eq!(milestone.name, "M1");
         assert_eq!(entity.state_kind, "completed");
     }
