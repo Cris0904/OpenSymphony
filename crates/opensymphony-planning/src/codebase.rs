@@ -324,8 +324,13 @@ fn detect_packages(
             }
 
             let name = entry.file_name().to_string_lossy().to_string();
-            let deps = extract_cargo_deps(&cargo_toml).ok().unwrap_or_default();
-            let kind = if has_cargo_binary(&cargo_toml)
+            // Parse Cargo.toml once and reuse for both dependency extraction and binary detection
+            let parsed_toml = parse_cargo_toml(&cargo_toml).ok();
+            let deps = parsed_toml
+                .as_ref()
+                .map(extract_deps_from_table)
+                .unwrap_or_default();
+            let kind = if parsed_toml.as_ref().is_some_and(has_binary_in_table)
                 || entry.path().join("src").join("main.rs").exists()
                 || entry.path().join("src").join("bin").is_dir()
             {
@@ -385,17 +390,21 @@ fn detect_packages(
     Ok(packages)
 }
 
-fn extract_cargo_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError> {
+/// Parse a Cargo.toml file and return the parsed TOML table.
+fn parse_cargo_toml(path: &Path) -> Result<toml::Table, CodebaseAnalysisError> {
     let content = fs::read_to_string(path).map_err(|e| CodebaseAnalysisError::Io {
         path: path.display().to_string(),
         source: e,
     })?;
 
-    let parsed: toml::Table = content.parse().map_err(|e| CodebaseAnalysisError::Toml {
+    content.parse().map_err(|e| CodebaseAnalysisError::Toml {
         path: path.display().to_string(),
         source: e,
-    })?;
+    })
+}
 
+/// Extract dependencies from a parsed TOML table.
+fn extract_deps_from_table(parsed: &toml::Table) -> Vec<String> {
     let mut deps = Vec::new();
 
     // Extract from [dependencies]
@@ -424,16 +433,11 @@ fn extract_cargo_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError>
     }
 
     deps.sort();
-    Ok(deps)
+    deps
 }
 
-fn has_cargo_binary(path: &Path) -> bool {
-    let Ok(content) = fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(parsed) = content.parse::<toml::Table>() else {
-        return false;
-    };
+/// Check if a parsed TOML table indicates a binary crate via [[bin]] section.
+fn has_binary_in_table(parsed: &toml::Table) -> bool {
     // Check for [[bin]] section (array of tables)
     match parsed.get("bin") {
         Some(toml::Value::Array(arr)) => !arr.is_empty(),
@@ -460,9 +464,9 @@ fn extract_npm_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError> {
     }
 
     let pkg: NpmPackage =
-        serde_json::from_str(&content).map_err(|e| CodebaseAnalysisError::Io {
+        serde_json::from_str(&content).map_err(|e| CodebaseAnalysisError::Json {
             path: path.display().to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+            source: e,
         })?;
 
     let mut deps: BTreeMap<String, ()> = BTreeMap::new();
@@ -604,8 +608,21 @@ fn detect_integration_points(
             || path_str.contains("db_"))
             && path.extension().map(|e| e == "rs").unwrap_or(false)
         {
+            let db_pkg_name = path
+                .components()
+                .skip_while(|c| c.as_os_str() != "crates")
+                .nth(1)
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .or_else(|| {
+                    packages
+                        .iter()
+                        .filter(|p| path_str.starts_with(&p.relative_path))
+                        .max_by_key(|p| p.relative_path.len())
+                        .map(|p| p.name.clone())
+                })
+                .unwrap_or_else(|| path.display().to_string());
             points.push(IntegrationPoint {
-                source_package: "database".to_string(),
+                source_package: db_pkg_name,
                 target_package: None,
                 integration_type: IntegrationType::DatabaseAccess,
                 detail: format!("Database access: {}", path.display()),
@@ -764,6 +781,12 @@ pub enum CodebaseAnalysisError {
         path: String,
         #[source]
         source: toml::de::Error,
+    },
+    #[error("JSON parse error in {path}: {source}")]
+    Json {
+        path: String,
+        #[source]
+        source: serde_json::Error,
     },
 }
 
