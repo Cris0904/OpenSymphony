@@ -5,7 +5,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "dev": "npx serve dist -l 1420",
+    "build": "mkdir -p dist"
   },
   "dependencies": {
     "@opensymphony/gateway-schema": "*",

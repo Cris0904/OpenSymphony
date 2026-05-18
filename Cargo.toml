@@ -17,6 +17,8 @@ workspace = true
 
 [workspace]
 members = ["."]
+# apps/desktop/src-tauri requires GTK/system deps not present in CI.
+# Build manually: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml
 resolver = "2"
 
 [dependencies]
