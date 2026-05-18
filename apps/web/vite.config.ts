@@ -41,15 +41,6 @@ export default defineConfig({
         target: process.env.VITE_DEV_GATEWAY_URL ?? "http://127.0.0.1:3000",
         changeOrigin: true,
       },
-      "/ws": {
-        target: process.env.VITE_DEV_GATEWAY_URL ?? "http://127.0.0.1:3000",
-        changeOrigin: true,
-        ws: true,
-      },
-      "/events": {
-        target: process.env.VITE_DEV_GATEWAY_URL ?? "http://127.0.0.1:3000",
-        changeOrigin: true,
-      },
     },
   },
   resolve: {

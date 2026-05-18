@@ -272,7 +272,9 @@ fn build_capabilities() -> GatewayCapabilities {
             },
             FeatureCapability {
                 feature: "hosted_mode".into(),
-                available: true,
+                // Hosted mode is not yet available; login implementation is
+                // tracked as a follow-up (out of scope for this PR).
+                available: false,
                 requires_auth: true,
                 requires_plan: None,
             },
@@ -362,6 +364,37 @@ async fn latest_from_store(
 // Web client static asset serving
 // ---------------------------------------------------------------------------
 
+/// Resolve the requested path and verify it stays inside the assets directory.
+/// Returns the resolved absolute path if safe, or `None` if the request is
+/// outside the assets directory.
+fn resolve_safe_path(assets_dir: &str, rest: &str) -> Option<std::path::PathBuf> {
+    let base = Path::new(assets_dir);
+    let candidate = base.join(rest);
+    match (candidate.canonicalize(), base.canonicalize()) {
+        (Ok(resolved), Ok(base_resolved)) => {
+            if resolved == base_resolved || resolved.starts_with(&base_resolved) {
+                Some(resolved)
+            } else {
+                None
+            }
+        }
+        // If canonicalize fails (file doesn't exist), do a static check.
+        _ => {
+            if rest.split('/').any(|seg| seg == "..") {
+                None
+            } else {
+                Some(candidate)
+            }
+        }
+    }
+}
+
+/// Serve `index.html` from the given assets directory, returning `None` if not found.
+async fn serve_index_html(assets_dir: &str) -> Option<Response> {
+    let index_path = Path::new(assets_dir).join("index.html");
+    serve_file(&index_path).await.ok()
+}
+
 /// Serve a static file from the web assets directory, or fall back to
 /// `index.html` for SPA routes.
 async fn web_asset_handler(
@@ -378,55 +411,27 @@ async fn web_asset_handler(
 
     // If the path is empty (root /app/), serve index.html directly.
     if rest.is_empty() {
-        let index_path = Path::new(assets_dir).join("index.html");
-        match serve_file(&index_path).await {
-            Ok(resp) => return resp,
-            Err(_) => return StatusCode::NOT_FOUND.into_response(),
-        }
+        return serve_index_html(assets_dir).await.unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
     }
 
     // Resolve the joined path and verify it stays inside the assets directory.
-    let base = Path::new(assets_dir);
-    let candidate = base.join(&rest);
-    // Use canonicalize to resolve any ".." or symlink components.
-    // If canonicalize fails (e.g. the file doesn't exist yet), fall back to
-    // path-clean style check: reject if any component is "..".
-    let is_inside = match (candidate.canonicalize(), base.canonicalize()) {
-        (Ok(resolved), Ok(base_resolved)) => {
-            if resolved == base_resolved {
-                true
-            } else {
-                let resolved_s = resolved.to_string_lossy();
-                let base_s = base_resolved.to_string_lossy();
-                let prefix_len = base_s.len();
-                resolved_s
-                    .get(prefix_len..)
-                    .map(|suffix: &str| suffix.starts_with(std::path::MAIN_SEPARATOR))
-                    .unwrap_or(false)
-            }
-        }
-        _ => !rest.split('/').any(|seg| seg == ".."),
+    let safe_path = match resolve_safe_path(assets_dir, &rest) {
+        Some(p) => p,
+        None => return StatusCode::NOT_FOUND.into_response(),
     };
-    if !is_inside {
-        return StatusCode::NOT_FOUND.into_response();
-    }
 
     // Try the exact file path first.
-    if candidate.is_file() {
-        match serve_file(&candidate).await {
-            Ok(resp) => return resp,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        }
+    if safe_path.is_file() {
+        return match serve_file(&safe_path).await {
+            Ok(resp) => resp,
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
     }
 
     // SPA fallback: if the path does not look like a static asset request,
     // serve index.html so client-side routing works.
     if !path_has_known_extension(&rest) {
-        let index_path = base.join("index.html");
-        match serve_file(&index_path).await {
-            Ok(resp) => return resp,
-            Err(_) => return StatusCode::NOT_FOUND.into_response(),
-        }
+        return serve_index_html(assets_dir).await.unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
     }
 
     StatusCode::NOT_FOUND.into_response()
