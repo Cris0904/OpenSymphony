@@ -396,22 +396,20 @@ fn normalize_path(path: &StdPath) -> PathBuf {
 /// Strip the workspace root from a raw absolute path so that the public API
 /// never leaks a local filesystem path outside the workspace boundary.
 ///
-/// Normalizes `..` and `.` components before stripping so that crafted paths
-/// such as `/tmp/opensymphony/../etc/passwd` cannot bypass the workspace guard.
+/// Normalizes `..` and `.` components in **both** the workspace root and the
+/// candidate path before stripping, so that crafted paths such as
+/// `/tmp/opensymphony/../etc/passwd` cannot bypass the workspace guard.
 pub fn sanitize_file_path(workspace_root: &str, raw_path: &str) -> String {
-    let root = StdPath::new(workspace_root);
-    let candidate = StdPath::new(raw_path);
-
-    // Normalize the path by resolving `.` and `..` components so that a crafted
-    // path like `/tmp/opensymphony/../etc/passwd` becomes `/tmp/etc/passwd` and
-    // then fails `strip_prefix`, falling back to the safe basename.
-    let normalized = normalize_path(candidate);
+    let root = normalize_path(StdPath::new(workspace_root));
+    let normalized = normalize_path(StdPath::new(raw_path));
 
     normalized
-        .strip_prefix(root)
+        .strip_prefix(&root)
         .map(|rel: &StdPath| rel.to_string_lossy().to_string())
         .unwrap_or_else(|_| {
-            candidate
+            // Out-of-workspace path: return just the basename (safe last
+            // component) or empty string if none exists.
+            StdPath::new(raw_path)
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_default()

@@ -825,6 +825,37 @@ fn sanitize_file_path_blocks_nested_path_traversal() {
     assert_eq!(result, "passwd");
 }
 
+// Workspace root normalization: a crafted root that tries to escape its own
+// boundary is normalized before the strip, so the file still resolves safely.
+#[test]
+fn sanitize_file_path_normalizes_workspace_root() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/other/../opensymphony",
+        "/tmp/opensymphony/COE-255/src/main.rs",
+    );
+    assert_eq!(result, "COE-255/src/main.rs");
+}
+
+// When both root and file contain `..` components, normalization on both sides
+// prevents a crafted root from widening the accepted prefix.
+#[test]
+fn sanitize_file_path_normalizes_both_sides() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony/../opensymphony",
+        "/tmp/other/../opensymphony/../etc/passwd",
+    );
+    // Normalized: root=/tmp/opensymphony, file=/tmp/etc/passwd → escapes root
+    assert_eq!(result, "passwd");
+}
+
+// Empty string file name fallback: a raw path that is only a root dir yields
+// an empty string instead of leaking the workspace root.
+#[test]
+fn sanitize_file_path_empty_fallback_for_root_only_path() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/");
+    assert_eq!(result, "");
+}
+
 // ── 404 negative-path tests ───────────────────────────────────────────────────
 
 #[tokio::test]
