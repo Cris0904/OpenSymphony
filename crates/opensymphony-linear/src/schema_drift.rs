@@ -273,9 +273,17 @@ impl LinearClient {
             .execute_graphql(INTROSPECT_TYPE_QUERY, json!({ "typeName": type_name }))
             .await?;
 
-        let fields = response
-            .get("data")
-            .and_then(|d| d.get("__type"))
+        let type_node = response.get("data").and_then(|d| d.get("__type"));
+        match type_node {
+            None | Some(serde_json::Value::Null) => {
+                return Err(LinearError::InvalidResponse(format!(
+                    "Introspection returned null for type `{type_name}` (type may not exist or was renamed)"
+                )));
+            }
+            _ => {}
+        }
+
+        let fields = type_node
             .and_then(|t| t.get("fields"))
             .and_then(|f| f.as_array())
             .ok_or_else(|| {

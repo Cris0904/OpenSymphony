@@ -91,48 +91,9 @@ impl TaskGraphCache {
     pub fn upsert_entities(&mut self, issues: Vec<TrackerIssue>) {
         let synced_at = Utc::now();
         for issue in issues {
-            let entity = CachedLinearEntity {
-                id: issue.id.clone(),
-                identifier: issue.identifier.clone(),
-                title: issue.title.clone(),
-                state: issue.state.clone(),
-                state_kind: Self::infer_state_kind(&issue.state),
-                priority: issue.priority,
-                labels: issue.labels.clone(),
-                parent_id: issue.parent_id.clone(),
-                project_milestone: issue.project_milestone.as_ref().map(|m| CachedMilestone {
-                    id: m.id.clone(),
-                    name: m.name.clone(),
-                }),
-                blocked_by: issue
-                    .blocked_by
-                    .into_iter()
-                    .map(|b| {
-                        let is_terminal = b.is_terminal();
-                        CachedBlockerRef {
-                            id: b.id,
-                            identifier: b.identifier,
-                            title: b.title,
-                            state: b.state.name,
-                            is_terminal,
-                        }
-                    })
-                    .collect(),
-                sub_issues: issue
-                    .sub_issues
-                    .into_iter()
-                    .map(|s| CachedIssueRef {
-                        id: s.id,
-                        identifier: s.identifier,
-                        state: s.state,
-                    })
-                    .collect(),
-                url: issue.url.clone(),
-                created_at: issue.created_at,
-                updated_at: issue.updated_at,
-                synced_at,
-            };
-            self.entities.insert(issue.id, entity);
+            let mut entity: CachedLinearEntity = issue.into();
+            entity.synced_at = synced_at;
+            self.entities.insert(entity.id.clone(), entity);
         }
         self.last_synced_at = Some(synced_at);
     }
@@ -152,7 +113,7 @@ impl TaskGraphCache {
         self.entities.get(id)
     }
 
-    /// Get a runtime overlay by run/issue ID.
+    /// Get a runtime overlay by `issue_id`.
     pub fn get_overlay(&self, id: &str) -> Option<&RuntimeOverlay> {
         self.overlays.get(id)
     }
@@ -160,10 +121,10 @@ impl TaskGraphCache {
     /// Return true if the entire cache is expired.
     pub fn is_expired(&self) -> bool {
         match self.last_synced_at {
-            Some(synced) => {
-                Utc::now().signed_duration_since(synced)
-                    > chrono::TimeDelta::from_std(self.ttl).unwrap_or_default()
-            }
+            Some(synced) => match chrono::TimeDelta::from_std(self.ttl) {
+                Ok(ttl) => Utc::now().signed_duration_since(synced) > ttl,
+                Err(_) => true,
+            },
             None => true,
         }
     }
@@ -291,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_upsert_overlay_by_run_id() {
+    fn cache_upsert_overlay_by_issue_id() {
         let mut cache = TaskGraphCache::new("default", Duration::from_secs(300));
         let overlay = RuntimeOverlay {
             issue_id: "lin-1".to_string(),
