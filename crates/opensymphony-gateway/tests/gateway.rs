@@ -572,3 +572,61 @@ async fn gateway_blocks_path_traversal_in_web_assets() {
 
     server_task.abort();
 }
+
+/// Verify resolve_safe_path fallback branch (non-existent assets directory) rejects
+/// path traversal via static component check.
+#[tokio::test]
+async fn resolve_safe_path_fallback_blocks_traversal_on_missing_dir() {
+    // Helper function is private, so test through the HTTP handler by
+    // configuring a non-existent assets directory.
+    use tempfile::TempDir;
+
+    let store = SnapshotStore::new(fixture_snapshot(0));
+
+    // Create a temp dir that will be removed, so the assets path won't exist.
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let assets_path = temp_dir.path().join("nonexistent");
+    let assets_str = assets_path.to_string_lossy().to_string();
+
+    let server = GatewayServer::new(store.clone()).with_web_assets(assets_str);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let base = format!("http://{address}");
+    let client = reqwest::Client::new();
+
+    // Path traversal with non-existent dir must be blocked.
+    let response = client
+        .get(format!("{base}/app/../../../etc/passwd"))
+        .send()
+        .await
+        .expect("request should succeed");
+    assert!(
+        response.status().is_client_error(),
+        "Path traversal with non-existent dir should be rejected (got {})",
+        response.status()
+    );
+
+    // Normal path with non-existent dir must also return 404 (file not found).
+    let response = client
+        .get(format!("{base}/app/index.html"))
+        .send()
+        .await
+        .expect("request should succeed");
+    assert!(
+        response.status().is_client_error(),
+        "Missing file should return 404 (got {})",
+        response.status()
+    );
+
+    server_task.abort();
+}
