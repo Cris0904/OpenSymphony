@@ -368,6 +368,11 @@ async fn latest_from_store(
 /// Returns the resolved absolute path if safe, or `None` if the request is
 /// outside the assets directory.
 fn resolve_safe_path(assets_dir: &str, rest: &str) -> Option<std::path::PathBuf> {
+    // Reject absolute paths early to avoid Path::new().join() discarding the base.
+    if rest.starts_with('/') {
+        return None;
+    }
+
     let base = Path::new(assets_dir);
     let candidate = base.join(rest);
     match (candidate.canonicalize(), base.canonicalize()) {
