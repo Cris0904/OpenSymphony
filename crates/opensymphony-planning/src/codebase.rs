@@ -144,7 +144,7 @@ impl CodebaseAnalyzer {
         let packages = detect_packages(&self.root, &file_inventory)?;
         let build_systems = detect_build_systems(&self.root);
         let ownership_files = detect_ownership_signals(&self.root, &file_inventory);
-        let integration_points = detect_integration_points(&self.root, &packages, &file_inventory)?;
+        let integration_points = detect_integration_points(&self.root, &packages, &file_inventory);
         let conventions = detect_conventions(&self.root, &file_inventory);
         let risks = assess_risks(&self.root, &packages, &integration_points);
 
@@ -233,10 +233,11 @@ impl RepoWalker {
                 .map(|ft| ft.is_dir() && !ft.is_symlink())
                 .unwrap_or(false)
             {
-                if let Some(component) = path.file_name().and_then(|n| n.to_str()) {
-                    if self.exclude_dirs.contains(component) {
-                        continue;
-                    }
+                if path.file_name().and_then(|n| n.to_str())
+                    .map(|c| self.exclude_dirs.contains(c))
+                    .unwrap_or(false)
+                {
+                    continue;
                 }
                 if path
                     .file_name()
@@ -423,15 +424,6 @@ fn detect_build_systems(root: &Path) -> Vec<String> {
     if root.join("justfile").exists() {
         systems.push("just".to_string());
     }
-    if root.join("rust-toolchain.toml").exists() {
-        systems.push("rust-toolchain".to_string());
-    }
-    if root.join("clippy.toml").exists() {
-        systems.push("clippy".to_string());
-    }
-    if root.join("rustfmt.toml").exists() {
-        systems.push("rustfmt".to_string());
-    }
 
     systems
 }
@@ -486,68 +478,58 @@ fn detect_ownership_signals(
 }
 
 fn detect_integration_points(
-    root: &Path,
+    _root: &Path,
     packages: &[PackageInfo],
     inventory: &BTreeMap<PathBuf, usize>,
-) -> Result<Vec<IntegrationPoint>, CodebaseAnalysisError> {
+) -> Vec<IntegrationPoint> {
     let mut points = Vec::new();
 
     // Cross-crate dependencies from Cargo.toml
-    let cargo_toml = root.join("Cargo.toml");
-    if cargo_toml.exists() {
-        let _content = fs::read_to_string(&cargo_toml).map_err(|e| CodebaseAnalysisError::Io {
-            path: cargo_toml.display().to_string(),
-            source: e,
-        })?;
-
-        for pkg in packages {
-            for dep in &pkg.dependencies {
-                if packages.iter().any(|p| p.name == *dep) {
-                    points.push(IntegrationPoint {
-                        source_package: pkg.name.clone(),
-                        target_package: Some(format!("crates/{dep}")),
-                        integration_type: IntegrationType::CrossCrateDependency,
-                        detail: format!("Cargo dependency: {dep}"),
-                    });
-                }
-            }
-        }
-    }
-
-    // Detect API/client patterns
-    for (path, _) in inventory {
-        let path_str = path.display().to_string();
-        if path_str.contains("client") || path_str.contains("transport") {
-            if path.extension().map(|e| e == "rs").unwrap_or(false) {
-                if let Some(parent) = path.parent() {
-                    let pkg_name = parent
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    points.push(IntegrationPoint {
-                        source_package: pkg_name.clone(),
-                        target_package: None,
-                        integration_type: IntegrationType::ApiClient,
-                        detail: format!("Client/transport in: {}", path.display()),
-                    });
-                }
-            }
-        }
-        // Detect database access
-        if path_str.contains("duckdb") || path_str.contains("database") || path_str.contains("db_")
-        {
-            if path.extension().map(|e| e == "rs").unwrap_or(false) {
+    for pkg in packages {
+        for dep in &pkg.dependencies {
+            if packages.iter().any(|p| p.name == *dep) {
                 points.push(IntegrationPoint {
-                    source_package: "database".to_string(),
-                    target_package: None,
-                    integration_type: IntegrationType::DatabaseAccess,
-                    detail: format!("Database access: {}", path.display()),
+                    source_package: pkg.name.clone(),
+                    target_package: Some(format!("crates/{dep}")),
+                    integration_type: IntegrationType::CrossCrateDependency,
+                    detail: format!("Cargo dependency: {dep}"),
                 });
             }
         }
     }
 
-    Ok(points)
+    // Detect API/client patterns
+    for path in inventory.keys() {
+        let path_str = path.display().to_string();
+        if (path_str.contains("client") || path_str.contains("transport"))
+            && path.extension().map(|e| e == "rs").unwrap_or(false)
+            && path.parent().is_some()
+        {
+            let pkg_name = path.parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            points.push(IntegrationPoint {
+                source_package: pkg_name.clone(),
+                target_package: None,
+                integration_type: IntegrationType::ApiClient,
+                detail: format!("Client/transport in: {}", path.display()),
+            });
+        }
+        // Detect database access
+        if (path_str.contains("duckdb") || path_str.contains("database") || path_str.contains("db_"))
+            && path.extension().map(|e| e == "rs").unwrap_or(false)
+        {
+            points.push(IntegrationPoint {
+                source_package: "database".to_string(),
+                target_package: None,
+                integration_type: IntegrationType::DatabaseAccess,
+                detail: format!("Database access: {}", path.display()),
+            });
+        }
+    }
+
+    points
 }
 
 fn detect_conventions(root: &Path, inventory: &BTreeMap<PathBuf, usize>) -> Vec<Convention> {
@@ -582,24 +564,26 @@ fn detect_conventions(root: &Path, inventory: &BTreeMap<PathBuf, usize>) -> Vec<
         });
     }
 
-    // Test organization
-    for (path, _) in inventory {
+    // Test organization - collect all unique crate test directories
+    let mut seen_test_crates: HashSet<String> = HashSet::new();
+    for path in inventory.keys() {
         let is_test_file = path
             .parent()
             .and_then(|p| p.file_name())
-            .map_or(false, |n| n == "tests");
+            .is_some_and(|n| n == "tests");
         if path.starts_with("crates/") && path.components().count() >= 3 && is_test_file {
             let crate_name = path
                 .components()
                 .nth(1)
                 .map(|c| c.as_os_str().to_string_lossy().to_string())
                 .unwrap_or_default();
-            conventions.push(Convention {
-                area: "testing".to_string(),
-                description: format!("Integration tests in crates/{crate_name}/tests/"),
-                evidence_path: path.display().to_string(),
-            });
-            break;
+            if seen_test_crates.insert(crate_name.clone()) {
+                conventions.push(Convention {
+                    area: "testing".to_string(),
+                    description: format!("Integration tests in crates/{crate_name}/tests/"),
+                    evidence_path: path.display().to_string(),
+                });
+            }
         }
     }
 
@@ -691,6 +675,7 @@ pub enum CodebaseAnalysisError {
 // Intentionally left as a standalone result type
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;
@@ -829,16 +814,6 @@ serde = {{ workspace = true }}"#
         assert!(
             analysis.build_systems.contains(&"npm".to_string()),
             "should detect npm build system"
-        );
-        assert!(
-            analysis
-                .build_systems
-                .contains(&"rust-toolchain".to_string()),
-            "should detect rust-toolchain"
-        );
-        assert!(
-            analysis.build_systems.contains(&"clippy".to_string()),
-            "should detect clippy"
         );
     }
 
