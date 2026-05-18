@@ -519,3 +519,56 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
 
     server_task.abort();
 }
+
+/// Verify that path traversal attempts are blocked and return 404.
+#[tokio::test]
+async fn gateway_blocks_path_traversal_in_web_assets() {
+    use std::fs;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    let store = SnapshotStore::new(fixture_snapshot(0));
+
+    // Create a temporary directory with mock web assets.
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let index_path = temp_dir.path().join("index.html");
+    let mut index_file = fs::File::create(&index_path).expect("create index.html");
+    writeln!(index_file, "<html><body>Web App</body></html>").expect("write index.html");
+
+    let server = GatewayServer::new(store.clone())
+        .with_web_assets(temp_dir.path().to_string_lossy().to_string());
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let base = format!("http://{address}");
+    let client = reqwest::Client::new();
+
+    // Attempt path traversal via ../ sequences.
+    for path in [
+        "/app/../../../etc/passwd",
+        "/app/assets/../../index.html",
+        "/app/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+    ] {
+        let response = client
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .expect("request should succeed");
+        assert!(
+            response.status().is_client_error(),
+            "Path traversal {path:?} should be rejected (got {})",
+            response.status()
+        );
+    }
+
+    server_task.abort();
+}
