@@ -1,7 +1,8 @@
-use crate::opensymphony_domain::{TrackerIssue, TrackerIssueStateKind};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+use super::domain::{TrackerIssue, TrackerIssueStateKind};
 
 /// Analysis of the Linear task graph for a project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,7 +200,7 @@ impl LinearGraphAnalyzer {
                         blocker_id: b.id.clone(),
                         blocker_identifier: b.identifier.clone(),
                         blocker_title: b.title.clone(),
-                        blocker_state: b.state.name.clone(),
+                        blocker_state: b.state.clone(),
                         is_terminal: b.is_terminal(),
                     })
                     .collect(),
@@ -274,11 +275,10 @@ impl LinearGraphAnalyzer {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
-    use crate::opensymphony_domain::{
-        TrackerIssue, TrackerIssueBlocker, TrackerIssueRef, TrackerIssueState,
-        TrackerProjectMilestone,
+    use super::super::domain::{
+        TrackerIssue, TrackerIssueBlocker, TrackerIssueRef, TrackerProjectMilestone,
     };
+    use super::*;
     use chrono::Utc;
 
     fn make_issue(
@@ -321,16 +321,12 @@ mod tests {
             id: id.to_string(),
             identifier: identifier.to_string(),
             title: title.to_string(),
-            state: TrackerIssueState {
-                id: format!("state-{id}"),
-                name: state_name.to_string(),
-                tracker_type: if is_terminal { "completed" } else { "started" }.to_string(),
-                kind: if is_terminal {
-                    TrackerIssueStateKind::Completed
-                } else {
-                    TrackerIssueStateKind::Started
-                },
-            },
+            state: state_name.to_string(),
+            state_kind: Some(if is_terminal {
+                TrackerIssueStateKind::Completed
+            } else {
+                TrackerIssueStateKind::Started
+            }),
         }
     }
 

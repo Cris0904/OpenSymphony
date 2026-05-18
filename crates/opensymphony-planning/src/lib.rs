@@ -10,6 +10,7 @@
 //!   for review before plan generation.
 
 pub mod codebase;
+pub mod domain;
 pub mod linear_graph;
 pub mod research;
 

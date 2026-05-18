@@ -233,7 +233,9 @@ impl RepoWalker {
                 .map(|ft| ft.is_dir() && !ft.is_symlink())
                 .unwrap_or(false)
             {
-                if path.file_name().and_then(|n| n.to_str())
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
                     .map(|c| self.exclude_dirs.contains(c))
                     .unwrap_or(false)
                 {
@@ -505,7 +507,8 @@ fn detect_integration_points(
             && path.extension().map(|e| e == "rs").unwrap_or(false)
             && path.parent().is_some()
         {
-            let pkg_name = path.parent()
+            let pkg_name = path
+                .parent()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
@@ -517,7 +520,9 @@ fn detect_integration_points(
             });
         }
         // Detect database access
-        if (path_str.contains("duckdb") || path_str.contains("database") || path_str.contains("db_"))
+        if (path_str.contains("duckdb")
+            || path_str.contains("database")
+            || path_str.contains("db_"))
             && path.extension().map(|e| e == "rs").unwrap_or(false)
         {
             points.push(IntegrationPoint {
@@ -600,7 +605,7 @@ fn detect_conventions(root: &Path, inventory: &BTreeMap<PathBuf, usize>) -> Vec<
 }
 
 fn assess_risks(
-    _root: &Path,
+    root: &Path,
     packages: &[PackageInfo],
     integration_points: &[IntegrationPoint],
 ) -> Vec<AnalysisRisk> {
@@ -638,14 +643,19 @@ fn assess_risks(
         });
     }
 
-    // Mixed language risk
-    let has_rust = packages
+    // Mixed language/build system risk
+    // Detect both sub-package splits (crates/ + packages/) and root-level mixed builds
+    let has_rust_packages = packages
         .iter()
         .any(|p| p.relative_path.starts_with("crates/"));
-    let has_ts = packages
+    let has_ts_packages = packages
         .iter()
         .any(|p| p.relative_path.starts_with("packages/") || p.relative_path.starts_with("apps/"));
-    if has_rust && has_ts {
+    let has_root_cargo = root.join("Cargo.toml").exists();
+    let has_root_npm = root.join("package.json").exists();
+    let mixed_sub_packages = has_rust_packages && has_ts_packages;
+    let mixed_root = has_root_cargo && has_root_npm;
+    if mixed_sub_packages || mixed_root {
         risks.push(AnalysisRisk {
             category: RiskCategory::Maintenance,
             severity: RiskSeverity::Medium,
