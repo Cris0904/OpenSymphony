@@ -411,7 +411,9 @@ async fn web_asset_handler(
 
     // If the path is empty (root /app/), serve index.html directly.
     if rest.is_empty() {
-        return serve_index_html(assets_dir).await.unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
+        return serve_index_html(assets_dir)
+            .await
+            .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
     }
 
     // Resolve the joined path and verify it stays inside the assets directory.
@@ -431,7 +433,9 @@ async fn web_asset_handler(
     // SPA fallback: if the path does not look like a static asset request,
     // serve index.html so client-side routing works.
     if !path_has_known_extension(&rest) {
-        return serve_index_html(assets_dir).await.unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
+        return serve_index_html(assets_dir)
+            .await
+            .unwrap_or_else(|| StatusCode::NOT_FOUND.into_response());
     }
 
     StatusCode::NOT_FOUND.into_response()
