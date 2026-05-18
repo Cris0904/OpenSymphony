@@ -16,16 +16,24 @@ use tokio::{net::TcpListener, sync::broadcast};
 pub use crate::opensymphony_control::SnapshotStore;
 pub use crate::opensymphony_domain::{
     ControlPlaneAgentServerStatus, ControlPlaneDaemonSnapshot, ControlPlaneDaemonState,
-    ControlPlaneDaemonStatus, ControlPlaneIssueRuntimeState, ControlPlaneIssueSnapshot,
-    ControlPlaneMetricsSnapshot, ControlPlaneRecentEvent, ControlPlaneRecentEventKind,
-    ControlPlaneWorkerOutcome, SnapshotEnvelope,
+    ControlPlaneDaemonStatus, ControlPlaneFileChange, ControlPlaneFileChangeKind,
+    ControlPlaneIssueRuntimeState, ControlPlaneIssueSnapshot, ControlPlaneMetricsSnapshot,
+    ControlPlaneRecentEvent, ControlPlaneRecentEventKind, ControlPlaneWorkerOutcome,
+    SnapshotEnvelope,
 };
 pub use crate::opensymphony_gateway_schema::{
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
+    cursor::PageCursor,
+    run::{
+        ChangedFileEntry, DiffHunk, DiffLine, FileChangeKind, FileDiffPage, ReleaseReason,
+        RunAction, RunDetail, RunEvent, RunEventPage, RunFilesPage, RunLifecycleState, RunStatus,
+    },
     snapshot::{
-        DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind,
+        DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectDetail, ProjectIssueSummary,
+        ProjectIssuesPage, ProjectList, ProjectMilestoneSummary, ProjectSummary, SnapshotEventKind,
         SnapshotEventSummary,
     },
+    task_graph::{DiffSummary, TaskGraphRuntimeOverlay, TaskGraphSnapshot, TaskGraphStateCategory},
     version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
 };
 
@@ -99,8 +107,6 @@ pub fn control_plane_to_dashboard_snapshot(envelope: &SnapshotEnvelope) -> Dashb
         total_cost_micros: snapshot.metrics.total_cost_micros,
     };
 
-    // For v1 we flatten all issues into a single synthetic project because the
-    // control-plane does not yet expose per-project grouping.
     let projects = if snapshot.issues.is_empty() {
         Vec::new()
     } else {
@@ -206,19 +212,19 @@ fn build_capabilities() -> GatewayCapabilities {
         features: vec![
             FeatureCapability {
                 feature: "task_graph".into(),
-                available: false,
+                available: true,
                 requires_auth: false,
                 requires_plan: None,
             },
             FeatureCapability {
                 feature: "run_detail".into(),
-                available: false,
+                available: true,
                 requires_auth: false,
                 requires_plan: None,
             },
             FeatureCapability {
                 feature: "event_journal".into(),
-                available: false,
+                available: true,
                 requires_auth: false,
                 requires_plan: None,
             },
