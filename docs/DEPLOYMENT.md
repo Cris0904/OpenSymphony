@@ -82,7 +82,7 @@ Run the Vite dev server with proxy support:
 VITE_DEV_GATEWAY_URL=http://127.0.0.1:3000 npm run dev --workspace=@opensymphony/web
 ```
 
-The dev server proxies `/api/*`, ``, and `/*` to the local gateway
+The dev server proxies `/api/*` to the local gateway
 URL, allowing the browser app to communicate with the gateway without CORS
 issues during development.
 
