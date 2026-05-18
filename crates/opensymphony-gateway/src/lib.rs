@@ -384,12 +384,12 @@ fn resolve_safe_path(assets_dir: &str, rest: &str) -> Option<std::path::PathBuf>
             }
         }
         // If canonicalize fails (file doesn't exist), do a static check.
+        // Reject path traversal via both forward and backslash separators.
         _ => {
-            if rest.split('/').any(|seg| seg == "..") {
-                None
-            } else {
-                Some(candidate)
-            }
+            let has_dotdot = candidate
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir));
+            if has_dotdot { None } else { Some(candidate) }
         }
     }
 }
