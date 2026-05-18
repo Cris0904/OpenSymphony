@@ -11,9 +11,7 @@ use opensymphony::opensymphony_gateway_schema::{
         PlanningWave, PublishedMilestone, PublishedTask, ReviewComment, TaskEntry,
         TaskPackageProjection, TurnRole,
     },
-    run::{
-        ReleaseReason, RunDetail, RunEvent, RunEventPage, RunLifecycleState, RunStatus,
-    },
+    run::{ReleaseReason, RunDetail, RunEvent, RunEventPage, RunLifecycleState, RunStatus},
     snapshot::{
         DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind,
         SnapshotEventSummary,
@@ -204,13 +202,13 @@ fn run_detail_roundtrips() {
         cache_read_tokens: 256,
         runtime_seconds: 120,
         conversation_id: Some("conv-1".into()),
-        workspace_id: None,
-        workspace_path: None,
-        harness_type: None,
-        summary: None,
+        workspace_path: Some("/tmp/workspaces/COE-390".into()),
+        workspace_id: Some("COE-390".into()),
+        harness_type: Some("openhands".into()),
+        summary: Some("Processing run".into()),
         blocker: None,
         error: None,
-        allowed_actions: Vec::new(),
+        allowed_actions: vec![],
     };
     let json = must_serialize(&run);
     let back: RunDetail = must_deserialize(&json);
