@@ -221,7 +221,8 @@ impl RepoWalker {
             })?;
             let path = entry.path();
 
-            if path.is_dir() {
+            // Use entry.file_type() to avoid following symlinks, preventing infinite loops.
+            if entry.file_type().ok().map(|ft| ft.is_dir() && !ft.is_symlink()).unwrap_or(false) {
                 if let Some(component) = path.file_name().and_then(|n| n.to_str()) {
                     if self.exclude_dirs.contains(component) {
                         continue;
@@ -490,7 +491,7 @@ fn detect_integration_points(
 
         for pkg in packages {
             for dep in &pkg.dependencies {
-                if packages.iter().any(|p| p.name.starts_with(dep.as_str())) {
+                if packages.iter().any(|p| p.name == *dep) {
                     points.push(IntegrationPoint {
                         source_package: pkg.name.clone(),
                         target_package: Some(format!("crates/{dep}")),
@@ -633,7 +634,7 @@ fn assess_risks(
 
     // Check for missing test utilities
     let has_testkit = packages.iter().any(|p| {
-        p.name.contains("test") || p.name.contains("testkit") || p.name.contains("test")
+        p.name.contains("test") || p.name.contains("testkit")
     });
     if !has_testkit && packages.len() > 3 {
         risks.push(AnalysisRisk {

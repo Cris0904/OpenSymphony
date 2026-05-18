@@ -3,9 +3,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Recognized terminal state names for issue classification.
-const ISSUE_TERMINAL_STATES: &[&str] = &["done", "completed", "canceled", "cancelled"];
-
 /// Analysis of the Linear task graph for a project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinearGraphAnalysis {
@@ -145,9 +142,8 @@ impl LinearGraphAnalyzer {
                     });
                 ms.issue_count += 1;
 
-                let issue_is_terminal = ISSUE_TERMINAL_STATES
-                    .iter()
-                    .any(|s| issue.state.eq_ignore_ascii_case(s));
+                let issue_is_terminal =
+                    TrackerIssueStateKind::from_tracker_type(&issue.state).is_terminal();
                 if issue_is_terminal {
                     ms.completed_issue_count += 1;
                 } else {
@@ -164,9 +160,8 @@ impl LinearGraphAnalyzer {
             }
 
             // Terminal vs active classification
-            let is_terminal = ISSUE_TERMINAL_STATES
-                .iter()
-                .any(|s| issue.state.eq_ignore_ascii_case(s));
+            let is_terminal =
+                TrackerIssueStateKind::from_tracker_type(&issue.state).is_terminal();
             if is_terminal {
                 terminal.push(snapshot.clone());
             } else {
@@ -351,7 +346,7 @@ mod tests {
             make_issue("1", "COE-1", "Issue 1", "Todo", Some(1)),
             make_issue("2", "COE-2", "Issue 2", "In Progress", Some(2)),
             make_issue("3", "COE-3", "Issue 3", "In Progress", None),
-            make_issue("4", "COE-4", "Issue 4", "Done", Some(1)),
+            make_issue("4", "COE-4", "Issue 4", "Completed", Some(1)),
         ];
 
         let analyzer = LinearGraphAnalyzer::new("TestProject", "proj-1");
@@ -360,7 +355,7 @@ mod tests {
         assert_eq!(analysis.total_issues, 4);
         assert_eq!(*analysis.issues_by_state.get("Todo").unwrap(), 1);
         assert_eq!(*analysis.issues_by_state.get("In Progress").unwrap(), 2);
-        assert_eq!(*analysis.issues_by_state.get("Done").unwrap(), 1);
+        assert_eq!(*analysis.issues_by_state.get("Completed").unwrap(), 1);
     }
 
     #[test]
@@ -388,7 +383,7 @@ mod tests {
     fn analyze_tracks_milestones() {
         let mut issues = vec![
             make_issue("1", "COE-1", "Issue 1", "Todo", Some(1)),
-            make_issue("2", "COE-2", "Issue 2", "Done", Some(2)),
+            make_issue("2", "COE-2", "Issue 2", "Completed", Some(2)),
         ];
         issues[0].project_milestone = Some(TrackerProjectMilestone {
             id: "ms-1".to_string(),
@@ -421,7 +416,7 @@ mod tests {
     fn analyze_tracks_parent_child_relationships() {
         let mut issues = vec![
             make_issue("1", "COE-1", "Parent", "Todo", Some(1)),
-            make_issue("2", "COE-2", "Child 1", "Done", Some(2)),
+            make_issue("2", "COE-2", "Child 1", "Completed", Some(2)),
             make_issue("3", "COE-3", "Child 2", "In Progress", None),
         ];
 
@@ -488,7 +483,7 @@ mod tests {
     fn analyze_classifies_terminal_vs_active_issues() {
         let issues = vec![
             make_issue("1", "COE-1", "Active", "In Progress", Some(1)),
-            make_issue("2", "COE-2", "Done", "Done", Some(2)),
+            make_issue("2", "COE-2", "Done", "Completed", Some(2)),
             make_issue("3", "COE-3", "Canceled", "Canceled", None),
         ];
 

@@ -34,8 +34,6 @@ pub enum ConfidenceLevel {
 /// Error type for research operations.
 #[derive(Debug, thiserror::Error)]
 pub enum ResearchError {
-    #[error("invalid URL: {0}")]
-    InvalidUrl(#[from] url::ParseError),
     #[error("missing required field: {0}")]
     MissingField(String),
 }
@@ -255,7 +253,6 @@ mod tests {
             ResearchError::MissingField(field) => {
                 assert_eq!(field, "topic");
             }
-            other => panic!("expected MissingField, got {other:?}"),
         }
     }
 
