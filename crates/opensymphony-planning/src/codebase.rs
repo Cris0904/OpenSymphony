@@ -260,6 +260,24 @@ impl RepoWalker {
     }
 }
 
+/// Derive a package name from a file path by looking for the crate name under
+/// `crates/<name>/` or falling back to the best-matching package by path prefix.
+fn derive_package_name(path: &Path, packages: &[PackageInfo]) -> String {
+    let path_str = path.display().to_string();
+    path.components()
+        .skip_while(|c| c.as_os_str() != "crates")
+        .nth(1)
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .or_else(|| {
+            packages
+                .iter()
+                .filter(|p| path_str.starts_with(&p.relative_path))
+                .max_by_key(|p| p.relative_path.len())
+                .map(|p| p.name.clone())
+        })
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 fn detect_languages(inventory: &BTreeMap<PathBuf, usize>) -> Vec<LanguageSignature> {
     let mut lang_map: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
 
@@ -325,7 +343,13 @@ fn detect_packages(
 
             let name = entry.file_name().to_string_lossy().to_string();
             // Parse Cargo.toml once and reuse for both dependency extraction and binary detection
-            let parsed_toml = parse_cargo_toml(&cargo_toml).ok();
+            let parsed_toml = match parse_cargo_toml(&cargo_toml) {
+                Ok(table) => Some(table),
+                Err(e) => {
+                    eprintln!("Warning: failed to parse {}: {}", cargo_toml.display(), e);
+                    None
+                }
+            };
             let deps = parsed_toml
                 .as_ref()
                 .map(extract_deps_from_table)
@@ -373,7 +397,13 @@ fn detect_packages(
             }
 
             let name = entry.file_name().to_string_lossy().to_string();
-            let deps = extract_npm_deps(&pkg_json).ok().unwrap_or_default();
+            let deps = match extract_npm_deps(&pkg_json) {
+                Ok(deps) => deps,
+                Err(e) => {
+                    eprintln!("Warning: failed to parse {}: {}", pkg_json.display(), e);
+                    Vec::new()
+                }
+            };
             packages.push(PackageInfo {
                 name,
                 relative_path: format!("{}/{}", pkg_dir, entry.file_name().to_string_lossy()),
@@ -579,24 +609,9 @@ fn detect_integration_points(
             && path.extension().map(|e| e == "rs").unwrap_or(false)
             && path.parent().is_some()
         {
-            // Derive package name: walk components to find the crate name under crates/<name>/,
-            // or fall back to the closest matching package from the packages list.
-            let pkg_name = path
-                .components()
-                .skip_while(|c| c.as_os_str() != "crates")
-                .nth(1)
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .or_else(|| {
-                    // If not under crates/, find the best-matching package by path prefix
-                    packages
-                        .iter()
-                        .filter(|p| path_str.starts_with(&p.relative_path))
-                        .max_by_key(|p| p.relative_path.len())
-                        .map(|p| p.name.clone())
-                })
-                .unwrap_or_else(|| path.display().to_string());
+            let pkg_name = derive_package_name(path, packages);
             points.push(IntegrationPoint {
-                source_package: pkg_name.clone(),
+                source_package: pkg_name,
                 target_package: None,
                 integration_type: IntegrationType::ApiClient,
                 detail: format!("Client/transport in: {}", path.display()),
@@ -608,19 +623,7 @@ fn detect_integration_points(
             || path_str.contains("db_"))
             && path.extension().map(|e| e == "rs").unwrap_or(false)
         {
-            let db_pkg_name = path
-                .components()
-                .skip_while(|c| c.as_os_str() != "crates")
-                .nth(1)
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .or_else(|| {
-                    packages
-                        .iter()
-                        .filter(|p| path_str.starts_with(&p.relative_path))
-                        .max_by_key(|p| p.relative_path.len())
-                        .map(|p| p.name.clone())
-                })
-                .unwrap_or_else(|| path.display().to_string());
+            let db_pkg_name = derive_package_name(path, packages);
             points.push(IntegrationPoint {
                 source_package: db_pkg_name,
                 target_package: None,
