@@ -85,6 +85,7 @@ fn fixture_envelope(step: u64) -> SnapshotEnvelope {
 
 /// Second fixture variant: one Idle issue, one Completed issue with events
 /// and modified files, and one Failed issue (first attempt, no retries).
+#[allow(dead_code)]
 fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
     let now = Utc::now();
     DaemonSnapshot {
