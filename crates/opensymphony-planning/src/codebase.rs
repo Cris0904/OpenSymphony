@@ -575,12 +575,21 @@ fn detect_integration_points(
             && path.extension().map(|e| e == "rs").unwrap_or(false)
             && path.parent().is_some()
         {
-            // Derive package name from the first component under crates/ or the path itself
+            // Derive package name: walk components to find the crate name under crates/<name>/,
+            // or fall back to the closest matching package from the packages list.
             let pkg_name = path
                 .components()
-                .filter(|c| c.as_os_str().to_string_lossy().starts_with("crates"))
+                .skip_while(|c| c.as_os_str() != "crates")
                 .nth(1)
                 .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .or_else(|| {
+                    // If not under crates/, find the best-matching package by path prefix
+                    packages
+                        .iter()
+                        .filter(|p| path_str.starts_with(&p.relative_path))
+                        .max_by_key(|p| p.relative_path.len())
+                        .map(|p| p.name.clone())
+                })
                 .unwrap_or_else(|| path.display().to_string());
             points.push(IntegrationPoint {
                 source_package: pkg_name.clone(),
