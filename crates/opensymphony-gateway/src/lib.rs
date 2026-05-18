@@ -369,7 +369,12 @@ async fn latest_from_store(
 /// outside the assets directory.
 fn resolve_safe_path(assets_dir: &str, rest: &str) -> Option<std::path::PathBuf> {
     // Reject absolute paths early to avoid Path::new().join() discarding the base.
-    if rest.starts_with('/') {
+    // Forward-slash (/) covers Unix-style paths; backslash (\\) covers UNC shares;
+    // drive-letter prefixes (e.g. "C:") cover Windows absolute paths.
+    if rest.starts_with('/')
+        || rest.starts_with('\\')
+        || (rest.len() >= 2 && rest.as_bytes()[1] == b':')
+    {
         return None;
     }
 
