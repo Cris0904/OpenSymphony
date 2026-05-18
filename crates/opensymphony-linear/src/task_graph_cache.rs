@@ -52,6 +52,7 @@ pub struct CachedIssueRef {
 /// Runtime overlay data for a cached entity.
 #[derive(Debug, Clone)]
 pub struct RuntimeOverlay {
+    pub issue_id: String,
     pub eligible: bool,
     pub queued: bool,
     pub active_run_id: Option<String>,
@@ -138,18 +139,12 @@ impl TaskGraphCache {
 
     /// Update the runtime overlay for a single issue.
     pub fn upsert_overlay(&mut self, overlay: RuntimeOverlay) {
-        self.overlays.insert(
-            overlay
-                .active_run_id
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            overlay,
-        );
+        self.overlays.insert(overlay.issue_id.clone(), overlay);
     }
 
     /// Clear overlays for resolved issues.
     pub fn clear_overlay(&mut self, issue_id: &str) {
-        self.overlays.retain(|k, _| k != issue_id);
+        self.overlays.remove(issue_id);
     }
 
     /// Get an entity by Linear ID or issue identifier.
@@ -299,9 +294,10 @@ mod tests {
     fn cache_upsert_overlay_by_run_id() {
         let mut cache = TaskGraphCache::new("default", Duration::from_secs(300));
         let overlay = RuntimeOverlay {
+            issue_id: "lin-1".to_string(),
             eligible: true,
             queued: false,
-            active_run_id: Some("COE-1".to_string()),
+            active_run_id: Some("run-1".to_string()),
             last_outcome: None,
             retry_count: 0,
             workspace_id: None,
@@ -314,7 +310,7 @@ mod tests {
         cache.upsert_overlay(overlay);
 
         assert_eq!(cache.overlay_count(), 1);
-        let result = cache.get_overlay("COE-1").expect("overlay should exist");
+        let result = cache.get_overlay("lin-1").expect("overlay should exist");
         assert!(result.eligible);
     }
 
@@ -322,9 +318,10 @@ mod tests {
     fn cache_clear_overlay_removes_entry() {
         let mut cache = TaskGraphCache::new("default", Duration::from_secs(300));
         cache.upsert_overlay(RuntimeOverlay {
+            issue_id: "lin-1".to_string(),
             eligible: true,
             queued: false,
-            active_run_id: Some("COE-1".to_string()),
+            active_run_id: Some("run-1".to_string()),
             last_outcome: None,
             retry_count: 0,
             workspace_id: None,
@@ -334,7 +331,7 @@ mod tests {
             blocker_summary: None,
             synced_at: Utc::now(),
         });
-        cache.clear_overlay("COE-1");
+        cache.clear_overlay("lin-1");
         assert_eq!(cache.overlay_count(), 0);
     }
 

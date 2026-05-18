@@ -250,7 +250,7 @@ impl LinearClient {
                         field_name: req.field_name.to_string(),
                         critical: req.critical,
                         remediation: format!(
-                            "Field `{}` on type `{}` missing in remote Linear schema. \n\n\ne\n\ne\nCheck Linear API changelog, update graphql.rs / normalize.rs, or remove from required_fields().",
+                            "Field `{}` on type `{}` missing in remote Linear schema. Check Linear API changelog, update graphql.rs / normalize.rs, or remove from required_fields().",
                             req.field_name, req.type_name
                         ),
                     });
