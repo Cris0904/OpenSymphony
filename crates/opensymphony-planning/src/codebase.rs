@@ -144,8 +144,7 @@ impl CodebaseAnalyzer {
         let packages = detect_packages(&self.root, &file_inventory)?;
         let build_systems = detect_build_systems(&self.root);
         let ownership_files = detect_ownership_signals(&self.root, &file_inventory);
-        let integration_points =
-            detect_integration_points(&self.root, &packages, &file_inventory)?;
+        let integration_points = detect_integration_points(&self.root, &packages, &file_inventory)?;
         let conventions = detect_conventions(&self.root, &file_inventory);
         let risks = assess_risks(&self.root, &packages, &integration_points);
 
@@ -187,7 +186,15 @@ struct RepoWalker {
 impl RepoWalker {
     fn new(root: &Path) -> Self {
         let mut exclude_dirs = HashSet::new();
-        for dir in ["node_modules", ".git", "target", ".venv", "__pycache__", "dist", "build"] {
+        for dir in [
+            "node_modules",
+            ".git",
+            "target",
+            ".venv",
+            "__pycache__",
+            "dist",
+            "build",
+        ] {
             exclude_dirs.insert(dir.to_string());
         }
         Self {
@@ -196,9 +203,7 @@ impl RepoWalker {
         }
     }
 
-    fn walk(
-        &self,
-    ) -> Result<BTreeMap<PathBuf, usize>, CodebaseAnalysisError> {
+    fn walk(&self) -> Result<BTreeMap<PathBuf, usize>, CodebaseAnalysisError> {
         let mut inventory = BTreeMap::new();
         self.walk_dir(&self.root, &mut inventory)?;
         Ok(inventory)
@@ -222,23 +227,28 @@ impl RepoWalker {
             let path = entry.path();
 
             // Use entry.file_type() to avoid following symlinks, preventing infinite loops.
-            if entry.file_type().ok().map(|ft| ft.is_dir() && !ft.is_symlink()).unwrap_or(false) {
+            if entry
+                .file_type()
+                .ok()
+                .map(|ft| ft.is_dir() && !ft.is_symlink())
+                .unwrap_or(false)
+            {
                 if let Some(component) = path.file_name().and_then(|n| n.to_str()) {
                     if self.exclude_dirs.contains(component) {
                         continue;
                     }
                 }
-                if path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false)
+                if path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('.'))
+                    .unwrap_or(false)
                     && path.file_name().map(|n| n != ".github").unwrap_or(true)
                 {
                     continue;
                 }
                 self.walk_dir(&path, inventory)?;
             } else {
-                let relative = path
-                    .strip_prefix(&self.root)
-                    .unwrap_or(&path)
-                    .to_path_buf();
+                let relative = path.strip_prefix(&self.root).unwrap_or(&path).to_path_buf();
                 let size = entry.metadata().ok().map(|m| m.len() as usize).unwrap_or(0);
                 inventory.insert(relative, size);
             }
@@ -310,10 +320,7 @@ fn detect_packages(
                 continue;
             }
 
-            let name = entry
-                .file_name()
-                .to_string_lossy()
-                .to_string();
+            let name = entry.file_name().to_string_lossy().to_string();
             let deps = extract_cargo_deps(&cargo_toml).ok().unwrap_or_default();
             let kind = if entry.path().join("src").join("main.rs").exists() {
                 PackageKind::Binary
@@ -441,7 +448,11 @@ fn detect_ownership_signals(
             OwnershipSignalType::CargoWorkspace,
             "Rust workspace definition",
         ),
-        ("README.md", OwnershipSignalType::Readme, "Project documentation"),
+        (
+            "README.md",
+            OwnershipSignalType::Readme,
+            "Project documentation",
+        ),
         ("LICENSE", OwnershipSignalType::License, "License file"),
         (
             ".gitignore",
@@ -523,7 +534,8 @@ fn detect_integration_points(
             }
         }
         // Detect database access
-        if path_str.contains("duckdb") || path_str.contains("database") || path_str.contains("db_") {
+        if path_str.contains("duckdb") || path_str.contains("database") || path_str.contains("db_")
+        {
             if path.extension().map(|e| e == "rs").unwrap_or(false) {
                 points.push(IntegrationPoint {
                     source_package: "database".to_string(),
@@ -538,17 +550,16 @@ fn detect_integration_points(
     Ok(points)
 }
 
-fn detect_conventions(
-    root: &Path,
-    inventory: &BTreeMap<PathBuf, usize>,
-) -> Vec<Convention> {
+fn detect_conventions(root: &Path, inventory: &BTreeMap<PathBuf, usize>) -> Vec<Convention> {
     let mut conventions = Vec::new();
 
     // Rust workspace convention
     if root.join("Cargo.toml").exists() {
         conventions.push(Convention {
             area: "build".to_string(),
-            description: "Rust workspace with shared dependency versions via [workspace.dependencies]".to_string(),
+            description:
+                "Rust workspace with shared dependency versions via [workspace.dependencies]"
+                    .to_string(),
             evidence_path: "Cargo.toml".to_string(),
         });
     }
@@ -573,13 +584,11 @@ fn detect_conventions(
 
     // Test organization
     for (path, _) in inventory {
-        let is_test_file = path.parent()
+        let is_test_file = path
+            .parent()
             .and_then(|p| p.file_name())
             .map_or(false, |n| n == "tests");
-        if path.starts_with("crates/")
-            && path.components().count() >= 3
-            && is_test_file
-        {
+        if path.starts_with("crates/") && path.components().count() >= 3 && is_test_file {
             let crate_name = path
                 .components()
                 .nth(1)
@@ -633,9 +642,9 @@ fn assess_risks(
     }
 
     // Check for missing test utilities
-    let has_testkit = packages.iter().any(|p| {
-        p.name.contains("test") || p.name.contains("testkit")
-    });
+    let has_testkit = packages
+        .iter()
+        .any(|p| p.name.contains("test") || p.name.contains("testkit"));
     if !has_testkit && packages.len() > 3 {
         risks.push(AnalysisRisk {
             category: RiskCategory::Testing,
@@ -646,13 +655,19 @@ fn assess_risks(
     }
 
     // Mixed language risk
-    let has_rust = packages.iter().any(|p| p.relative_path.starts_with("crates/"));
-    let has_ts = packages.iter().any(|p| p.relative_path.starts_with("packages/") || p.relative_path.starts_with("apps/"));
+    let has_rust = packages
+        .iter()
+        .any(|p| p.relative_path.starts_with("crates/"));
+    let has_ts = packages
+        .iter()
+        .any(|p| p.relative_path.starts_with("packages/") || p.relative_path.starts_with("apps/"));
     if has_rust && has_ts {
         risks.push(AnalysisRisk {
             category: RiskCategory::Maintenance,
             severity: RiskSeverity::Medium,
-            description: "Mixed Rust/TypeScript monorepo requires coordinated build and CI strategies".to_string(),
+            description:
+                "Mixed Rust/TypeScript monorepo requires coordinated build and CI strategies"
+                    .to_string(),
             affected_path: "root".to_string(),
         });
     }
@@ -703,7 +718,11 @@ tokio = { workspace = true }
         .unwrap();
 
         // Create crates
-        for crate_name in ["opensymphony-core", "opensymphony-linear", "opensymphony-testkit"] {
+        for crate_name in [
+            "opensymphony-core",
+            "opensymphony-linear",
+            "opensymphony-testkit",
+        ] {
             let crate_dir = root.join("crates").join(crate_name);
             fs::create_dir_all(crate_dir.join("src")).unwrap();
 
@@ -770,17 +789,11 @@ serde = {{ workspace = true }}"#
         let analysis = analyzer.analyze().expect("analysis should succeed");
 
         assert!(analysis.total_rust_files > 0, "should detect Rust files");
-        assert!(
-            analysis.total_files > 0,
-            "should count files in repository"
-        );
+        assert!(analysis.total_files > 0, "should count files in repository");
 
         // Verify Rust language detected
         assert!(
-            analysis
-                .languages
-                .iter()
-                .any(|l| l.language == "rust"),
+            analysis.languages.iter().any(|l| l.language == "rust"),
             "should detect rust language"
         );
 
@@ -869,24 +882,15 @@ serde = {{ workspace = true }}"#
         let analysis = analyzer.analyze().expect("analysis should succeed");
 
         assert!(
-            analysis
-                .conventions
-                .iter()
-                .any(|c| c.area == "build"),
+            analysis.conventions.iter().any(|c| c.area == "build"),
             "should detect build convention"
         );
         assert!(
-            analysis
-                .conventions
-                .iter()
-                .any(|c| c.area == "linting"),
+            analysis.conventions.iter().any(|c| c.area == "linting"),
             "should detect linting convention"
         );
         assert!(
-            analysis
-                .conventions
-                .iter()
-                .any(|c| c.area == "formatting"),
+            analysis.conventions.iter().any(|c| c.area == "formatting"),
             "should detect formatting convention"
         );
     }
@@ -914,11 +918,7 @@ serde = {{ workspace = true }}"#
         // Add a TypeScript package
         let pkg_dir = root.join("packages").join("ui-core");
         fs::create_dir_all(&pkg_dir).unwrap();
-        fs::write(
-            pkg_dir.join("package.json"),
-            r#"{ "name": "ui-core" }"#,
-        )
-        .unwrap();
+        fs::write(pkg_dir.join("package.json"), r#"{ "name": "ui-core" }"#).unwrap();
 
         let analyzer = CodebaseAnalyzer::new(&root);
         let analysis = analyzer.analyze().expect("analysis should succeed");

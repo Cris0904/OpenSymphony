@@ -14,15 +14,14 @@ pub mod linear_graph;
 pub mod research;
 
 pub use codebase::{
-    AnalysisRisk, CodebaseAnalysis, CodebaseAnalysisError, CodebaseAnalyzer,
-    Convention, IntegrationPoint, LanguageSignature, PackageInfo, PackageKind,
-    OwnershipSignal,
+    AnalysisRisk, CodebaseAnalysis, CodebaseAnalysisError, CodebaseAnalyzer, Convention,
+    IntegrationPoint, LanguageSignature, OwnershipSignal, PackageInfo, PackageKind,
 };
 pub use linear_graph::{
     BlockerChain, BlockerSnapshot, ChildRef, IssueSnapshot, LinearGraphAnalysis,
     LinearGraphAnalyzer, MilestoneSummary, ParentChildRelationship,
 };
 pub use research::{
-    ConfidenceLevel, ResearchArtifactStore, ResearchBrief, ResearchBriefBuilder,
-    ResearchError, ResearchFinding,
+    ConfidenceLevel, ResearchArtifactStore, ResearchBrief, ResearchBriefBuilder, ResearchError,
+    ResearchFinding,
 };

@@ -160,8 +160,7 @@ impl LinearGraphAnalyzer {
             }
 
             // Terminal vs active classification
-            let is_terminal =
-                TrackerIssueStateKind::from_tracker_type(&issue.state).is_terminal();
+            let is_terminal = TrackerIssueStateKind::from_tracker_type(&issue.state).is_terminal();
             if is_terminal {
                 terminal.push(snapshot.clone());
             } else {
@@ -170,13 +169,13 @@ impl LinearGraphAnalyzer {
 
             // Parent-child tracking
             if let Some(ref parent) = issue.parent {
-                let parent_rel = parent_map
-                    .entry(parent.id.clone())
-                    .or_insert_with(|| ParentChildRelationship {
+                let parent_rel = parent_map.entry(parent.id.clone()).or_insert_with(|| {
+                    ParentChildRelationship {
                         parent_id: parent.id.clone(),
                         parent_identifier: parent.identifier.clone(),
                         children: Vec::new(),
-                    });
+                    }
+                });
                 parent_rel.children.push(ChildRef {
                     id: issue.id.clone(),
                     identifier: issue.identifier.clone(),
@@ -238,12 +237,11 @@ impl LinearGraphAnalyzer {
     ) -> String {
         let mut summary = Vec::new();
 
-        let total_active_blockers = blocker_chains
-            .iter()
-            .filter(|bc| !bc.is_resolved)
-            .count();
+        let total_active_blockers = blocker_chains.iter().filter(|bc| !bc.is_resolved).count();
         if total_active_blockers > 0 {
-            summary.push(format!("{total_active_blockers} issue(s) have unresolved blockers",));
+            summary.push(format!(
+                "{total_active_blockers} issue(s) have unresolved blockers",
+            ));
         }
 
         let total_completed = issues_by_state
@@ -276,11 +274,11 @@ impl LinearGraphAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use crate::opensymphony_domain::{
         TrackerIssue, TrackerIssueBlocker, TrackerIssueRef, TrackerIssueState,
         TrackerProjectMilestone,
     };
+    use chrono::Utc;
 
     fn make_issue(
         id: &str,
@@ -325,12 +323,7 @@ mod tests {
             state: TrackerIssueState {
                 id: format!("state-{id}"),
                 name: state_name.to_string(),
-                tracker_type: if is_terminal {
-                    "completed"
-                } else {
-                    "started"
-                }
-                .to_string(),
+                tracker_type: if is_terminal { "completed" } else { "started" }.to_string(),
                 kind: if is_terminal {
                     TrackerIssueStateKind::Completed
                 } else {
@@ -360,8 +353,7 @@ mod tests {
 
     #[test]
     fn analyze_tracks_blocker_chains() {
-        let mut issues =
-            vec![make_issue("1", "COE-1", "Blocked Issue", "Todo", Some(1))];
+        let mut issues = vec![make_issue("1", "COE-1", "Blocked Issue", "Todo", Some(1))];
         issues[0].blocked_by = vec![
             make_blocker("b1", "COE-0", "Active Blocker", "In Progress", false),
             make_blocker("b2", "COE-01", "Completed Blocker", "Done", true),
@@ -373,10 +365,12 @@ mod tests {
         assert_eq!(analysis.blocker_chains.len(), 1);
         assert!(!analysis.blocker_chains[0].is_resolved);
         assert_eq!(analysis.blocker_chains[0].blockers.len(), 2);
-        assert!(analysis
-            .blocked_issues
-            .iter()
-            .any(|i| i.identifier == "COE-1"));
+        assert!(
+            analysis
+                .blocked_issues
+                .iter()
+                .any(|i| i.identifier == "COE-1")
+        );
     }
 
     #[test]
@@ -441,10 +435,7 @@ mod tests {
         let analysis = analyzer.analyze(&issues);
 
         assert_eq!(analysis.parent_child_relationships.len(), 1);
-        assert_eq!(
-            analysis.parent_child_relationships[0].children.len(),
-            2
-        );
+        assert_eq!(analysis.parent_child_relationships[0].children.len(), 2);
     }
 
     #[test]

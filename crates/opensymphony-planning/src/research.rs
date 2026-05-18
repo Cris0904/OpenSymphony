@@ -113,7 +113,9 @@ impl ResearchBrief {
     pub fn findings_above(&self, min_confidence: ConfidenceLevel) -> Vec<&ResearchFinding> {
         self.findings
             .iter()
-            .filter(|f| Self::confidence_rank(f.confidence) >= Self::confidence_rank(min_confidence))
+            .filter(|f| {
+                Self::confidence_rank(f.confidence) >= Self::confidence_rank(min_confidence)
+            })
             .collect()
     }
 
@@ -125,7 +127,10 @@ impl ResearchBrief {
             md.push_str(&format!("**Context:** {}\n\n", self.research_context));
         }
 
-        md.push_str(&format!("**Generated:** {}\n\n", self.generated_at.format("%Y-%m-%d %H:%M:%SZ")));
+        md.push_str(&format!(
+            "**Generated:** {}\n\n",
+            self.generated_at.format("%Y-%m-%d %H:%M:%SZ")
+        ));
         md.push_str("## Findings\n\n");
 
         for (i, finding) in self.findings.iter().enumerate() {
@@ -137,10 +142,7 @@ impl ResearchBrief {
             ));
 
             if let Some(ref url) = finding.source_url {
-                let title = finding
-                    .source_title
-                    .as_deref()
-                    .unwrap_or(url.as_str());
+                let title = finding.source_title.as_deref().unwrap_or(url.as_str());
                 md.push_str(&format!("- **Source:** [{}]({})\n", title, url));
             }
 
@@ -246,8 +248,7 @@ mod tests {
 
     #[test]
     fn builder_rejects_empty_topic() {
-        let result = ResearchBriefBuilder::new("")
-            .build();
+        let result = ResearchBriefBuilder::new("").build();
         assert!(result.is_err());
         match result.unwrap_err() {
             ResearchError::MissingField(field) => {
@@ -345,15 +346,18 @@ mod tests {
     #[test]
     fn brief_serializes_to_json() {
         let brief = ResearchBriefBuilder::new("Serialization Test")
-            .add_finding("Serde test", Some("https://serde.rs"), ConfidenceLevel::High)
+            .add_finding(
+                "Serde test",
+                Some("https://serde.rs"),
+                ConfidenceLevel::High,
+            )
             .build()
             .unwrap();
 
         let json = serde_json::to_string(&brief).expect("should serialize");
         assert!(json.contains("Serialization Test"));
 
-        let deserialized: ResearchBrief =
-            serde_json::from_str(&json).expect("should deserialize");
+        let deserialized: ResearchBrief = serde_json::from_str(&json).expect("should deserialize");
         assert_eq!(deserialized.topic, brief.topic);
         assert_eq!(deserialized.findings.len(), brief.findings.len());
     }
