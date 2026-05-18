@@ -229,6 +229,29 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 output_tokens: 64,
                 cache_read_tokens: 0,
             },
+            // Blocked Idle issue: NOT eligible AND NOT queued
+            IssueSnapshot {
+                identifier: "COE-304".to_owned(),
+                title: "Blocked idle task".to_owned(),
+                tracker_state: "Todo".to_owned(),
+                runtime_state: IssueRuntimeState::Idle,
+                last_outcome: WorkerOutcome::Unknown,
+                last_event_at: now,
+                conversation_id_suffix: String::new(),
+                workspace_path_suffix: String::new(),
+                retry_count: 0,
+                blocked: true,
+                server_base_url: None,
+                transport_target: None,
+                http_auth_mode: None,
+                websocket_auth_mode: None,
+                websocket_query_param_name: None,
+                recent_events: Vec::new(),
+                modified_files: Vec::new(),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+            },
         ],
         recent_events: vec![RecentEvent {
             happened_at: now,
@@ -1345,6 +1368,25 @@ async fn gateway_task_graph_queued_vs_eligible() {
         "Failed issue must not be eligible"
     );
     assert!(!failed_overlay.queued, "Failed issue must not be queued");
+
+    // Blocked Idle → NOT eligible AND NOT queued (blocked overrides Idle)
+    let blocked_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-304")
+        .expect("COE-304 node should exist");
+    let blocked_overlay = blocked_node
+        .runtime_overlay
+        .as_ref()
+        .expect("overlay present");
+    assert!(
+        !blocked_overlay.eligible,
+        "Blocked Idle issue must not be eligible"
+    );
+    assert!(
+        !blocked_overlay.queued,
+        "Blocked Idle issue must not be queued (blocked overrides)"
+    );
 
     server_task.abort();
 }

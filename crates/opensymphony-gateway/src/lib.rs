@@ -407,9 +407,10 @@ pub fn sanitize_file_path(workspace_root: &str, raw_path: &str) -> String {
         .strip_prefix(&root)
         .map(|rel: &StdPath| rel.to_string_lossy().to_string())
         .unwrap_or_else(|_| {
-            // Out-of-workspace path: return just the basename (safe last
-            // component) or empty string if none exists.
-            StdPath::new(raw_path)
+            // Out-of-workspace path: use the NORMALIZED path to extract the
+            // basename, so that crafted paths like `/tmp/opensymphony/..` do
+            // not leak traversal components (`..`) into the public API.
+            normalized
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_default()
@@ -656,13 +657,15 @@ fn build_runtime_overlay(issue: &ControlPlaneIssueSnapshot) -> TaskGraphRuntimeO
     let is_eligible =
         !issue.blocked && matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle);
     // Queued means the issue is actively waiting to be picked up by a worker.
-    // This covers both idle+unblocked issues and issues that have been
-    // explicitly placed on the retry queue.
-    let is_queued = is_eligible
-        || matches!(
-            issue.runtime_state,
-            ControlPlaneIssueRuntimeState::RetryQueued
-        );
+    // Blocked issues must never appear queued, regardless of state:
+    // a blocked Idle issue is not schedulable, and a blocked RetryQueued
+    // issue is waiting on its blocker to clear before retry.
+    let is_queued = !issue.blocked
+        && (matches!(issue.runtime_state, ControlPlaneIssueRuntimeState::Idle)
+            || matches!(
+                issue.runtime_state,
+                ControlPlaneIssueRuntimeState::RetryQueued
+            ));
 
     TaskGraphRuntimeOverlay {
         eligible: is_eligible,
