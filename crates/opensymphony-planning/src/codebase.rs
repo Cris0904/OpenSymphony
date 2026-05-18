@@ -325,7 +325,10 @@ fn detect_packages(
 
             let name = entry.file_name().to_string_lossy().to_string();
             let deps = extract_cargo_deps(&cargo_toml).ok().unwrap_or_default();
-            let kind = if entry.path().join("src").join("main.rs").exists() {
+            let kind = if has_cargo_binary(&cargo_toml)
+                || entry.path().join("src").join("main.rs").exists()
+                || entry.path().join("src").join("bin").is_dir()
+            {
                 PackageKind::Binary
             } else if name.contains("test") || name.contains("testkit") {
                 PackageKind::TestUtilities
@@ -365,6 +368,7 @@ fn detect_packages(
             }
 
             let name = entry.file_name().to_string_lossy().to_string();
+            let deps = extract_npm_deps(&pkg_json).ok().unwrap_or_default();
             packages.push(PackageInfo {
                 name,
                 relative_path: format!("{}/{}", pkg_dir, entry.file_name().to_string_lossy()),
@@ -373,7 +377,7 @@ fn detect_packages(
                 } else {
                     PackageKind::Frontend
                 },
-                dependencies: Vec::new(),
+                dependencies: deps,
             });
         }
     }
@@ -387,28 +391,92 @@ fn extract_cargo_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError>
         source: e,
     })?;
 
-    let mut deps = Vec::new();
-    let mut in_deps = false;
+    let parsed: toml::Table = content.parse().map_err(|e| CodebaseAnalysisError::Toml {
+        path: path.display().to_string(),
+        source: e,
+    })?;
 
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed == "[dependencies]" || trimmed.starts_with("[dependencies ") {
-            in_deps = true;
-            continue;
+    let mut deps = Vec::new();
+
+    // Extract from [dependencies]
+    if let Some(deps_table) = parsed.get("dependencies").and_then(|v| v.as_table()) {
+        for key in deps_table.keys() {
+            deps.push(key.clone());
         }
-        if trimmed.starts_with('[') && !trimmed.starts_with("[dependencies") {
-            in_deps = false;
-            continue;
-        }
-        if in_deps && trimmed.contains('=') {
-            let dep_name = trimmed.split('=').next().unwrap_or("").trim();
-            if !dep_name.is_empty() && !dep_name.starts_with('#') {
-                deps.push(dep_name.to_string());
+    }
+
+    // Extract from [dev-dependencies]
+    if let Some(dev_deps) = parsed.get("dev-dependencies").and_then(|v| v.as_table()) {
+        for key in dev_deps.keys() {
+            if !deps.contains(key) {
+                deps.push(key.clone());
             }
         }
     }
 
+    // Extract from [build-dependencies]
+    if let Some(build_deps) = parsed.get("build-dependencies").and_then(|v| v.as_table()) {
+        for key in build_deps.keys() {
+            if !deps.contains(key) {
+                deps.push(key.clone());
+            }
+        }
+    }
+
+    deps.sort();
     Ok(deps)
+}
+
+fn has_cargo_binary(path: &Path) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(parsed) = content.parse::<toml::Table>() else {
+        return false;
+    };
+    // Check for [[bin]] section (array of tables)
+    match parsed.get("bin") {
+        Some(toml::Value::Array(arr)) => !arr.is_empty(),
+        _ => false,
+    }
+}
+
+/// Extract dependencies from a package.json file using basic JSON parsing.
+/// Returns a sorted deduplicated list of dependency names from all dependency categories.
+fn extract_npm_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError> {
+    let content = fs::read_to_string(path).map_err(|e| CodebaseAnalysisError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+
+    #[derive(serde::Deserialize)]
+    struct NpmPackage {
+        #[serde(default)]
+        dependencies: BTreeMap<String, serde_json::Value>,
+        #[serde(default, rename = "devDependencies")]
+        dev_dependencies: BTreeMap<String, serde_json::Value>,
+        #[serde(default, rename = "peerDependencies")]
+        peer_dependencies: BTreeMap<String, serde_json::Value>,
+    }
+
+    let pkg: NpmPackage =
+        serde_json::from_str(&content).map_err(|e| CodebaseAnalysisError::Io {
+            path: path.display().to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+        })?;
+
+    let mut deps: BTreeMap<String, ()> = BTreeMap::new();
+    for (name, _) in pkg.dependencies {
+        deps.insert(name, ());
+    }
+    for (name, _) in pkg.dev_dependencies {
+        deps.entry(name).or_insert(());
+    }
+    for (name, _) in pkg.peer_dependencies {
+        deps.entry(name).or_insert(());
+    }
+
+    Ok(deps.into_keys().collect())
 }
 
 fn detect_build_systems(root: &Path) -> Vec<String> {
@@ -507,11 +575,13 @@ fn detect_integration_points(
             && path.extension().map(|e| e == "rs").unwrap_or(false)
             && path.parent().is_some()
         {
+            // Derive package name from the first component under crates/ or the path itself
             let pkg_name = path
-                .parent()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+                .components()
+                .filter(|c| c.as_os_str().to_string_lossy().starts_with("crates"))
+                .nth(1)
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .unwrap_or_else(|| path.display().to_string());
             points.push(IntegrationPoint {
                 source_package: pkg_name.clone(),
                 target_package: None,
@@ -679,6 +749,12 @@ pub enum CodebaseAnalysisError {
         path: String,
         #[source]
         source: std::io::Error,
+    },
+    #[error("TOML parse error in {path}: {source}")]
+    Toml {
+        path: String,
+        #[source]
+        source: toml::de::Error,
     },
 }
 
