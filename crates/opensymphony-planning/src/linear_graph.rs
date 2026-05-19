@@ -32,6 +32,7 @@ pub struct MilestoneSummary {
     pub issue_count: usize,
     pub active_issue_count: usize,
     pub completed_issue_count: usize,
+    pub canceled_issue_count: usize,
 }
 
 /// A chain of blockers for an issue.
@@ -140,13 +141,17 @@ impl LinearGraphAnalyzer {
                         issue_count: 0,
                         active_issue_count: 0,
                         completed_issue_count: 0,
+                        canceled_issue_count: 0,
                     });
                 ms.issue_count += 1;
 
-                let issue_is_terminal =
-                    TrackerIssueStateKind::from_tracker_type(&issue.state).is_terminal();
-                if issue_is_terminal {
-                    ms.completed_issue_count += 1;
+                let issue_state_kind = TrackerIssueStateKind::from_tracker_type(&issue.state);
+                if issue_state_kind.is_terminal() {
+                    match issue_state_kind {
+                        TrackerIssueStateKind::Completed => ms.completed_issue_count += 1,
+                        TrackerIssueStateKind::Canceled => ms.canceled_issue_count += 1,
+                        _ => {}
+                    }
                 } else {
                     ms.active_issue_count += 1;
                 }
@@ -245,18 +250,13 @@ impl LinearGraphAnalyzer {
             ));
         }
 
-        let total_completed = issues_by_state
+        let total_terminal = issues_by_state
             .iter()
-            .filter(|(state, _)| {
-                matches!(
-                    TrackerIssueStateKind::from_tracker_type(state),
-                    TrackerIssueStateKind::Completed
-                )
-            })
+            .filter(|(state, _)| TrackerIssueStateKind::from_tracker_type(state).is_terminal())
             .map(|(_, count)| count)
             .sum::<usize>();
-        if total_completed > 0 {
-            summary.push(format!("{total_completed} completed issue(s)"));
+        if total_terminal > 0 {
+            summary.push(format!("{total_terminal} terminal issue(s)"));
         }
 
         let milestone_count = milestones.len();

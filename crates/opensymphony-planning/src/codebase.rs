@@ -69,7 +69,7 @@ pub enum OwnershipSignalType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationPoint {
     pub source_package: String,
-    target_package: Option<String>,
+    pub target_package: Option<String>,
     pub integration_type: IntegrationType,
     pub detail: String,
 }
@@ -491,6 +491,8 @@ fn extract_npm_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError> {
         dev_dependencies: BTreeMap<String, serde_json::Value>,
         #[serde(default, rename = "peerDependencies")]
         peer_dependencies: BTreeMap<String, serde_json::Value>,
+        #[serde(default, rename = "optionalDependencies")]
+        optional_dependencies: BTreeMap<String, serde_json::Value>,
     }
 
     let pkg: NpmPackage =
@@ -507,6 +509,9 @@ fn extract_npm_deps(path: &Path) -> Result<Vec<String>, CodebaseAnalysisError> {
         deps.entry(name).or_insert(());
     }
     for (name, _) in pkg.peer_dependencies {
+        deps.entry(name).or_insert(());
+    }
+    for (name, _) in pkg.optional_dependencies {
         deps.entry(name).or_insert(());
     }
 
