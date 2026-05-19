@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use thiserror::Error;
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -17,18 +18,23 @@ use tauri::command;
 ///
 /// Uses internally-tagged serialization so every variant produces a uniform
 /// JSON shape: `{"type":"Cancelled"}`, `{"type":"Internal","message":"..."}`.
-#[derive(Debug, Serialize)]
+#[derive(Error, Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum DesktopError {
     /// The user cancelled the operation (e.g., closed a file picker).
+    #[error("operation cancelled")]
     Cancelled,
     /// The requested resource does not exist.
+    #[error("resource not found")]
     NotFound,
     /// Insufficient permissions to perform the operation.
+    #[error("permission denied")]
     PermissionDenied,
     /// The local daemon is not running.
+    #[error("daemon unavailable")]
     DaemonUnavailable,
     /// Generic internal error with a human-readable message.
+    #[error("internal error: {message}")]
     Internal { message: String },
 }
 
