@@ -6,16 +6,17 @@
   "private": true,
   "scripts": {
     "type-check": "tsc --noEmit",
-    "dev": "npx serve dist -l 1420",
-    "build": "mkdir -p dist"
+    "dev": "serve dist -l 1420",
+    "build": "node scripts/build-stub.mjs"
   },
   "dependencies": {
-    "@opensymphony/gateway-schema": "*",
     "@opensymphony/api-client": "*",
-    "@opensymphony/ui-core": "*",
-    "@opensymphony/state": "*"
+    "@opensymphony/gateway-schema": "*",
+    "@opensymphony/state": "*",
+    "@opensymphony/ui-core": "*"
   },
   "devDependencies": {
+    "serve": "^14.2.4",
     "typescript": "^5.8.0"
   }
 }

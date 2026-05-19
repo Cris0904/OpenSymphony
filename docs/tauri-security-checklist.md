@@ -35,6 +35,7 @@
 - [x] Workspace lints forbid `unsafe_code`, warn on `unwrap_used` and `todo`.
 - [x] Placeholder icons are present; real icons will replace before release.
 - [x] `beforeDevCommand` and `beforeBuildCommand` point to the shared frontend workspace.
+- [ ] Production builds ship a stub HTML until the real frontend is mounted (deferred to COE-394).
 
 ## Audit Notes
 
