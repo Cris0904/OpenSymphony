@@ -85,7 +85,6 @@ fn fixture_envelope(step: u64) -> SnapshotEnvelope {
 
 /// Second fixture variant: one Idle issue, one Completed issue with events
 /// and modified files, and one Failed issue (first attempt, no retries).
-#[allow(dead_code)]
 fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
     let now = Utc::now();
     DaemonSnapshot {
@@ -566,31 +565,12 @@ async fn gateway_and_control_plane_are_reachable() {
     control_task.abort();
 }
 
-/// Verify the gateway serves built web assets under /app/* and falls back to
-/// index.html for SPA routes.
+// ── Read API endpoint tests ────────────────────────────────────────────────────
+
 #[tokio::test]
-async fn gateway_serves_web_assets_and_spa_fallback() {
-    use std::fs;
-    use std::io::Write;
-    use tempfile::TempDir;
-
+async fn gateway_serves_project_list() {
     let store = SnapshotStore::new(fixture_snapshot(0));
-
-    // Create a temporary directory with mock web assets.
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let index_path = temp_dir.path().join("index.html");
-    let mut index_file = fs::File::create(&index_path).expect("create index.html");
-    writeln!(index_file, "<html><body>Web App</body></html>").expect("write index.html");
-
-    let css_path = temp_dir.path().join("assets").join("style.css");
-    fs::create_dir_all(css_path.parent().expect("assets dir has parent"))
-        .expect("create assets dir");
-    let mut css_file = fs::File::create(&css_path).expect("create style.css");
-    writeln!(css_file, "body {{ color: red; }}").expect("write style.css");
-
-    let server = GatewayServer::new(store.clone())
-        .with_web_assets(temp_dir.path().to_string_lossy().to_string());
-
+    let server = GatewayServer::new(store.clone());
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");
@@ -603,124 +583,139 @@ async fn gateway_serves_web_assets_and_spa_fallback() {
     });
 
     let client = reqwest::Client::new();
-
-    // Serve index.html at /app/
-    let index_resp = client
-        .get(format!("http://{address}/app/"))
+    let response = client
+        .get(format!("http://{address}/api/v1/projects"))
         .send()
         .await
-        .expect("fetch /app/");
-    assert!(
-        index_resp.status().is_success(),
-        "index.html should be served"
-    );
-    let index_body = index_resp.text().await.expect("read index body");
-    assert!(
-        index_body.contains("Web App"),
-        "index.html content mismatch"
-    );
+        .expect("fetch projects")
+        .json::<opensymphony::opensymphony_gateway_schema::snapshot::ProjectList>()
+        .await
+        .expect("decode project list");
 
-    // Serve assets file directly
-    let css_resp = client
-        .get(format!("http://{address}/app/assets/style.css"))
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.projects.len(), 1);
+    assert_eq!(response.projects[0].project_id, "default");
+    assert_eq!(response.projects[0].name, "OpenSymphony");
+    assert_eq!(response.projects[0].issue_count, 1);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_project_detail() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/projects/default"))
         .send()
         .await
-        .expect("fetch /app/assets/style.css");
-    assert!(css_resp.status().is_success(), "CSS should be served");
-    let css_body = css_resp.text().await.expect("read css body");
-    assert!(css_body.contains("body"), "CSS content mismatch");
+        .expect("fetch project detail")
+        .json::<opensymphony::opensymphony_gateway_schema::snapshot::ProjectDetail>()
+        .await
+        .expect("decode project detail");
 
-    // SPA fallback: no extension should serve index.html
-    let spa_resp = client
-        .get(format!("http://{address}/app/dashboard/runs"))
+    assert_eq!(response.project_id, "default");
+    assert_eq!(response.name, "OpenSymphony");
+    assert_eq!(response.issue_count, 1);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_task_graph() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!(
+            "http://{address}/api/v1/projects/default/taskgraph"
+        ))
         .send()
         .await
-        .expect("fetch SPA route");
-    assert!(
-        spa_resp.status().is_success(),
-        "SPA route should serve index.html"
-    );
-    let spa_body = spa_resp.text().await.expect("read spa body");
-    assert!(
-        spa_body.contains("Web App"),
-        "SPA fallback should serve index.html"
-    );
+        .expect("fetch task graph")
+        .json::<opensymphony::opensymphony_gateway_schema::task_graph::TaskGraphSnapshot>()
+        .await
+        .expect("decode task graph");
 
-    // 404 for non-existent file with extension
-    let not_found = client
-        .get(format!("http://{address}/app/nonexistent.js"))
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.project_id, "default");
+    assert_eq!(response.nodes.len(), 1);
+    assert_eq!(response.nodes[0].identifier, "COE-255");
+    // Verify runtime overlay is present
+    assert!(response.nodes[0].runtime_overlay.is_some());
+    let overlay = response.nodes[0]
+        .runtime_overlay
+        .as_ref()
+        .expect("task graph node should have runtime overlay");
+    // Running issues are NOT eligible (only Idle issues are eligible).
+    assert!(!overlay.eligible);
+    assert_eq!(overlay.active_run_id, Some("COE-255".into()));
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_detail() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255"))
         .send()
         .await
-        .expect("fetch nonexistent.js");
-    assert!(
-        not_found.status().is_client_error(),
-        "nonexistent file should 404"
-    );
-
-    // Path traversal must be rejected (404)
-    let traversal = client
-        .get(format!("http://{address}/app/assets/../../../etc/passwd"))
-        .send()
+        .expect("fetch run detail")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunDetail>()
         .await
-        .expect("fetch path traversal attempt");
-    assert!(
-        traversal.status().is_client_error(),
-        "path traversal must be rejected with 404"
-    );
+        .expect("decode run detail");
 
-    // SPA fallback for routes with dots (e.g. /user.profile) should serve index.html
-    let dot_route = client
-        .get(format!("http://{address}/app/user.profile"))
-        .send()
-        .await
-        .expect("fetch dot route");
-    assert!(
-        dot_route.status().is_success(),
-        "route with unknown extension should serve index.html via SPA fallback"
-    );
-    let dot_body = dot_route.text().await.expect("read dot route body");
-    assert!(
-        dot_body.contains("Web App"),
-        "dot route should serve index.html"
-    );
-
-    // Root /app (no trailing slash) should serve index.html
-    let root_app = client
-        .get(format!("http://{address}/app"))
-        .send()
-        .await
-        .expect("fetch /app without trailing slash");
-    assert!(
-        root_app.status().is_success(),
-        "/app without trailing slash should serve index.html"
-    );
-    let root_body = root_app.text().await.expect("read root app body");
-    assert!(
-        root_body.contains("Web App"),
-        "/app should serve index.html"
+    assert_eq!(response.run_id, "COE-255");
+    assert_eq!(response.issue_identifier, "COE-255");
+    assert_eq!(
+        response.status,
+        opensymphony::opensymphony_gateway_schema::run::RunStatus::Running
     );
 
     server_task.abort();
 }
 
-/// Verify that path traversal attempts are blocked and return 404.
 #[tokio::test]
-async fn gateway_blocks_path_traversal_in_web_assets() {
-    use std::fs;
-    use std::io::Write;
-    use tempfile::TempDir;
-
+async fn gateway_serves_run_events() {
     let store = SnapshotStore::new(fixture_snapshot(0));
-
-    // Create a temporary directory with mock web assets.
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let index_path = temp_dir.path().join("index.html");
-    let mut index_file = fs::File::create(&index_path).expect("create index.html");
-    writeln!(index_file, "<html><body>Web App</body></html>").expect("write index.html");
-
-    let server = GatewayServer::new(store.clone())
-        .with_web_assets(temp_dir.path().to_string_lossy().to_string());
-
+    let server = GatewayServer::new(store.clone());
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");
@@ -732,47 +727,28 @@ async fn gateway_blocks_path_traversal_in_web_assets() {
             .expect("test gateway server should serve")
     });
 
-    let base = format!("http://{address}");
     let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255/events"))
+        .send()
+        .await
+        .expect("fetch run events")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunEventPage>()
+        .await
+        .expect("decode run events");
 
-    // Attempt path traversal via ../ sequences.
-    for path in [
-        "/app/../../../etc/passwd",
-        "/app/assets/../../index.html",
-        "/app/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
-    ] {
-        let response = client
-            .get(format!("{base}{path}"))
-            .send()
-            .await
-            .expect("request should succeed");
-        assert!(
-            response.status().is_client_error(),
-            "Path traversal {path:?} should be rejected (got {})",
-            response.status()
-        );
-    }
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.run_id, "COE-255");
+    // The fixture has no recent_events for the issue, so page is empty
+    assert!(response.events.is_empty());
 
     server_task.abort();
 }
 
-/// Verify resolve_safe_path fallback branch (non-existent assets directory) rejects
-/// path traversal via static component check.
 #[tokio::test]
-async fn resolve_safe_path_fallback_blocks_traversal_on_missing_dir() {
-    // Helper function is private, so test through the HTTP handler by
-    // configuring a non-existent assets directory.
-    use tempfile::TempDir;
-
+async fn gateway_serves_run_files() {
     let store = SnapshotStore::new(fixture_snapshot(0));
-
-    // Create a temp dir that will be removed, so the assets path won't exist.
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let assets_path = temp_dir.path().join("nonexistent");
-    let assets_str = assets_path.to_string_lossy().to_string();
-
-    let server = GatewayServer::new(store.clone()).with_web_assets(assets_str);
-
+    let server = GatewayServer::new(store.clone());
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test listener");
@@ -784,31 +760,632 @@ async fn resolve_safe_path_fallback_blocks_traversal_on_missing_dir() {
             .expect("test gateway server should serve")
     });
 
-    let base = format!("http://{address}");
     let client = reqwest::Client::new();
-
-    // Path traversal with non-existent dir must be blocked.
     let response = client
-        .get(format!("{base}/app/../../../etc/passwd"))
+        .get(format!("http://{address}/api/v1/runs/COE-255/files"))
         .send()
         .await
-        .expect("request should succeed");
+        .expect("fetch run files")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunFilesPage>()
+        .await
+        .expect("decode run files");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.run_id, "COE-255");
+    // The fixture has no modified_files, so page is empty
+    assert!(response.files.is_empty());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_diffs() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-255/diffs"))
+        .send()
+        .await
+        .expect("fetch run diffs")
+        .json::<opensymphony::opensymphony_gateway_schema::run::FileDiffPage>()
+        .await
+        .expect("decode run diffs");
+
+    assert_eq!(response.schema_version.major, 1);
+    assert_eq!(response.run_id, "COE-255");
+    assert!(response.hunks.is_empty());
+
+    server_task.abort();
+}
+
+#[test]
+fn sanitize_file_path_strips_workspace_root() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony",
+        "/tmp/opensymphony/COE-255/src/main.rs",
+    );
+    assert_eq!(result, "COE-255/src/main.rs");
+}
+
+#[test]
+fn sanitize_file_path_falls_back_to_basename_for_unsafe_path() {
+    let result =
+        opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/etc/passwd");
+    assert_eq!(result, "passwd");
+}
+
+// ── Path traversal tests ─────────────────────────────────────────────────────
+
+#[test]
+fn sanitize_file_path_blocks_path_traversal_via_dotdot() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony",
+        "/tmp/opensymphony/../etc/passwd",
+    );
+    // The traversal escapes the workspace root, so the fallback basename
+    // (`passwd`) is returned instead of leaking `../etc/passwd`.
+    assert_eq!(result, "passwd");
+}
+
+#[test]
+fn sanitize_file_path_blocks_nested_path_traversal() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony",
+        "/tmp/opensymphony/COE-255/../../etc/passwd",
+    );
+    assert_eq!(result, "passwd");
+}
+
+// Workspace root normalization: a crafted root that tries to escape its own
+// boundary is normalized before the strip, so the file still resolves safely.
+#[test]
+fn sanitize_file_path_normalizes_workspace_root() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/other/../opensymphony",
+        "/tmp/opensymphony/COE-255/src/main.rs",
+    );
+    assert_eq!(result, "COE-255/src/main.rs");
+}
+
+// When both root and file contain `..` components, normalization on both sides
+// prevents a crafted root from widening the accepted prefix.
+#[test]
+fn sanitize_file_path_normalizes_both_sides() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path(
+        "/tmp/opensymphony/../opensymphony",
+        "/tmp/other/../opensymphony/../etc/passwd",
+    );
+    // Normalized: root=/tmp/opensymphony, file=/tmp/etc/passwd → escapes root
+    assert_eq!(result, "passwd");
+}
+
+// Empty string file name fallback: a raw path that is only a root dir yields
+// an empty string instead of leaking the workspace root.
+#[test]
+fn sanitize_file_path_empty_fallback_for_root_only_path() {
+    let result = opensymphony::opensymphony_gateway::sanitize_file_path("/tmp/opensymphony", "/");
+    assert_eq!(result, "");
+}
+
+// ── 404 negative-path tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_project() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/projects/nonexistent"))
+        .send()
+        .await
+        .expect("fetch unknown project");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_project_task_graph() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "http://{address}/api/v1/projects/nonexistent/taskgraph"
+        ))
+        .send()
+        .await
+        .expect("fetch unknown task graph");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999"))
+        .send()
+        .await
+        .expect("fetch unknown run");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_events() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999/events"))
+        .send()
+        .await
+        .expect("fetch unknown run events");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_files() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999/files"))
+        .send()
+        .await
+        .expect("fetch unknown run files");
+
+    assert_eq!(resp.status(), 404);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_diffs() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{address}/api/v1/runs/UNKNOWN-999/diffs"))
+        .send()
+        .await
+        .expect("fetch unknown run diffs");
+
+    assert_eq!(resp.status(), 404);
+
+    // Assert the 404 response body is well-formed
+    let body: opensymphony::opensymphony_gateway_schema::run::FileDiffPage =
+        resp.json().await.expect("decode 404 run diffs body");
+    assert_eq!(body.run_id, "UNKNOWN-999");
+    assert!(body.hunks.is_empty());
+
+    server_task.abort();
+}
+
+// ── Rich fixture tests (non-Running states, file/diff data) ────────────────────
+
+#[tokio::test]
+async fn gateway_serves_run_files_with_modified_files() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-301/files"))
+        .send()
+        .await
+        .expect("fetch run files with data")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunFilesPage>()
+        .await
+        .expect("decode run files");
+
+    assert_eq!(response.run_id, "COE-301");
+    assert_eq!(response.files.len(), 2);
+    // Files should have workspace root stripped
+    let paths: Vec<_> = response.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths.contains(&"COE-301/src/main.rs"));
+    assert!(paths.contains(&"COE-301/src/lib.rs"));
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_diffs_with_modified_files() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-301/diffs"))
+        .send()
+        .await
+        .expect("fetch run diffs with data")
+        .json::<opensymphony::opensymphony_gateway_schema::run::FileDiffPage>()
+        .await
+        .expect("decode run diffs");
+
+    assert_eq!(response.run_id, "COE-301");
+    // Multi-file diff should show count label instead of single path
+    assert_eq!(response.file_path, "[2 files]");
+    assert_eq!(response.hunks.len(), 2);
+    assert_eq!(response.total_lines_added, 52);
+    assert_eq!(response.total_lines_removed, 3);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_events_with_data() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-301/events"))
+        .send()
+        .await
+        .expect("fetch run events with data")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunEventPage>()
+        .await
+        .expect("decode run events");
+
+    assert_eq!(response.run_id, "COE-301");
+    assert_eq!(response.events.len(), 2);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_task_graph_eligible_for_idle_issue() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!(
+            "http://{address}/api/v1/projects/default/taskgraph"
+        ))
+        .send()
+        .await
+        .expect("fetch task graph")
+        .json::<opensymphony::opensymphony_gateway_schema::task_graph::TaskGraphSnapshot>()
+        .await
+        .expect("decode task graph");
+
+    // Find the idle issue overlay
+    let idle_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-300")
+        .expect("COE-300 node should exist");
+    let overlay = idle_node.runtime_overlay.as_ref().expect("overlay present");
+    // Idle + not blocked = eligible
+    assert!(overlay.eligible);
+    assert!(overlay.queued);
+
+    // Completed issue should NOT be eligible
+    let done_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-301")
+        .expect("COE-301 node should exist");
+    let done_overlay = done_node.runtime_overlay.as_ref().expect("overlay present");
+    assert!(!done_overlay.eligible);
+
+    // root_ids should be empty (no parent/child data available)
+    assert!(response.root_ids.is_empty());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_run_detail_failed_without_retries() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-302"))
+        .send()
+        .await
+        .expect("fetch failed run detail")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunDetail>()
+        .await
+        .expect("decode run detail");
+
+    assert_eq!(response.run_id, "COE-302");
+    // Failed with retry_count == 0 should map to TrackerTerminal, not RetryExhausted
+    assert_eq!(
+        response.release_reason,
+        Some(opensymphony::opensymphony_gateway_schema::run::ReleaseReason::TrackerTerminal)
+    );
+    // Finished at should be set for terminal states
+    assert!(response.finished_at.is_some());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_run_detail_completed_state() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-301"))
+        .send()
+        .await
+        .expect("fetch completed run detail")
+        .json::<opensymphony::opensymphony_gateway_schema::run::RunDetail>()
+        .await
+        .expect("decode run detail");
+
+    assert_eq!(response.run_id, "COE-301");
+    assert_eq!(
+        response.release_reason,
+        Some(opensymphony::opensymphony_gateway_schema::run::ReleaseReason::Completed)
+    );
+    assert!(response.finished_at.is_some());
+
+    server_task.abort();
+}
+
+// ── Runtime overlay: queued vs eligible semantics ──────────────────────────────
+
+#[tokio::test]
+async fn gateway_task_graph_queued_vs_eligible() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!(
+            "http://{address}/api/v1/projects/default/taskgraph"
+        ))
+        .send()
+        .await
+        .expect("fetch task graph")
+        .json::<opensymphony::opensymphony_gateway_schema::task_graph::TaskGraphSnapshot>()
+        .await
+        .expect("decode task graph");
+
+    // Idle + not blocked → eligible AND queued
+    let idle_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-300")
+        .expect("COE-300 node should exist");
+    let idle_overlay = idle_node.runtime_overlay.as_ref().expect("overlay present");
     assert!(
-        response.status().is_client_error(),
-        "Path traversal with non-existent dir should be rejected (got {})",
-        response.status()
+        idle_overlay.eligible,
+        "Idle unblocked issue should be eligible"
+    );
+    assert!(idle_overlay.queued, "Idle unblocked issue should be queued");
+
+    // RetryQueued → queued BUT NOT eligible (not in Idle state)
+    let retry_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-303")
+        .expect("COE-303 node should exist");
+    let retry_overlay = retry_node
+        .runtime_overlay
+        .as_ref()
+        .expect("overlay present");
+    assert!(
+        !retry_overlay.eligible,
+        "RetryQueued issue must NOT be eligible (not idle)"
+    );
+    assert!(
+        retry_overlay.queued,
+        "RetryQueued issue must be queued (waiting for retry)"
     );
 
-    // Normal path with non-existent dir must also return 404 (file not found).
-    let response = client
-        .get(format!("{base}/app/index.html"))
-        .send()
-        .await
-        .expect("request should succeed");
+    // Completed → neither eligible nor queued
+    let done_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-301")
+        .expect("COE-301 node should exist");
+    let done_overlay = done_node.runtime_overlay.as_ref().expect("overlay present");
     assert!(
-        response.status().is_client_error(),
-        "Missing file should return 404 (got {})",
-        response.status()
+        !done_overlay.eligible,
+        "Completed issue must not be eligible"
+    );
+    assert!(!done_overlay.queued, "Completed issue must not be queued");
+
+    // Failed → neither eligible nor queued
+    let failed_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-302")
+        .expect("COE-302 node should exist");
+    let failed_overlay = failed_node
+        .runtime_overlay
+        .as_ref()
+        .expect("overlay present");
+    assert!(
+        !failed_overlay.eligible,
+        "Failed issue must not be eligible"
+    );
+    assert!(!failed_overlay.queued, "Failed issue must not be queued");
+
+    // Blocked Idle → NOT eligible AND NOT queued (blocked overrides Idle)
+    let blocked_node = response
+        .nodes
+        .iter()
+        .find(|n| n.identifier == "COE-304")
+        .expect("COE-304 node should exist");
+    let blocked_overlay = blocked_node
+        .runtime_overlay
+        .as_ref()
+        .expect("overlay present");
+    assert!(
+        !blocked_overlay.eligible,
+        "Blocked Idle issue must not be eligible"
+    );
+    assert!(
+        !blocked_overlay.queued,
+        "Blocked Idle issue must not be queued (blocked overrides)"
     );
 
     server_task.abort();
