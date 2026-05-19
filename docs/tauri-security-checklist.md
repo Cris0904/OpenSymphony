@@ -15,8 +15,8 @@
 | Capability | Windows | Permissions | Risk |
 |---|---|---|---|
 | `default` | `main` | Core window/app/event/webview | Low |
-| `file-selection` | `main` | `dialog:open`, `dialog:save` | Low — user-initiated |
-| `notification` | `main` | `notification:show`, `notification:request-permission` | Low |
+| `file-selection` | `main` | `dialog:allow-open`, `dialog:allow-save` | Low — user-initiated |
+| `notification` | `main` | `notification:allow-show`, `notification:allow-request-permission` | Low |
 | `settings` | `main` | `fs:allow-read-text-file`, `fs:allow-write-text-file` | Low — scoped to `$HOME/.config/opensymphony` |
 | `process-supervision` | `main` | `shell:default` | **Low** — `shell:default` only grants minimal shell plugin baseline. Stub only; COE-404 will add whitelisted executables and PID tracking |
 
