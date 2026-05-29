@@ -83,19 +83,30 @@ impl PlanningSession {
 
     /// Returns a summary of available context for debugging/logging.
     pub fn context_summary(&self) -> String {
-        let mut summary = format!(
-            "Planning wave: {}\n",
-            self.intake.planning_wave
-        );
-        summary.push_str(&format!("Requirements: {} items\n", self.intake.requirements.len()));
-        summary.push_str(&format!("Constraints: {} items\n", self.intake.constraints.len()));
+        let mut summary = format!("Planning wave: {}\n", self.intake.planning_wave);
+        summary.push_str(&format!(
+            "Requirements: {} items\n",
+            self.intake.requirements.len()
+        ));
+        summary.push_str(&format!(
+            "Constraints: {} items\n",
+            self.intake.constraints.len()
+        ));
         summary.push_str(&format!(
             "Codebase analysis: {}\n",
-            if self.codebase_analysis.is_some() { "available" } else { "missing" }
+            if self.codebase_analysis.is_some() {
+                "available"
+            } else {
+                "missing"
+            }
         ));
         summary.push_str(&format!(
             "Linear graph analysis: {}\n",
-            if self.linear_graph_analysis.is_some() { "available" } else { "missing" }
+            if self.linear_graph_analysis.is_some() {
+                "available"
+            } else {
+                "missing"
+            }
         ));
         summary.push_str(&format!(
             "Research artifacts: {}\n",
@@ -174,7 +185,7 @@ mod tests {
     fn context_summary_includes_all_sections() {
         let session = PlanningSession::new(make_sample_intake(), "docs/tasks");
         let summary = session.context_summary();
-        
+
         assert!(summary.contains("Planning wave"));
         assert!(summary.contains("Requirements"));
         assert!(summary.contains("Constraints"));

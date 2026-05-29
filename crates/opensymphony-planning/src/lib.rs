@@ -23,9 +23,10 @@ pub use codebase::{
     IntegrationPoint, LanguageSignature, OwnershipSignal, PackageInfo, PackageKind,
 };
 pub use generator::{
-    validate_dependency_graph, AcceptanceCriterion, DependencyType, GenerationError, ManifestTask,
-    IntakeContext, PlanArtifacts, PlanGenerator, PlannedIssue, PlannedMilestone, PlannedSubIssue,
-    PlanningSession, RegenerationScope, TaskDependency, TaskId, TaskPackageManifest, TaskPriority,
+    AcceptanceCriterion, DependencyType, GenerationError, IntakeContext, ManifestTask,
+    PlanArtifacts, PlanGenerator, PlannedIssue, PlannedMilestone, PlannedSubIssue, PlanningSession,
+    RegenerationScope, TaskDependency, TaskId, TaskPackageManifest, TaskPriority,
+    validate_dependency_graph,
 };
 pub use linear_graph::{
     BlockerChain, BlockerSnapshot, ChildRef, IssueSnapshot, LinearGraphAnalysis,

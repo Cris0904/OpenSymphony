@@ -218,11 +218,13 @@ impl PlanGenerator {
             let issue_id = self.next_task_id();
 
             // Each issue gets sub-issues for implementation
-            let sub_issues =
-                self.generate_sub_issues_for_issue(&issue_id, requirement, intake)?;
+            let sub_issues = self.generate_sub_issues_for_issue(&issue_id, requirement, intake)?;
 
             let blocked_by: Vec<TaskId> = if idx > 0 {
-                issues.last().map(|i| vec![i.id.clone()]).unwrap_or_default()
+                issues
+                    .last()
+                    .map(|i| vec![i.id.clone()])
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };
@@ -281,12 +283,12 @@ impl PlanGenerator {
             summary: format!("Implementation unit for {}", requirement),
             scope_in: vec![format!("Core implementation of {}", requirement)],
             scope_out: vec![format!("Testing and validation of {}", requirement)],
-            deliverables: vec![
-                "Implementation code".to_string(),
-                "Unit tests".to_string(),
-            ],
+            deliverables: vec!["Implementation code".to_string(), "Unit tests".to_string()],
             acceptance_criteria: vec![AcceptanceCriterion {
-                description: format!("Implementation of {} compiles and passes tests", requirement),
+                description: format!(
+                    "Implementation of {} compiles and passes tests",
+                    requirement
+                ),
                 verification_command: Some("cargo test".to_string()),
             }],
             verification_steps: vec![
@@ -317,10 +319,7 @@ impl PlanGenerator {
                 "Acceptance criteria verification".to_string(),
             ],
             scope_out: vec!["Implementation changes".to_string()],
-            deliverables: vec![
-                "Test report".to_string(),
-                "Validation evidence".to_string(),
-            ],
+            deliverables: vec!["Test report".to_string(), "Validation evidence".to_string()],
             acceptance_criteria: vec![AcceptanceCriterion {
                 description: format!("All acceptance criteria for {} are met", requirement),
                 verification_command: Some("cargo test --all".to_string()),
@@ -393,15 +392,9 @@ impl PlanGenerator {
             if !milestone.issues.is_empty() {
                 md.push_str("Tasks:\n\n");
                 for issue in &milestone.issues {
-                    md.push_str(&format!(
-                        "- {} {}\n",
-                        issue.id, issue.title
-                    ));
+                    md.push_str(&format!("- {} {}\n", issue.id, issue.title));
                     for sub_issue in &issue.sub_issues {
-                        md.push_str(&format!(
-                            "  - {} {}\n",
-                            sub_issue.id, sub_issue.title
-                        ));
+                        md.push_str(&format!("  - {} {}\n", sub_issue.id, sub_issue.title));
                     }
                 }
             }
@@ -497,21 +490,69 @@ parent: null
             issue.title,
             milestone.name,
             issue.priority as u8,
-            issue.estimate.map(|e| e.to_string()).unwrap_or_else(|| "null".to_string()),
-            issue.blocked_by.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
-            issue.blocks.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
+            issue
+                .estimate
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            issue
+                .blocked_by
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            issue
+                .blocks
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
             issue.summary,
-            issue.scope_in.iter().map(|s| format!("- {}", s)).collect::<Vec<_>>().join("\n"),
+            issue
+                .scope_in
+                .iter()
+                .map(|s| format!("- {}", s))
+                .collect::<Vec<_>>()
+                .join("\n"),
             if issue.scope_out.is_empty() {
                 "- None".to_string()
             } else {
-                issue.scope_out.iter().map(|s| format!("- {}", s)).collect::<Vec<_>>().join("\n")
+                issue
+                    .scope_out
+                    .iter()
+                    .map(|s| format!("- {}", s))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             },
-            issue.deliverables.iter().map(|d| format!("- {}", d)).collect::<Vec<_>>().join("\n"),
-            issue.acceptance_criteria.iter().map(|c| format!("- [ ] {}", c.description)).collect::<Vec<_>>().join("\n"),
-            issue.verification_steps.iter().map(|v| format!("- {}", v)).collect::<Vec<_>>().join("\n"),
-            issue.context.iter().map(|c| format!("- {}", c)).collect::<Vec<_>>().join("\n"),
-            issue.definition_of_ready.iter().map(|d| format!("- [ ] {}", d)).collect::<Vec<_>>().join("\n"),
+            issue
+                .deliverables
+                .iter()
+                .map(|d| format!("- {}", d))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            issue
+                .acceptance_criteria
+                .iter()
+                .map(|c| format!("- [ ] {}", c.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            issue
+                .verification_steps
+                .iter()
+                .map(|v| format!("- {}", v))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            issue
+                .context
+                .iter()
+                .map(|c| format!("- {}", c))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            issue
+                .definition_of_ready
+                .iter()
+                .map(|d| format!("- [ ] {}", d))
+                .collect::<Vec<_>>()
+                .join("\n"),
             issue.notes.as_deref().unwrap_or("None"),
         );
 
@@ -519,10 +560,7 @@ parent: null
         if !issue.sub_issues.is_empty() {
             content.push_str("\n## Sub-issues\n\n");
             for sub_issue in &issue.sub_issues {
-                content.push_str(&format!(
-                    "- {} {}\n",
-                    sub_issue.id, sub_issue.title
-                ));
+                content.push_str(&format!("- {} {}\n", sub_issue.id, sub_issue.title));
             }
         }
 
@@ -589,22 +627,70 @@ parent: {}
             sub_issue.title,
             parent_issue.title,
             sub_issue.priority as u8,
-            sub_issue.estimate.map(|e| e.to_string()).unwrap_or_else(|| "null".to_string()),
-            sub_issue.blocked_by.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
-            sub_issue.blocks.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "),
+            sub_issue
+                .estimate
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "null".to_string()),
+            sub_issue
+                .blocked_by
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            sub_issue
+                .blocks
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
             parent_issue.id,
             sub_issue.summary,
-            sub_issue.scope_in.iter().map(|s| format!("- {}", s)).collect::<Vec<_>>().join("\n"),
+            sub_issue
+                .scope_in
+                .iter()
+                .map(|s| format!("- {}", s))
+                .collect::<Vec<_>>()
+                .join("\n"),
             if sub_issue.scope_out.is_empty() {
                 "- None".to_string()
             } else {
-                sub_issue.scope_out.iter().map(|s| format!("- {}", s)).collect::<Vec<_>>().join("\n")
+                sub_issue
+                    .scope_out
+                    .iter()
+                    .map(|s| format!("- {}", s))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             },
-            sub_issue.deliverables.iter().map(|d| format!("- {}", d)).collect::<Vec<_>>().join("\n"),
-            sub_issue.acceptance_criteria.iter().map(|c| format!("- [ ] {}", c.description)).collect::<Vec<_>>().join("\n"),
-            sub_issue.verification_steps.iter().map(|v| format!("- {}", v)).collect::<Vec<_>>().join("\n"),
-            sub_issue.context.iter().map(|c| format!("- {}", c)).collect::<Vec<_>>().join("\n"),
-            sub_issue.definition_of_ready.iter().map(|d| format!("- [ ] {}", d)).collect::<Vec<_>>().join("\n"),
+            sub_issue
+                .deliverables
+                .iter()
+                .map(|d| format!("- {}", d))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            sub_issue
+                .acceptance_criteria
+                .iter()
+                .map(|c| format!("- [ ] {}", c.description))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            sub_issue
+                .verification_steps
+                .iter()
+                .map(|v| format!("- {}", v))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            sub_issue
+                .context
+                .iter()
+                .map(|c| format!("- {}", c))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            sub_issue
+                .definition_of_ready
+                .iter()
+                .map(|d| format!("- [ ] {}", d))
+                .collect::<Vec<_>>()
+                .join("\n"),
             sub_issue.notes.as_deref().unwrap_or("None"),
         );
 
@@ -618,12 +704,7 @@ pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), Genera
 
     for milestone in &artifacts.milestones {
         for issue in &milestone.issues {
-            validate_task_dependencies(
-                &issue.id,
-                &issue.blocked_by,
-                &artifacts,
-                &mut visited,
-            )?;
+            validate_task_dependencies(&issue.id, &issue.blocked_by, &artifacts, &mut visited)?;
 
             for sub_issue in &issue.sub_issues {
                 validate_task_dependencies(
@@ -675,10 +756,7 @@ mod tests {
                 planning_wave: "test-wave".to_string(),
                 project_description: "Test project for unit testing".to_string(),
                 success_criteria: vec!["All tests pass".to_string()],
-                requirements: vec![
-                    "Feature A".to_string(),
-                    "Feature B".to_string(),
-                ],
+                requirements: vec!["Feature A".to_string(), "Feature B".to_string()],
                 constraints: vec!["Must use Rust".to_string()],
                 open_questions: vec![],
                 reference_docs: vec![],
@@ -694,7 +772,7 @@ mod tests {
         let artifacts = generator.generate().expect("generation should succeed");
 
         assert!(!artifacts.milestones.is_empty());
-        
+
         // Each requirement should produce at least one issue
         let total_issues: usize = artifacts.milestones.iter().map(|m| m.issues.len()).sum();
         assert!(total_issues > 0);
@@ -721,7 +799,10 @@ mod tests {
         // Each milestone in the manifest should have a matching entry
         for milestone_name in &artifacts.manifest.milestones {
             assert!(
-                artifacts.milestones.iter().any(|m| &m.name == milestone_name),
+                artifacts
+                    .milestones
+                    .iter()
+                    .any(|m| &m.name == milestone_name),
                 "Milestone {} not found in artifacts",
                 milestone_name
             );
@@ -735,7 +816,7 @@ mod tests {
         let artifacts = generator.generate().expect("generation should succeed");
 
         assert!(artifacts.milestone_index.contains("# Project Milestones"));
-        
+
         for milestone in &artifacts.milestones {
             assert!(artifacts.milestone_index.contains(&milestone.name));
         }
@@ -789,10 +870,10 @@ mod tests {
 
         // Milestones should be preserved
         assert_eq!(original.milestones.len(), regenerated.milestones.len());
-        
+
         // Milestone index should be preserved
         assert_eq!(original.milestone_index, regenerated.milestone_index);
-        
+
         // Task files should be preserved
         assert_eq!(original.task_files.len(), regenerated.task_files.len());
     }

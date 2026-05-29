@@ -194,9 +194,7 @@ pub enum RegenerationScope {
     /// Regenerate only milestones.
     Milestones,
     /// Regenerate only issues (within specified milestones).
-    Issues {
-        milestone_ids: Option<Vec<TaskId>>,
-    },
+    Issues { milestone_ids: Option<Vec<TaskId>> },
     /// Regenerate only sub-issues (within specified issues).
     SubIssues { issue_ids: Option<Vec<TaskId>> },
     /// Regenerate only the task package manifest.

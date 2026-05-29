@@ -22,5 +22,5 @@ pub use domain::{
     PlannedMilestone, PlannedSubIssue, RegenerationScope, TaskDependency, TaskId,
     TaskPackageManifest, TaskPriority,
 };
-pub use generator::{validate_dependency_graph, GenerationError, PlanGenerator};
+pub use generator::{GenerationError, PlanGenerator, validate_dependency_graph};
 pub use session::{IntakeContext, PlanningSession};
