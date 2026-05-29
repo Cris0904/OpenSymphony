@@ -14,6 +14,7 @@
 //! preserving human-reviewed artifacts outside the selected regeneration scope.
 
 pub mod domain;
+#[allow(clippy::module_inception)]
 pub mod generator;
 pub mod session;
 

@@ -213,11 +213,10 @@ impl PlanGenerator {
                 }
 
                 let mut milestone_intake = intake.clone();
-                milestone_intake.requirements =
-                    milestone_requirements[ms_idx]
-                        .iter()
-                        .map(|r| (**r).clone())
-                        .collect();
+                milestone_intake.requirements = milestone_requirements[ms_idx]
+                    .iter()
+                    .map(|r| (**r).clone())
+                    .collect();
 
                 let issues =
                     self.generate_issues_for_milestone(&milestone_id, &milestone_intake)?;
@@ -262,10 +261,10 @@ impl PlanGenerator {
 
             // Populate blocks symmetrically: if this issue is blocked by the previous,
             // the previous issue blocks this one
-            if !blocked_by.is_empty() {
-                if let Some(prev_issue) = issues.last_mut() {
-                    prev_issue.blocks.push(issue_id.clone());
-                }
+            if !blocked_by.is_empty()
+                && let Some(prev_issue) = issues.last_mut()
+            {
+                prev_issue.blocks.push(issue_id.clone());
             }
 
             issues.push(PlannedIssue {

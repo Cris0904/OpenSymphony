@@ -34,7 +34,7 @@ pub struct AcceptanceCriterion {
 }
 
 /// Priority level compatible with Linear's numeric priority system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
     /// Urgent - immediate attention required
@@ -42,15 +42,10 @@ pub enum TaskPriority {
     /// High - should be addressed soon
     High = 2,
     /// Normal - standard priority
+    #[default]
     Normal = 3,
     /// Low - can be deferred
     Low = 4,
-}
-
-impl Default for TaskPriority {
-    fn default() -> Self {
-        TaskPriority::Normal
-    }
 }
 
 /// A sub-issue represents a bounded implementation, validation, documentation,
