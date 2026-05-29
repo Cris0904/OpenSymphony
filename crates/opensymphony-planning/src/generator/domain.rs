@@ -211,23 +211,31 @@ impl RegenerationScope {
 
     /// Returns true if issues should be regenerated.
     pub fn includes_issues(&self) -> bool {
-        matches!(self, Self::Full)
-            || matches!(self, Self::Issues { milestone_ids } if milestone_ids.is_none())
+        matches!(self, Self::Full | Self::Milestones) || matches!(self, Self::Issues { .. })
     }
 
     /// Returns true if sub-issues should be regenerated.
     pub fn includes_sub_issues(&self) -> bool {
-        matches!(self, Self::Full)
-            || matches!(self, Self::SubIssues { issue_ids } if issue_ids.is_none())
+        matches!(self, Self::Full | Self::Milestones) || matches!(self, Self::SubIssues { .. })
     }
 
     /// Returns true if the manifest should be regenerated.
     pub fn includes_manifest(&self) -> bool {
         matches!(self, Self::Full | Self::Manifest)
+            || self.includes_milestones()
+            || self.includes_issues()
+            || self.includes_sub_issues()
     }
 
     /// Returns true if the milestone index should be regenerated.
     pub fn includes_milestone_index(&self) -> bool {
-        matches!(self, Self::Full | Self::MilestoneIndex)
+        matches!(self, Self::Full | Self::MilestoneIndex) || self.includes_milestones()
+    }
+
+    /// Returns true if task files should be regenerated.
+    pub fn includes_task_files(&self) -> bool {
+        matches!(self, Self::Full | Self::Milestones)
+            || self.includes_issues()
+            || self.includes_sub_issues()
     }
 }

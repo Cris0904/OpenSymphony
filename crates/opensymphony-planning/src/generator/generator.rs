@@ -89,7 +89,7 @@ impl PlanGenerator {
             existing.milestone_index.clone()
         };
 
-        let task_files = if scope.includes_milestones() {
+        let task_files = if scope.includes_task_files() {
             self.generate_task_files(&milestones)?
         } else {
             existing.task_files.clone()
@@ -913,13 +913,25 @@ mod tests {
         let mut total_expected = 0;
         for milestone in &artifacts.milestones {
             total_expected += 1;
-            assert!(all_ids.insert(milestone.id.0.clone()), "duplicate milestone id: {}", milestone.id);
+            assert!(
+                all_ids.insert(milestone.id.0.clone()),
+                "duplicate milestone id: {}",
+                milestone.id
+            );
             for issue in &milestone.issues {
                 total_expected += 1;
-                assert!(all_ids.insert(issue.id.0.clone()), "duplicate issue id: {}", issue.id);
+                assert!(
+                    all_ids.insert(issue.id.0.clone()),
+                    "duplicate issue id: {}",
+                    issue.id
+                );
                 for sub_issue in &issue.sub_issues {
                     total_expected += 1;
-                    assert!(all_ids.insert(sub_issue.id.0.clone()), "duplicate sub-issue id: {}", sub_issue.id);
+                    assert!(
+                        all_ids.insert(sub_issue.id.0.clone()),
+                        "duplicate sub-issue id: {}",
+                        sub_issue.id
+                    );
                 }
             }
         }
