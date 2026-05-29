@@ -906,19 +906,30 @@ mod tests {
         let mut generator = PlanGenerator::new(session);
         let artifacts = generator.generate().expect("generation should succeed");
 
-        let mut all_ids = BTreeMap::new();
+        use std::collections::BTreeSet;
+        let mut all_ids = BTreeSet::new();
+
+        // Count total expected unique IDs
+        let mut total_expected = 0;
         for milestone in &artifacts.milestones {
-            all_ids.insert(milestone.id.0.clone(), "milestone");
+            total_expected += 1;
+            assert!(all_ids.insert(milestone.id.0.clone()), "duplicate milestone id: {}", milestone.id);
             for issue in &milestone.issues {
-                all_ids.insert(issue.id.0.clone(), "issue");
+                total_expected += 1;
+                assert!(all_ids.insert(issue.id.0.clone()), "duplicate issue id: {}", issue.id);
                 for sub_issue in &issue.sub_issues {
-                    all_ids.insert(sub_issue.id.0.clone(), "sub-issue");
+                    total_expected += 1;
+                    assert!(all_ids.insert(sub_issue.id.0.clone()), "duplicate sub-issue id: {}", sub_issue.id);
                 }
             }
         }
+
+        assert_eq!(all_ids.len(), total_expected, "all ids should be unique");
+
+        // Each manifest task should reference a known id
         for task in &artifacts.manifest.tasks {
             assert!(
-                all_ids.contains_key(&task.id.0),
+                all_ids.contains(&task.id.0),
                 "Task ID {} not found in milestone/issue/sub-issue structure",
                 task.id.0
             );
