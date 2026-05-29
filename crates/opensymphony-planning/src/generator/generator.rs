@@ -29,6 +29,16 @@ pub enum GenerationError {
     TaskFileGeneration(String),
 }
 
+/// Escapes a string for safe use in YAML frontmatter double-quoted values.
+fn yaml_escape(s: &str) -> String {
+    // Replace backslashes first, then quotes, then other special chars
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 /// The generator produces structured plan artifacts from a planning session.
 pub struct PlanGenerator {
     session: PlanningSession,
@@ -137,7 +147,7 @@ impl PlanGenerator {
             planning_wave,
             project_description,
             success_criteria,
-            requirements,
+            requirements: requirements.clone(),
             constraints,
             open_questions,
             reference_docs,
@@ -185,11 +195,33 @@ impl PlanGenerator {
                 notes: None,
             });
         } else {
-            // Generate issues for each existing milestone
-            for ms in &linear_milestones {
+            // Distribute requirements across Linear milestones to avoid duplicates
+            let reqs_per_milestone = requirements
+                .len()
+                .saturating_div(linear_milestones.len())
+                .max(1);
+
+            for (ms_idx, ms) in linear_milestones.iter().enumerate() {
                 let milestone_id = self.next_task_id();
 
-                let issues = self.generate_issues_for_milestone(&milestone_id, &intake)?;
+                // Assign a subset of requirements to each milestone
+                let start = ms_idx * reqs_per_milestone;
+                let end = (start + reqs_per_milestone).min(requirements.len());
+
+                let mut milestone_intake = intake.clone();
+                if start < requirements.len() {
+                    milestone_intake.requirements = requirements[start..end].to_vec();
+                } else {
+                    milestone_intake.requirements = Vec::new();
+                }
+
+                // Skip milestones with no assigned requirements
+                if milestone_intake.requirements.is_empty() {
+                    continue;
+                }
+
+                let issues =
+                    self.generate_issues_for_milestone(&milestone_id, &milestone_intake)?;
 
                 milestones.push(PlannedMilestone {
                     id: milestone_id,
@@ -445,7 +477,7 @@ impl PlanGenerator {
         let mut content = format!(
             r#"---
 id: {}
-title: {}
+title: "{}"
 milestone: "{}"
 priority: {}
 estimate: {}
@@ -493,8 +525,8 @@ parent: null
 {}
 "#,
             issue.id,
-            issue.title,
-            milestone.name,
+            yaml_escape(&issue.title),
+            yaml_escape(&milestone.name),
             issue.priority as u8,
             issue
                 .estimate
@@ -582,7 +614,7 @@ parent: null
         let content = format!(
             r#"---
 id: {}
-title: {}
+title: "{}"
 milestone: "{}"
 priority: {}
 estimate: {}
@@ -630,8 +662,8 @@ parent: {}
 {}
 "#,
             sub_issue.id,
-            sub_issue.title,
-            milestone.name,
+            yaml_escape(&sub_issue.title),
+            yaml_escape(&milestone.name),
             sub_issue.priority as u8,
             sub_issue
                 .estimate
