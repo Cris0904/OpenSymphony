@@ -704,15 +704,10 @@ pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), Genera
 
     for milestone in &artifacts.milestones {
         for issue in &milestone.issues {
-            validate_task_dependencies(&issue.id, &issue.blocked_by, &artifacts, &mut visited)?;
+            validate_task_dependencies(&issue.id, artifacts, &mut visited)?;
 
             for sub_issue in &issue.sub_issues {
-                validate_task_dependencies(
-                    &sub_issue.id,
-                    &sub_issue.blocked_by,
-                    &artifacts,
-                    &mut visited,
-                )?;
+                validate_task_dependencies(&sub_issue.id, artifacts, &mut visited)?;
             }
         }
     }
@@ -722,7 +717,6 @@ pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), Genera
 
 fn validate_task_dependencies(
     task_id: &TaskId,
-    dependencies: &[TaskId],
     artifacts: &PlanArtifacts,
     visited: &mut BTreeMap<TaskId, bool>,
 ) -> Result<(), GenerationError> {
@@ -738,12 +732,31 @@ fn validate_task_dependencies(
 
     visited.insert(task_id.clone(), true);
 
-    for dep in dependencies {
-        validate_task_dependencies(dep, &[], artifacts, visited)?;
+    // Look up the task's actual blocked_by dependencies from the artifact graph
+    let blocked_by = find_task_blocked_by(task_id, artifacts);
+    for dep in &blocked_by {
+        validate_task_dependencies(dep, artifacts, visited)?;
     }
 
     visited.insert(task_id.clone(), false);
     Ok(())
+}
+
+/// Finds the blocked_by list for a given task ID across all milestones, issues, and sub-issues.
+fn find_task_blocked_by(task_id: &TaskId, artifacts: &PlanArtifacts) -> Vec<TaskId> {
+    for milestone in &artifacts.milestones {
+        for issue in &milestone.issues {
+            if issue.id == *task_id {
+                return issue.blocked_by.clone();
+            }
+            for sub_issue in &issue.sub_issues {
+                if sub_issue.id == *task_id {
+                    return sub_issue.blocked_by.clone();
+                }
+            }
+        }
+    }
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -909,6 +922,231 @@ mod tests {
                 "Task ID {} not found in milestone/issue/sub-issue structure",
                 task.id.0
             );
+        }
+    }
+
+    #[test]
+    fn dependency_graph_validation_detects_cycle() {
+        // Build artifacts with a cycle: A → B → C → A
+        // All three tasks must exist as issues/sub-issues for the graph traversal to find the cycle.
+        let cycle_a = TaskId("TASK-001".to_string());
+        let cycle_b = TaskId("TASK-002".to_string());
+        let cycle_c = TaskId("TASK-003".to_string());
+
+        let artifacts = PlanArtifacts {
+            generated_at: chrono::Utc::now(),
+            planning_wave: "test".to_string(),
+            milestones: vec![PlannedMilestone {
+                id: TaskId("MS-1".to_string()),
+                name: "M1: Test".to_string(),
+                goal: "Test goal".to_string(),
+                issues: vec![
+                    PlannedIssue {
+                        id: cycle_a.clone(),
+                        title: "Task A".to_string(),
+                        summary: "A".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![cycle_c.clone()], // A blocked by C (cycle)
+                        blocks: vec![],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                    PlannedIssue {
+                        id: cycle_b.clone(),
+                        title: "Task B".to_string(),
+                        summary: "B".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![cycle_a.clone()], // B blocked by A
+                        blocks: vec![],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                    PlannedIssue {
+                        id: cycle_c.clone(),
+                        title: "Task C".to_string(),
+                        summary: "C".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![cycle_b.clone()], // C blocked by B
+                        blocks: vec![],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                ],
+                acceptance_criteria: vec![],
+                verification_steps: vec![],
+                notes: None,
+            }],
+            manifest: TaskPackageManifest {
+                planning_wave: "test".to_string(),
+                tasks_dir: "docs/tasks".to_string(),
+                milestones: vec!["M1: Test".to_string()],
+                tasks: vec![
+                    ManifestTask {
+                        id: cycle_a.clone(),
+                        file: "docs/tasks/a.md".to_string(),
+                    },
+                    ManifestTask {
+                        id: cycle_b.clone(),
+                        file: "docs/tasks/b.md".to_string(),
+                    },
+                    ManifestTask {
+                        id: cycle_c.clone(),
+                        file: "docs/tasks/c.md".to_string(),
+                    },
+                ],
+            },
+            milestone_index: String::new(),
+            task_files: BTreeMap::new(),
+        };
+
+        let result = validate_dependency_graph(&artifacts);
+        assert!(result.is_err(), "cycle should be detected");
+        match result.unwrap_err() {
+            GenerationError::CircularDependency(msg) => {
+                assert!(msg.contains("Cycle"));
+            }
+            other => panic!("expected CircularDependency, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dependency_graph_validation_detects_deep_cycle() {
+        // Build a 3-node cycle: A blocks B, B blocks C, C blocks A
+        // The old buggy implementation (passing &[] for deps) would NOT detect this.
+        let cycle_a = TaskId("TASK-001".to_string());
+        let cycle_b = TaskId("TASK-002".to_string());
+        let cycle_c = TaskId("TASK-003".to_string());
+
+        let artifacts = PlanArtifacts {
+            generated_at: chrono::Utc::now(),
+            planning_wave: "test".to_string(),
+            milestones: vec![PlannedMilestone {
+                id: TaskId("MS-1".to_string()),
+                name: "M1: Test".to_string(),
+                goal: "Test goal".to_string(),
+                issues: vec![
+                    PlannedIssue {
+                        id: cycle_a.clone(),
+                        title: "Task A".to_string(),
+                        summary: "A".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![cycle_c.clone()],
+                        blocks: vec![cycle_b.clone()],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                    PlannedIssue {
+                        id: cycle_b.clone(),
+                        title: "Task B".to_string(),
+                        summary: "B".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![cycle_a.clone()],
+                        blocks: vec![cycle_c.clone()],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                    PlannedIssue {
+                        id: cycle_c.clone(),
+                        title: "Task C".to_string(),
+                        summary: "C".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![cycle_b.clone()],
+                        blocks: vec![],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                ],
+                acceptance_criteria: vec![],
+                verification_steps: vec![],
+                notes: None,
+            }],
+            manifest: TaskPackageManifest {
+                planning_wave: "test".to_string(),
+                tasks_dir: "docs/tasks".to_string(),
+                milestones: vec!["M1: Test".to_string()],
+                tasks: vec![
+                    ManifestTask {
+                        id: cycle_a.clone(),
+                        file: "docs/tasks/a.md".to_string(),
+                    },
+                    ManifestTask {
+                        id: cycle_b.clone(),
+                        file: "docs/tasks/b.md".to_string(),
+                    },
+                    ManifestTask {
+                        id: cycle_c.clone(),
+                        file: "docs/tasks/c.md".to_string(),
+                    },
+                ],
+            },
+            milestone_index: String::new(),
+            task_files: BTreeMap::new(),
+        };
+
+        let result = validate_dependency_graph(&artifacts);
+        assert!(
+            result.is_err(),
+            "deep 3-node cycle should be detected (old bug passed &[] for deps)"
+        );
+        match result.unwrap_err() {
+            GenerationError::CircularDependency(msg) => {
+                assert!(msg.contains("Cycle"));
+            }
+            other => panic!("expected CircularDependency, got {:?}", other),
         }
     }
 }

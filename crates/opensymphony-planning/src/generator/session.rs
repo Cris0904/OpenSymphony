@@ -6,9 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::codebase::CodebaseAnalysis;
-use crate::linear_graph::LinearGraphAnalysis;
-use crate::research::ResearchArtifactStore;
+use super::super::codebase::CodebaseAnalysis;
+use super::super::linear_graph::LinearGraphAnalysis;
+use super::super::research::ResearchArtifactStore;
 
 /// Intake captures the initial requirements, constraints, and goals
 /// gathered from human-AI collaboration sessions.
