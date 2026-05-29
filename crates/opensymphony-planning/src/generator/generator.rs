@@ -285,6 +285,11 @@ impl PlanGenerator {
 
         // Generate implementation sub-issue
         let impl_id = self.next_task_id();
+
+        // Generate validation sub-issue (needs impl_id for blocked_by)
+        let val_id = self.next_task_id();
+
+        // Implementation sub-issue blocks the validation sub-issue
         sub_issues.push(PlannedSubIssue {
             id: impl_id.clone(),
             title: format!("Implement {}", requirement),
@@ -312,12 +317,11 @@ impl PlanGenerator {
             priority: TaskPriority::default(),
             estimate: Some(3),
             blocked_by: Vec::new(),
-            blocks: Vec::new(),
+            blocks: vec![val_id.clone()],
             task_file: Some(format!("docs/tasks/{}.md", impl_id)),
         });
 
-        // Generate validation sub-issue
-        let val_id = self.next_task_id();
+        // Validation sub-issue is blocked by the implementation sub-issue
         sub_issues.push(PlannedSubIssue {
             id: val_id.clone(),
             title: format!("Validate {}", requirement),
@@ -421,16 +425,10 @@ impl PlanGenerator {
         for milestone in milestones {
             for issue in &milestone.issues {
                 let content = self.render_issue_task_file(issue, milestone)?;
-                if let Some(ref task_file) = issue.task_file {
-                    let _ = task_file; // Used for manifest reference
-                }
                 task_files.insert(issue.id.clone(), content);
 
                 for sub_issue in &issue.sub_issues {
                     let content = self.render_sub_issue_task_file(sub_issue, issue, milestone)?;
-                    if let Some(ref task_file) = sub_issue.task_file {
-                        let _ = task_file; // Used for manifest reference
-                    }
                     task_files.insert(sub_issue.id.clone(), content);
                 }
             }
@@ -708,14 +706,16 @@ parent: {}
 
 /// Validates that a dependency graph has no cycles.
 pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), GenerationError> {
+    // Build adjacency map once for O(1) lookups instead of O(N) linear scans
+    let dep_map = build_dependency_map(artifacts);
     let mut visited = BTreeMap::new();
 
     for milestone in &artifacts.milestones {
         for issue in &milestone.issues {
-            validate_task_dependencies(&issue.id, artifacts, &mut visited)?;
+            validate_task_dependencies_with_map(&issue.id, &dep_map, &mut visited)?;
 
             for sub_issue in &issue.sub_issues {
-                validate_task_dependencies(&sub_issue.id, artifacts, &mut visited)?;
+                validate_task_dependencies_with_map(&sub_issue.id, &dep_map, &mut visited)?;
             }
         }
     }
@@ -723,9 +723,23 @@ pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), Genera
     Ok(())
 }
 
-fn validate_task_dependencies(
+/// Builds a lookup map from task ID to its blocked_by dependencies.
+fn build_dependency_map(artifacts: &PlanArtifacts) -> BTreeMap<TaskId, Vec<TaskId>> {
+    let mut map = BTreeMap::new();
+    for milestone in &artifacts.milestones {
+        for issue in &milestone.issues {
+            map.insert(issue.id.clone(), issue.blocked_by.clone());
+            for sub_issue in &issue.sub_issues {
+                map.insert(sub_issue.id.clone(), sub_issue.blocked_by.clone());
+            }
+        }
+    }
+    map
+}
+
+fn validate_task_dependencies_with_map(
     task_id: &TaskId,
-    artifacts: &PlanArtifacts,
+    dep_map: &BTreeMap<TaskId, Vec<TaskId>>,
     visited: &mut BTreeMap<TaskId, bool>,
 ) -> Result<(), GenerationError> {
     if let Some(&in_progress) = visited.get(task_id) {
@@ -740,31 +754,15 @@ fn validate_task_dependencies(
 
     visited.insert(task_id.clone(), true);
 
-    // Look up the task's actual blocked_by dependencies from the artifact graph
-    let blocked_by = find_task_blocked_by(task_id, artifacts);
-    for dep in &blocked_by {
-        validate_task_dependencies(dep, artifacts, visited)?;
+    // O(1) lookup instead of linear scan
+    if let Some(deps) = dep_map.get(task_id) {
+        for dep in deps {
+            validate_task_dependencies_with_map(dep, dep_map, visited)?;
+        }
     }
 
     visited.insert(task_id.clone(), false);
     Ok(())
-}
-
-/// Finds the blocked_by list for a given task ID across all milestones, issues, and sub-issues.
-fn find_task_blocked_by(task_id: &TaskId, artifacts: &PlanArtifacts) -> Vec<TaskId> {
-    for milestone in &artifacts.milestones {
-        for issue in &milestone.issues {
-            if issue.id == *task_id {
-                return issue.blocked_by.clone();
-            }
-            for sub_issue in &issue.sub_issues {
-                if sub_issue.id == *task_id {
-                    return sub_issue.blocked_by.clone();
-                }
-            }
-        }
-    }
-    Vec::new()
 }
 
 #[cfg(test)]
