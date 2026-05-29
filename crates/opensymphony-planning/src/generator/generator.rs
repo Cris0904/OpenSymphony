@@ -229,6 +229,14 @@ impl PlanGenerator {
                 Vec::new()
             };
 
+            // Populate blocks symmetrically: if this issue is blocked by the previous,
+            // the previous issue blocks this one
+            if !blocked_by.is_empty() {
+                if let Some(prev_issue) = issues.last_mut() {
+                    prev_issue.blocks.push(issue_id.clone());
+                }
+            }
+
             issues.push(PlannedIssue {
                 id: issue_id.clone(),
                 title: requirement.clone(),
@@ -571,7 +579,7 @@ parent: null
         &self,
         sub_issue: &PlannedSubIssue,
         parent_issue: &PlannedIssue,
-        _milestone: &PlannedMilestone,
+        milestone: &PlannedMilestone,
     ) -> Result<String, GenerationError> {
         let content = format!(
             r#"---
@@ -625,7 +633,7 @@ parent: {}
 "#,
             sub_issue.id,
             sub_issue.title,
-            parent_issue.title,
+            milestone.name,
             sub_issue.priority as u8,
             sub_issue
                 .estimate
@@ -957,7 +965,7 @@ mod tests {
         let cycle_c = TaskId("TASK-003".to_string());
 
         let artifacts = PlanArtifacts {
-            generated_at: chrono::Utc::now(),
+            generated_at: Utc::now(),
             planning_wave: "test".to_string(),
             milestones: vec![PlannedMilestone {
                 id: TaskId("MS-1".to_string()),
@@ -1068,7 +1076,7 @@ mod tests {
         let cycle_c = TaskId("TASK-003".to_string());
 
         let artifacts = PlanArtifacts {
-            generated_at: chrono::Utc::now(),
+            generated_at: Utc::now(),
             planning_wave: "test".to_string(),
             milestones: vec![PlannedMilestone {
                 id: TaskId("MS-1".to_string()),
