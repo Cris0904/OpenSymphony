@@ -218,8 +218,7 @@ impl PlanGenerator {
                     .map(|r| (**r).clone())
                     .collect();
 
-                let issues =
-                    self.generate_issues_for_milestone(&milestone_id, &milestone_intake);
+                let issues = self.generate_issues_for_milestone(&milestone_id, &milestone_intake);
 
                 milestones.push(PlannedMilestone {
                     id: milestone_id,
@@ -387,10 +386,7 @@ impl PlanGenerator {
         sub_issues
     }
 
-    fn generate_manifest(
-        &self,
-        milestones: &[PlannedMilestone],
-    ) -> TaskPackageManifest {
+    fn generate_manifest(&self, milestones: &[PlannedMilestone]) -> TaskPackageManifest {
         let mut tasks = Vec::new();
         let mut milestone_names = Vec::new();
 
@@ -446,10 +442,7 @@ impl PlanGenerator {
         md
     }
 
-    fn generate_task_files(
-        &self,
-        milestones: &[PlannedMilestone],
-    ) -> BTreeMap<TaskId, String> {
+    fn generate_task_files(&self, milestones: &[PlannedMilestone]) -> BTreeMap<TaskId, String> {
         let mut task_files = BTreeMap::new();
 
         for milestone in milestones {
@@ -467,11 +460,7 @@ impl PlanGenerator {
         task_files
     }
 
-    fn render_issue_task_file(
-        &self,
-        issue: &PlannedIssue,
-        milestone: &PlannedMilestone,
-    ) -> String {
+    fn render_issue_task_file(&self, issue: &PlannedIssue, milestone: &PlannedMilestone) -> String {
         let mut content = format!(
             r#"---
 id: {}
