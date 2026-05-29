@@ -58,10 +58,10 @@ impl PlanGenerator {
     pub fn generate(&mut self) -> Result<PlanArtifacts, GenerationError> {
         self.validate_session()?;
 
-        let milestones = self.generate_milestones()?;
-        let manifest = self.generate_manifest(&milestones)?;
+        let milestones = self.generate_milestones();
+        let manifest = self.generate_manifest(&milestones);
         let milestone_index = self.render_milestone_index(&milestones);
-        let task_files = self.generate_task_files(&milestones)?;
+        let task_files = self.generate_task_files(&milestones);
 
         Ok(PlanArtifacts {
             generated_at: Utc::now(),
@@ -82,13 +82,13 @@ impl PlanGenerator {
         self.validate_session()?;
 
         let milestones = if scope.includes_milestones() {
-            self.generate_milestones()?
+            self.generate_milestones()
         } else {
             existing.milestones.clone()
         };
 
         let manifest = if scope.includes_manifest() {
-            self.generate_manifest(&milestones)?
+            self.generate_manifest(&milestones)
         } else {
             existing.manifest.clone()
         };
@@ -100,7 +100,7 @@ impl PlanGenerator {
         };
 
         let task_files = if scope.includes_task_files() {
-            self.generate_task_files(&milestones)?
+            self.generate_task_files(&milestones)
         } else {
             existing.task_files.clone()
         };
@@ -134,7 +134,7 @@ impl PlanGenerator {
         TaskId(format!("TASK-{:03}", self.task_counter))
     }
 
-    fn generate_milestones(&mut self) -> Result<Vec<PlannedMilestone>, GenerationError> {
+    fn generate_milestones(&mut self) -> Vec<PlannedMilestone> {
         let planning_wave = self.session.intake.planning_wave.clone();
         let project_description = self.session.intake.project_description.clone();
         let success_criteria = self.session.intake.success_criteria.clone();
@@ -176,7 +176,7 @@ impl PlanGenerator {
                     .join(" ")
             );
 
-            let issues = self.generate_issues_for_milestone(&milestone_id, &intake)?;
+            let issues = self.generate_issues_for_milestone(&milestone_id, &intake);
 
             milestones.push(PlannedMilestone {
                 id: milestone_id,
@@ -219,7 +219,7 @@ impl PlanGenerator {
                     .collect();
 
                 let issues =
-                    self.generate_issues_for_milestone(&milestone_id, &milestone_intake)?;
+                    self.generate_issues_for_milestone(&milestone_id, &milestone_intake);
 
                 milestones.push(PlannedMilestone {
                     id: milestone_id,
@@ -233,14 +233,14 @@ impl PlanGenerator {
             }
         }
 
-        Ok(milestones)
+        milestones
     }
 
     fn generate_issues_for_milestone(
         &mut self,
         _milestone_id: &TaskId,
         intake: &IntakeContext,
-    ) -> Result<Vec<PlannedIssue>, GenerationError> {
+    ) -> Vec<PlannedIssue> {
         let mut issues: Vec<PlannedIssue> = Vec::new();
 
         // Generate one issue per requirement as a starting point
@@ -248,7 +248,7 @@ impl PlanGenerator {
             let issue_id = self.next_task_id();
 
             // Each issue gets sub-issues for implementation
-            let sub_issues = self.generate_sub_issues_for_issue(&issue_id, requirement, intake)?;
+            let sub_issues = self.generate_sub_issues_for_issue(&issue_id, requirement, intake);
 
             let blocked_by: Vec<TaskId> = if idx > 0 {
                 issues
@@ -302,7 +302,7 @@ impl PlanGenerator {
             });
         }
 
-        Ok(issues)
+        issues
     }
 
     fn generate_sub_issues_for_issue(
@@ -310,7 +310,7 @@ impl PlanGenerator {
         _issue_id: &TaskId,
         requirement: &str,
         _intake: &IntakeContext,
-    ) -> Result<Vec<PlannedSubIssue>, GenerationError> {
+    ) -> Vec<PlannedSubIssue> {
         let mut sub_issues = Vec::new();
 
         // Generate implementation sub-issue
@@ -384,13 +384,13 @@ impl PlanGenerator {
             task_file: Some(format!("{}/{}.md", self.session.tasks_dir, val_id)),
         });
 
-        Ok(sub_issues)
+        sub_issues
     }
 
     fn generate_manifest(
         &self,
         milestones: &[PlannedMilestone],
-    ) -> Result<TaskPackageManifest, GenerationError> {
+    ) -> TaskPackageManifest {
         let mut tasks = Vec::new();
         let mut milestone_names = Vec::new();
 
@@ -416,12 +416,12 @@ impl PlanGenerator {
             }
         }
 
-        Ok(TaskPackageManifest {
+        TaskPackageManifest {
             planning_wave: self.session.intake.planning_wave.clone(),
             tasks_dir: self.session.tasks_dir.clone(),
             milestones: milestone_names,
             tasks,
-        })
+        }
     }
 
     fn render_milestone_index(&self, milestones: &[PlannedMilestone]) -> String {
@@ -449,29 +449,29 @@ impl PlanGenerator {
     fn generate_task_files(
         &self,
         milestones: &[PlannedMilestone],
-    ) -> Result<BTreeMap<TaskId, String>, GenerationError> {
+    ) -> BTreeMap<TaskId, String> {
         let mut task_files = BTreeMap::new();
 
         for milestone in milestones {
             for issue in &milestone.issues {
-                let content = self.render_issue_task_file(issue, milestone)?;
+                let content = self.render_issue_task_file(issue, milestone);
                 task_files.insert(issue.id.clone(), content);
 
                 for sub_issue in &issue.sub_issues {
-                    let content = self.render_sub_issue_task_file(sub_issue, issue, milestone)?;
+                    let content = self.render_sub_issue_task_file(sub_issue, issue, milestone);
                     task_files.insert(sub_issue.id.clone(), content);
                 }
             }
         }
 
-        Ok(task_files)
+        task_files
     }
 
     fn render_issue_task_file(
         &self,
         issue: &PlannedIssue,
         milestone: &PlannedMilestone,
-    ) -> Result<String, GenerationError> {
+    ) -> String {
         let mut content = format!(
             r#"---
 id: {}
@@ -600,7 +600,7 @@ parent: null
             }
         }
 
-        Ok(content)
+        content
     }
 
     fn render_sub_issue_task_file(
@@ -608,7 +608,7 @@ parent: null
         sub_issue: &PlannedSubIssue,
         parent_issue: &PlannedIssue,
         milestone: &PlannedMilestone,
-    ) -> Result<String, GenerationError> {
+    ) -> String {
         let content = format!(
             r#"---
 id: {}
@@ -730,7 +730,7 @@ parent: {}
             sub_issue.notes.as_deref().unwrap_or("None"),
         );
 
-        Ok(content)
+        content
     }
 }
 
@@ -901,7 +901,7 @@ mod tests {
         let result = generator.generate();
 
         assert!(result.is_err());
-        match result.unwrap_err() {
+        match result.expect_err("expected error should be returned") {
             GenerationError::IncompleteSession(field) => {
                 assert_eq!(field, "requirements");
             }
@@ -1090,7 +1090,7 @@ mod tests {
 
         let result = validate_dependency_graph(&artifacts);
         assert!(result.is_err(), "cycle should be detected");
-        match result.unwrap_err() {
+        match result.expect_err("expected error should be returned") {
             GenerationError::CircularDependency(msg) => {
                 assert!(msg.contains("Cycle"));
             }
@@ -1204,7 +1204,7 @@ mod tests {
             result.is_err(),
             "deep 3-node cycle should be detected (old bug passed &[] for deps)"
         );
-        match result.unwrap_err() {
+        match result.expect_err("expected error should be returned") {
             GenerationError::CircularDependency(msg) => {
                 assert!(msg.contains("Cycle"));
             }
