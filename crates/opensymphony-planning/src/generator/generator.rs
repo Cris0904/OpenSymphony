@@ -195,30 +195,29 @@ impl PlanGenerator {
                 notes: None,
             });
         } else {
-            // Distribute requirements across Linear milestones to avoid duplicates
-            let reqs_per_milestone = requirements
-                .len()
-                .saturating_div(linear_milestones.len())
-                .max(1);
+            // Distribute requirements across Linear milestones using round-robin
+            // to ensure all requirements are assigned without dropping any
+            let mut milestone_requirements: Vec<Vec<&String>> =
+                vec![Vec::new(); linear_milestones.len()];
+
+            for (req_idx, req) in requirements.iter().enumerate() {
+                milestone_requirements[req_idx % linear_milestones.len()].push(req);
+            }
 
             for (ms_idx, ms) in linear_milestones.iter().enumerate() {
                 let milestone_id = self.next_task_id();
 
-                // Assign a subset of requirements to each milestone
-                let start = ms_idx * reqs_per_milestone;
-                let end = (start + reqs_per_milestone).min(requirements.len());
-
-                let mut milestone_intake = intake.clone();
-                if start < requirements.len() {
-                    milestone_intake.requirements = requirements[start..end].to_vec();
-                } else {
-                    milestone_intake.requirements = Vec::new();
-                }
-
                 // Skip milestones with no assigned requirements
-                if milestone_intake.requirements.is_empty() {
+                if milestone_requirements[ms_idx].is_empty() {
                     continue;
                 }
+
+                let mut milestone_intake = intake.clone();
+                milestone_intake.requirements =
+                    milestone_requirements[ms_idx]
+                        .iter()
+                        .map(|r| (**r).clone())
+                        .collect();
 
                 let issues =
                     self.generate_issues_for_milestone(&milestone_id, &milestone_intake)?;
@@ -300,7 +299,7 @@ impl PlanGenerator {
                 blocked_by,
                 blocks: Vec::new(),
                 sub_issues,
-                task_file: Some(format!("docs/tasks/{}.md", issue_id)),
+                task_file: Some(format!("{}/{}.md", self.session.tasks_dir, issue_id)),
             });
         }
 
@@ -350,7 +349,7 @@ impl PlanGenerator {
             estimate: Some(3),
             blocked_by: Vec::new(),
             blocks: vec![val_id.clone()],
-            task_file: Some(format!("docs/tasks/{}.md", impl_id)),
+            task_file: Some(format!("{}/{}.md", self.session.tasks_dir, impl_id)),
         });
 
         // Validation sub-issue is blocked by the implementation sub-issue
@@ -383,7 +382,7 @@ impl PlanGenerator {
             estimate: Some(2),
             blocked_by: vec![impl_id],
             blocks: Vec::new(),
-            task_file: Some(format!("docs/tasks/{}.md", val_id)),
+            task_file: Some(format!("{}/{}.md", self.session.tasks_dir, val_id)),
         });
 
         Ok(sub_issues)
@@ -756,6 +755,9 @@ pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), Genera
 }
 
 /// Builds a lookup map from task ID to its blocked_by dependencies.
+/// Note: blocks field is the inverse of blocked_by and represents the same
+/// dependency relationship from the other direction. We only need one direction
+/// for cycle detection - blocked_by is the canonical source.
 fn build_dependency_map(artifacts: &PlanArtifacts) -> BTreeMap<TaskId, Vec<TaskId>> {
     let mut map = BTreeMap::new();
     for milestone in &artifacts.milestones {
