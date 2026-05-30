@@ -19,9 +19,8 @@ pub mod generator;
 pub mod session;
 
 pub use domain::{
-    AcceptanceCriterion, DependencyType, ManifestTask, PlanArtifacts, PlannedIssue,
-    PlannedMilestone, PlannedSubIssue, RegenerationScope, TaskDependency, TaskId,
-    TaskPackageManifest, TaskPriority,
+    AcceptanceCriterion, ManifestTask, PlanArtifacts, PlannedIssue, PlannedMilestone,
+    PlannedSubIssue, RegenerationScope, TaskId, TaskPackageManifest, TaskPriority,
 };
 pub use generator::{GenerationError, PlanGenerator, validate_dependency_graph};
 pub use session::{IntakeContext, PlanningSession};

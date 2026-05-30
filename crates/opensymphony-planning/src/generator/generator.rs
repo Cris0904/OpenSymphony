@@ -21,22 +21,37 @@ use super::session::{IntakeContext, PlanningSession};
 pub enum GenerationError {
     #[error("planning session is incomplete: missing {0}")]
     IncompleteSession(String),
-    #[error("invalid task ID: {0}")]
-    InvalidTaskId(String),
     #[error("circular dependency detected: {0}")]
     CircularDependency(String),
-    #[error("task file content generation failed: {0}")]
-    TaskFileGeneration(String),
 }
 
 /// Escapes a string for safe use in YAML frontmatter double-quoted values.
+/// Handles backslashes, quotes, newlines, control characters (0x00-0x1F),
+/// and the `#` character to prevent accidental comment injection.
 fn yaml_escape(s: &str) -> String {
-    // Replace backslashes first, then quotes, then other special chars
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut result = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '\\' => result.push_str("\\\\"),
+            '"' => result.push_str("\\\""),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            '#' => result.push_str("\\#"),
+            c if (c as u32) < 0x20 => {
+                // Escape control characters as unicode escapes
+                result.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
+/// Escapes a string for safe use in markdown list items within task files.
+/// Newlines in the content are escaped to prevent breaking markdown formatting.
+fn markdown_escape(s: &str) -> String {
+    s.replace('\n', "\\n").replace('\r', "")
 }
 
 /// The generator produces structured plan artifacts from a planning session.
@@ -207,8 +222,12 @@ impl PlanGenerator {
             for (ms_idx, ms) in linear_milestones.iter().enumerate() {
                 let milestone_id = self.next_task_id();
 
-                // Skip milestones with no assigned requirements
+                // Warn when a milestone has no assigned requirements instead of silently skipping
                 if milestone_requirements[ms_idx].is_empty() {
+                    eprintln!(
+                        "Warning: Linear milestone '{}' has no assigned requirements, skipping.",
+                        ms.milestone_name
+                    );
                     continue;
                 }
 
@@ -531,11 +550,11 @@ parent: null
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>()
                 .join(", "),
-            issue.summary,
+            markdown_escape(&issue.summary),
             issue
                 .scope_in
                 .iter()
-                .map(|s| format!("- {}", s))
+                .map(|s| format!("- {}", markdown_escape(s)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             if issue.scope_out.is_empty() {
@@ -544,41 +563,45 @@ parent: null
                 issue
                     .scope_out
                     .iter()
-                    .map(|s| format!("- {}", s))
+                    .map(|s| format!("- {}", markdown_escape(s)))
                     .collect::<Vec<_>>()
                     .join("\n")
             },
             issue
                 .deliverables
                 .iter()
-                .map(|d| format!("- {}", d))
+                .map(|d| format!("- {}", markdown_escape(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .acceptance_criteria
                 .iter()
-                .map(|c| format!("- [ ] {}", c.description))
+                .map(|c| format!("- [ ] {}", markdown_escape(&c.description)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .verification_steps
                 .iter()
-                .map(|v| format!("- {}", v))
+                .map(|v| format!("- {}", markdown_escape(v)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .context
                 .iter()
-                .map(|c| format!("- {}", c))
+                .map(|c| format!("- {}", markdown_escape(c)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .definition_of_ready
                 .iter()
-                .map(|d| format!("- [ ] {}", d))
+                .map(|d| format!("- [ ] {}", markdown_escape(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            issue.notes.as_deref().unwrap_or("None"),
+            issue
+                .notes
+                .as_deref()
+                .map(markdown_escape)
+                .unwrap_or_else(|| "None".to_string()),
         );
 
         // Include sub-issues as part of the issue content
@@ -669,11 +692,11 @@ parent: {}
                 .collect::<Vec<_>>()
                 .join(", "),
             parent_issue.id,
-            sub_issue.summary,
+            markdown_escape(&sub_issue.summary),
             sub_issue
                 .scope_in
                 .iter()
-                .map(|s| format!("- {}", s))
+                .map(|s| format!("- {}", markdown_escape(s)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             if sub_issue.scope_out.is_empty() {
@@ -682,41 +705,45 @@ parent: {}
                 sub_issue
                     .scope_out
                     .iter()
-                    .map(|s| format!("- {}", s))
+                    .map(|s| format!("- {}", markdown_escape(s)))
                     .collect::<Vec<_>>()
                     .join("\n")
             },
             sub_issue
                 .deliverables
                 .iter()
-                .map(|d| format!("- {}", d))
+                .map(|d| format!("- {}", markdown_escape(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .acceptance_criteria
                 .iter()
-                .map(|c| format!("- [ ] {}", c.description))
+                .map(|c| format!("- [ ] {}", markdown_escape(&c.description)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .verification_steps
                 .iter()
-                .map(|v| format!("- {}", v))
+                .map(|v| format!("- {}", markdown_escape(v)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .context
                 .iter()
-                .map(|c| format!("- {}", c))
+                .map(|c| format!("- {}", markdown_escape(c)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .definition_of_ready
                 .iter()
-                .map(|d| format!("- [ ] {}", d))
+                .map(|d| format!("- [ ] {}", markdown_escape(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            sub_issue.notes.as_deref().unwrap_or("None"),
+            sub_issue
+                .notes
+                .as_deref()
+                .map(markdown_escape)
+                .unwrap_or_else(|| "None".to_string()),
         );
 
         content

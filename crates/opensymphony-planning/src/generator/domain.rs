@@ -163,24 +163,6 @@ pub struct PlanArtifacts {
     pub task_files: BTreeMap<TaskId, String>,
 }
 
-/// Represents a dependency between two tasks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TaskDependency {
-    pub from_task: TaskId,
-    pub to_task: TaskId,
-    #[serde(default)]
-    pub dependency_type: DependencyType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum DependencyType {
-    #[default]
-    BlockedBy,
-    Blocks,
-    Parent,
-}
-
 /// Scopes which artifacts should be regenerated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegenerationScope {
