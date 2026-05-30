@@ -211,12 +211,8 @@ impl LivenessTracker {
 
     /// Compute the stall deadline (sooner of idle deadline and runtime cap).
     pub fn stall_deadline_at(&self) -> Option<TimestampMs> {
-        let Some(last_activity) = self.last_activity_at else {
-            return None;
-        };
-        let Some(started_at) = self.started_at else {
-            return None;
-        };
+        let last_activity = self.last_activity_at?;
+        let started_at = self.started_at?;
 
         let idle_deadline = last_activity.saturating_add(self.idle_timeout_ms);
         match self.total_runtime_cap_ms {

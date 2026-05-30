@@ -89,6 +89,7 @@ impl RuntimeProgressSnapshot {
     }
 
     /// Update this snapshot to produce a new one with deltas computed.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &self,
         phase: RuntimeLivenessPhase,
