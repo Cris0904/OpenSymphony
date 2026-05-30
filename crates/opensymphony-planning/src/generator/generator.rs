@@ -26,20 +26,22 @@ pub enum GenerationError {
 }
 
 /// Escapes a string for safe use in YAML frontmatter double-quoted values.
-/// Handles backslashes, quotes, newlines, control characters (0x00-0x1F),
-/// and the `#` character to prevent accidental comment injection.
+/// Emits only YAML-recognized double-quoted escapes so generated frontmatter
+/// round-trips through parsers instead of relying on permissive behavior.
 fn yaml_escape(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 16);
-    for c in s.chars() {
+    let starts_with_complex_key_marker = s.starts_with("? ");
+    for (idx, c) in s.chars().enumerate() {
         match c {
             '\\' => result.push_str("\\\\"),
             '"' => result.push_str("\\\""),
             '\n' => result.push_str("\\n"),
             '\r' => result.push_str("\\r"),
             '\t' => result.push_str("\\t"),
-            '#' => result.push_str("\\#"),
+            '*' => result.push_str("\\u002a"),
+            '&' => result.push_str("\\u0026"),
+            '?' if idx == 0 && starts_with_complex_key_marker => result.push_str("\\u003f"),
             c if (c as u32) < 0x20 => {
-                // Escape control characters as unicode escapes
                 result.push_str(&format!("\\u{:04x}", c as u32));
             }
             _ => result.push(c),
@@ -53,10 +55,100 @@ fn collapse_markdown_line(s: &str) -> String {
     s.replace('\n', "\\n").replace('\r', "")
 }
 
+fn render_id_list(ids: &[TaskId]) -> String {
+    ids.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_bullets(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|item| format!("- {}", collapse_markdown_line(item)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_optional_bullets(items: &[String]) -> String {
+    if items.is_empty() {
+        "- None".to_string()
+    } else {
+        render_bullets(items)
+    }
+}
+
+fn render_acceptance_criteria(criteria: &[AcceptanceCriterion]) -> String {
+    criteria
+        .iter()
+        .map(|criterion| format!("- [ ] {}", collapse_markdown_line(&criterion.description)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_checklist(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|item| format!("- [ ] {}", collapse_markdown_line(item)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_notes(notes: Option<&str>) -> String {
+    notes
+        .map(collapse_markdown_line)
+        .unwrap_or_else(|| "None".to_string())
+}
+
 /// The generator produces structured plan artifacts from a planning session.
 pub struct PlanGenerator {
     session: PlanningSession,
     task_counter: usize,
+}
+
+struct SubIssueGenerationContext {
+    issue_id: TaskId,
+    requirement: String,
+    planning_wave: String,
+    constraints: Vec<String>,
+    success_criteria: Vec<String>,
+}
+
+impl SubIssueGenerationContext {
+    fn from_intake(issue_id: &TaskId, requirement: &str, intake: &IntakeContext) -> Self {
+        Self {
+            issue_id: issue_id.clone(),
+            requirement: requirement.to_string(),
+            planning_wave: intake.planning_wave.clone(),
+            constraints: intake.constraints.clone(),
+            success_criteria: intake.success_criteria.clone(),
+        }
+    }
+
+    fn implementation_context(&self) -> Vec<String> {
+        let mut context = vec![
+            format!("Parent issue: {}", self.issue_id),
+            format!("Planning wave: {}", self.planning_wave),
+        ];
+        if !self.constraints.is_empty() {
+            context.push(format!(
+                "Technical constraints: {}",
+                self.constraints.join(", ")
+            ));
+        }
+        context
+    }
+
+    fn validation_context(&self) -> Vec<String> {
+        let mut context = vec![format!("Validates implementation of {}", self.requirement)];
+        if !self.success_criteria.is_empty() {
+            context.push(format!(
+                "Success criteria: {}",
+                self.success_criteria.join("; ")
+            ));
+        }
+        context
+    }
 }
 
 impl PlanGenerator {
@@ -245,11 +337,12 @@ impl PlanGenerator {
                                 open_questions: self.session.intake.open_questions.clone(),
                                 reference_docs: self.session.intake.reference_docs.clone(),
                             };
-                            let sub_issues = self.generate_sub_issues_for_issue(
+                            let sub_issue_context = SubIssueGenerationContext::from_intake(
                                 &issue.id,
                                 &requirement,
                                 &intake,
                             );
+                            let sub_issues = self.generate_sub_issues_for_issue(&sub_issue_context);
                             PlannedIssue {
                                 id: issue.id.clone(),
                                 title: issue.title.clone(),
@@ -388,6 +481,8 @@ impl PlanGenerator {
 
                 // Warn when a milestone has no assigned requirements instead of silently skipping
                 if milestone_requirements[ms_idx].is_empty() {
+                    // Internal source modules intentionally share the root
+                    // opensymphony package dependency graph.
                     tracing::warn!(
                         milestone = %ms.milestone_name,
                         "Linear milestone has no assigned requirements, skipping."
@@ -423,7 +518,9 @@ impl PlanGenerator {
             let issue_id = self.next_task_id();
 
             // Each issue gets sub-issues for implementation
-            let sub_issues = self.generate_sub_issues_for_issue(&issue_id, requirement, intake);
+            let sub_issue_context =
+                SubIssueGenerationContext::from_intake(&issue_id, requirement, intake);
+            let sub_issues = self.generate_sub_issues_for_issue(&sub_issue_context);
 
             let blocked_by: Vec<TaskId> = if idx > 0 {
                 issues
@@ -482,9 +579,7 @@ impl PlanGenerator {
 
     fn generate_sub_issues_for_issue(
         &mut self,
-        issue_id: &TaskId,
-        requirement: &str,
-        intake: &IntakeContext,
+        generation: &SubIssueGenerationContext,
     ) -> Vec<PlannedSubIssue> {
         let mut sub_issues = Vec::new();
 
@@ -494,33 +589,24 @@ impl PlanGenerator {
         // Generate validation sub-issue (needs impl_id for blocked_by)
         let val_id = self.next_task_id();
 
-        // Build context from intake parameters for richer sub-issue descriptions
-        let mut context = vec![
-            format!("Parent issue: {}", issue_id),
-            format!("Planning wave: {}", intake.planning_wave),
-        ];
-        if !intake.constraints.is_empty() {
-            context.push(format!(
-                "Technical constraints: {}",
-                intake.constraints.join(", ")
-            ));
-        }
-
         // Implementation sub-issue blocks the validation sub-issue
         sub_issues.push(PlannedSubIssue {
             id: impl_id.clone(),
-            title: format!("Implement {}", requirement),
+            title: format!("Implement {}", generation.requirement),
             summary: format!(
                 "Implementation unit for {} in the {} planning wave",
-                requirement, intake.planning_wave
+                generation.requirement, generation.planning_wave
             ),
-            scope_in: vec![format!("Core implementation of {}", requirement)],
-            scope_out: vec![format!("Testing and validation of {}", requirement)],
+            scope_in: vec![format!("Core implementation of {}", generation.requirement)],
+            scope_out: vec![format!(
+                "Testing and validation of {}",
+                generation.requirement
+            )],
             deliverables: vec!["Implementation code".to_string(), "Unit tests".to_string()],
             acceptance_criteria: vec![AcceptanceCriterion {
                 description: format!(
                     "Implementation of {} compiles and passes tests",
-                    requirement
+                    generation.requirement
                 ),
                 verification_command: Some("cargo test".to_string()),
             }],
@@ -528,7 +614,7 @@ impl PlanGenerator {
                 "Run unit tests".to_string(),
                 "Verify code style".to_string(),
             ],
-            context: context.clone(),
+            context: generation.implementation_context(),
             definition_of_ready: vec![
                 "Requirements are clear and understood.".to_string(),
                 "Dependencies are available.".to_string(),
@@ -541,20 +627,11 @@ impl PlanGenerator {
             task_file: Some(format!("{}/{}.md", self.session.tasks_dir, impl_id)),
         });
 
-        // Validation context referencing parent issue and intake success criteria
-        let mut validation_context = vec![format!("Validates implementation of {}", requirement)];
-        if !intake.success_criteria.is_empty() {
-            validation_context.push(format!(
-                "Success criteria: {}",
-                intake.success_criteria.join("; ")
-            ));
-        }
-
         // Validation sub-issue is blocked by the implementation sub-issue
         sub_issues.push(PlannedSubIssue {
             id: val_id.clone(),
-            title: format!("Validate {}", requirement),
-            summary: format!("Validation and testing for {}", requirement),
+            title: format!("Validate {}", generation.requirement),
+            summary: format!("Validation and testing for {}", generation.requirement),
             scope_in: vec![
                 "Integration testing".to_string(),
                 "Acceptance criteria verification".to_string(),
@@ -562,7 +639,10 @@ impl PlanGenerator {
             scope_out: vec!["Implementation changes".to_string()],
             deliverables: vec!["Test report".to_string(), "Validation evidence".to_string()],
             acceptance_criteria: vec![AcceptanceCriterion {
-                description: format!("All acceptance criteria for {} are met", requirement),
+                description: format!(
+                    "All acceptance criteria for {} are met",
+                    generation.requirement
+                ),
                 verification_command: Some("cargo test --all".to_string()),
             }],
             verification_steps: vec![
@@ -570,7 +650,7 @@ impl PlanGenerator {
                 "Verify acceptance criteria".to_string(),
                 "Generate validation report".to_string(),
             ],
-            context: validation_context,
+            context: generation.validation_context(),
             definition_of_ready: vec![
                 "Implementation is complete.".to_string(),
                 "Test environment is configured.".to_string(),
@@ -663,126 +743,73 @@ impl PlanGenerator {
     fn render_issue_task_file(&self, issue: &PlannedIssue, milestone: &PlannedMilestone) -> String {
         let mut content = format!(
             r#"---
-id: {}
-title: "{}"
-milestone: "{}"
-priority: {}
-estimate: {}
-blockedBy: [{}]
-blocks: [{}]
+id: {id}
+title: "{title}"
+milestone: "{milestone}"
+priority: {priority}
+estimate: {estimate}
+blockedBy: [{blocked_by}]
+blocks: [{blocks}]
 parent: null
 ---
 
 ## Summary
 
-{}
+{summary}
 
 ## Scope
 
 ### In scope
 
-{}
+{scope_in}
 
 ### Out of scope
 
-{}
+{scope_out}
 
 ## Deliverables
 
-{}
+{deliverables}
 
 ## Acceptance Criteria
 
-{}
+{acceptance_criteria}
 
 ## Test Plan
 
-{}
+{verification_steps}
 
 ## Context
 
-{}
+{context}
 
 ## Definition of Ready
 
-{}
+{definition_of_ready}
 
 ## Notes
 
-{}
+{notes}
 "#,
-            issue.id,
-            yaml_escape(&issue.title),
-            yaml_escape(&milestone.name),
-            issue.priority.as_linear_priority(),
-            issue
+            id = issue.id,
+            title = yaml_escape(&issue.title),
+            milestone = yaml_escape(&milestone.name),
+            priority = issue.priority.as_linear_priority(),
+            estimate = issue
                 .estimate
-                .map(|e| e.to_string())
+                .map(|estimate| estimate.to_string())
                 .unwrap_or_else(|| "null".to_string()),
-            issue
-                .blocked_by
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            issue
-                .blocks
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            collapse_markdown_line(&issue.summary),
-            issue
-                .scope_in
-                .iter()
-                .map(|s| format!("- {}", collapse_markdown_line(s)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            if issue.scope_out.is_empty() {
-                "- None".to_string()
-            } else {
-                issue
-                    .scope_out
-                    .iter()
-                    .map(|s| format!("- {}", collapse_markdown_line(s)))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            },
-            issue
-                .deliverables
-                .iter()
-                .map(|d| format!("- {}", collapse_markdown_line(d)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            issue
-                .acceptance_criteria
-                .iter()
-                .map(|c| format!("- [ ] {}", collapse_markdown_line(&c.description)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            issue
-                .verification_steps
-                .iter()
-                .map(|v| format!("- {}", collapse_markdown_line(v)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            issue
-                .context
-                .iter()
-                .map(|c| format!("- {}", collapse_markdown_line(c)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            issue
-                .definition_of_ready
-                .iter()
-                .map(|d| format!("- [ ] {}", collapse_markdown_line(d)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            issue
-                .notes
-                .as_deref()
-                .map(collapse_markdown_line)
-                .unwrap_or_else(|| "None".to_string()),
+            blocked_by = render_id_list(&issue.blocked_by),
+            blocks = render_id_list(&issue.blocks),
+            summary = collapse_markdown_line(&issue.summary),
+            scope_in = render_bullets(&issue.scope_in),
+            scope_out = render_optional_bullets(&issue.scope_out),
+            deliverables = render_bullets(&issue.deliverables),
+            acceptance_criteria = render_acceptance_criteria(&issue.acceptance_criteria),
+            verification_steps = render_bullets(&issue.verification_steps),
+            context = render_bullets(&issue.context),
+            definition_of_ready = render_checklist(&issue.definition_of_ready),
+            notes = render_notes(issue.notes.as_deref()),
         );
 
         // Include sub-issues as part of the issue content
@@ -804,127 +831,74 @@ parent: null
     ) -> String {
         let content = format!(
             r#"---
-id: {}
-title: "{}"
-milestone: "{}"
-priority: {}
-estimate: {}
-blockedBy: [{}]
-blocks: [{}]
-parent: {}
+id: {id}
+title: "{title}"
+milestone: "{milestone}"
+priority: {priority}
+estimate: {estimate}
+blockedBy: [{blocked_by}]
+blocks: [{blocks}]
+parent: {parent}
 ---
 
 ## Summary
 
-{}
+{summary}
 
 ## Scope
 
 ### In scope
 
-{}
+{scope_in}
 
 ### Out of scope
 
-{}
+{scope_out}
 
 ## Deliverables
 
-{}
+{deliverables}
 
 ## Acceptance Criteria
 
-{}
+{acceptance_criteria}
 
 ## Test Plan
 
-{}
+{verification_steps}
 
 ## Context
 
-{}
+{context}
 
 ## Definition of Ready
 
-{}
+{definition_of_ready}
 
 ## Notes
 
-{}
+{notes}
 "#,
-            sub_issue.id,
-            yaml_escape(&sub_issue.title),
-            yaml_escape(&milestone.name),
-            sub_issue.priority.as_linear_priority(),
-            sub_issue
+            id = sub_issue.id,
+            title = yaml_escape(&sub_issue.title),
+            milestone = yaml_escape(&milestone.name),
+            priority = sub_issue.priority.as_linear_priority(),
+            estimate = sub_issue
                 .estimate
-                .map(|e| e.to_string())
+                .map(|estimate| estimate.to_string())
                 .unwrap_or_else(|| "null".to_string()),
-            sub_issue
-                .blocked_by
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            sub_issue
-                .blocks
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            parent_issue.id,
-            collapse_markdown_line(&sub_issue.summary),
-            sub_issue
-                .scope_in
-                .iter()
-                .map(|s| format!("- {}", collapse_markdown_line(s)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            if sub_issue.scope_out.is_empty() {
-                "- None".to_string()
-            } else {
-                sub_issue
-                    .scope_out
-                    .iter()
-                    .map(|s| format!("- {}", collapse_markdown_line(s)))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            },
-            sub_issue
-                .deliverables
-                .iter()
-                .map(|d| format!("- {}", collapse_markdown_line(d)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            sub_issue
-                .acceptance_criteria
-                .iter()
-                .map(|c| format!("- [ ] {}", collapse_markdown_line(&c.description)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            sub_issue
-                .verification_steps
-                .iter()
-                .map(|v| format!("- {}", collapse_markdown_line(v)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            sub_issue
-                .context
-                .iter()
-                .map(|c| format!("- {}", collapse_markdown_line(c)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            sub_issue
-                .definition_of_ready
-                .iter()
-                .map(|d| format!("- [ ] {}", collapse_markdown_line(d)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            sub_issue
-                .notes
-                .as_deref()
-                .map(collapse_markdown_line)
-                .unwrap_or_else(|| "None".to_string()),
+            blocked_by = render_id_list(&sub_issue.blocked_by),
+            blocks = render_id_list(&sub_issue.blocks),
+            parent = parent_issue.id,
+            summary = collapse_markdown_line(&sub_issue.summary),
+            scope_in = render_bullets(&sub_issue.scope_in),
+            scope_out = render_optional_bullets(&sub_issue.scope_out),
+            deliverables = render_bullets(&sub_issue.deliverables),
+            acceptance_criteria = render_acceptance_criteria(&sub_issue.acceptance_criteria),
+            verification_steps = render_bullets(&sub_issue.verification_steps),
+            context = render_bullets(&sub_issue.context),
+            definition_of_ready = render_checklist(&sub_issue.definition_of_ready),
+            notes = render_notes(sub_issue.notes.as_deref()),
         );
 
         content
@@ -1040,6 +1014,17 @@ mod tests {
             },
             "docs/tasks",
         )
+    }
+
+    #[test]
+    fn yaml_escape_round_trips_yaml_indicator_characters() {
+        let raw = "? &anchor *alias # comment-ish\nquoted \"value\"\tcontrol\u{0007}";
+        let yaml = format!("title: \"{}\"\n", yaml_escape(raw));
+
+        let parsed: BTreeMap<String, String> =
+            serde_yaml::from_str(&yaml).expect("escaped frontmatter should parse");
+
+        assert_eq!(parsed.get("title").map(String::as_str), Some(raw));
     }
 
     #[test]
