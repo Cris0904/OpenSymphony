@@ -25,6 +25,7 @@ async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
+crossterm.workspace = true
 duckdb.workspace = true
 ftui.workspace = true
 futures-util.workspace = true
@@ -40,6 +41,7 @@ thiserror.workspace = true
 time.workspace = true
 tokio-tungstenite.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -55,7 +57,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/kumanday/OpenSymphony"
 rust-version = "1.93"
-version = "1.6.0"
+version = "1.6.3"
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }
@@ -77,6 +79,7 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["macros", "ws"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = "0.29"
 duckdb = { version = "1.10502.0", features = ["bundled"] }
 ftui = { version = "0.2.1", features = ["crossterm"] }
 futures-util = "0.3"
@@ -94,6 +97,7 @@ thiserror = "2"
 time = "=0.3.47"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+tokio-util = { version = "0.7", features = ["io"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
