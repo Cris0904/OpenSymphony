@@ -6,8 +6,9 @@ use std::{
 };
 
 use crate::opensymphony_domain::{
-    ConversationId, ConversationMetadata, IssueId, IssueIdentifier, NormalizedIssue, RunAttempt,
-    RuntimeStreamState, TimestampMs, WorkerId, WorkerOutcomeKind, WorkerOutcomeRecord,
+    ConversationId, ConversationMetadata, DurationMs, IssueId, IssueIdentifier, NormalizedIssue,
+    RunAttempt, RuntimeLivenessPhase, RuntimeProgressSnapshot, RuntimeStreamState, TimestampMs,
+    WorkerId, WorkerOutcomeKind, WorkerOutcomeRecord,
 };
 use crate::opensymphony_workflow::{
     Environment, OpenHandsConversationToolConfig, ProcessEnvironment, ResolvedWorkflow,
@@ -98,6 +99,171 @@ pub trait IssueSessionObserver {
 }
 
 impl IssueSessionObserver for () {}
+
+/// Tracks liveness signals during a long-running turn.
+///
+/// Counts event deltas, token deltas, execution-status changes, reconnect/reconcile
+/// progress, and terminal/log frames as liveness signals. When a progress signal is
+/// observed, the stall deadline slides forward.
+#[derive(Debug, Clone)]
+pub struct LivenessTracker {
+    /// Monotonic count of events observed since the session started.
+    event_count: u64,
+    /// Cumulative input tokens.
+    input_tokens: u64,
+    /// Cumulative output tokens.
+    output_tokens: u64,
+    /// Current execution status reported by the runtime.
+    execution_status: Option<String>,
+    /// Timestamp of the most recent liveness signal.
+    last_activity_at: Option<TimestampMs>,
+    /// Idle timeout — no liveness signal for this duration triggers a stall.
+    idle_timeout_ms: DurationMs,
+    /// Optional absolute wall-clock cap on total runtime.
+    total_runtime_cap_ms: Option<DurationMs>,
+    /// When the run started (wall-clock).
+    started_at: Option<TimestampMs>,
+}
+
+impl LivenessTracker {
+    pub fn new(idle_timeout_ms: DurationMs) -> Self {
+        Self::with_runtime_cap(idle_timeout_ms, None)
+    }
+
+    pub fn with_runtime_cap(
+        idle_timeout_ms: DurationMs,
+        total_runtime_cap_ms: Option<DurationMs>,
+    ) -> Self {
+        Self {
+            event_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            execution_status: None,
+            last_activity_at: None,
+            idle_timeout_ms,
+            total_runtime_cap_ms,
+            started_at: None,
+        }
+    }
+
+    /// Mark the start of a turn.
+    pub fn mark_started(&mut self, started_at: TimestampMs) {
+        self.started_at = Some(started_at);
+        self.last_activity_at = Some(started_at);
+    }
+
+    /// Record a new event as a liveness signal.
+    pub fn record_event(&mut self, event_at: TimestampMs) -> bool {
+        let advanced = self.advance_activity(event_at);
+        self.event_count = self.event_count.saturating_add(1);
+        advanced
+    }
+
+    /// Record a batch of newly-reconciled events.
+    pub fn record_reconciled_events(
+        &mut self,
+        count: u64,
+        reconciled_at: TimestampMs,
+    ) -> bool {
+        self.event_count = self.event_count.saturating_add(count);
+        self.advance_activity(reconciled_at)
+    }
+
+    /// Record a token accumulation update.
+    pub fn record_tokens(&mut self, input: u64, output: u64, recorded_at: TimestampMs) -> bool {
+        self.input_tokens = self.input_tokens.saturating_add(input);
+        self.output_tokens = self.output_tokens.saturating_add(output);
+        self.advance_activity(recorded_at)
+    }
+
+    /// Record an execution-status change as a liveness signal.
+    pub fn record_status_change(&mut self, status: &str, recorded_at: TimestampMs) -> bool {
+        let changed = self.execution_status.as_deref() != Some(status);
+        self.execution_status = Some(status.to_string());
+        if changed {
+            self.advance_activity(recorded_at);
+        }
+        changed
+    }
+
+    /// Check whether the run is currently stalled (no progress within idle timeout).
+    pub fn is_stalled_at(&self, now: TimestampMs) -> bool {
+        // If we haven't started yet, don't declare stall
+        let Some(started_at) = self.started_at else {
+            return false;
+        };
+        let Some(last_activity) = self.last_activity_at else {
+            return false;
+        };
+
+        // Check idle timeout first
+        let idle_deadline = last_activity.saturating_add(self.idle_timeout_ms);
+        if now >= idle_deadline {
+            return true;
+        }
+
+        // Check total runtime cap if set
+        if let Some(cap) = self.total_runtime_cap_ms {
+            let hard_cap = started_at.saturating_add(cap);
+            if now >= hard_cap {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Compute the stall deadline (sooner of idle deadline and runtime cap).
+    pub fn stall_deadline_at(&self) -> Option<TimestampMs> {
+        let Some(last_activity) = self.last_activity_at else {
+            return None;
+        };
+        let Some(started_at) = self.started_at else {
+            return None;
+        };
+
+        let idle_deadline = last_activity.saturating_add(self.idle_timeout_ms);
+        match self.total_runtime_cap_ms {
+            Some(cap) => {
+                let hard_cap = started_at.saturating_add(cap);
+                Some(idle_deadline.min(hard_cap))
+            }
+            None => Some(idle_deadline),
+        }
+    }
+
+    /// Produce a progress snapshot relative to a previous snapshot.
+    pub fn snapshot(&self, previous: &RuntimeProgressSnapshot) -> RuntimeProgressSnapshot {
+        let phase = match (self.last_activity_at, self.started_at) {
+            (None, None) => RuntimeLivenessPhase::WaitingOnPriorTurn,
+            (Some(_), Some(_)) => RuntimeLivenessPhase::RunningTurn,
+            _ => RuntimeLivenessPhase::WaitingOnPriorTurn,
+        };
+        previous.update(
+            phase,
+            self.event_count,
+            self.input_tokens,
+            self.output_tokens,
+            self.execution_status.clone(),
+            self.last_activity_at,
+            self.stall_deadline_at(),
+        )
+    }
+
+    fn advance_activity(&mut self, activity_at: TimestampMs) -> bool {
+        if self
+            .last_activity_at
+            .is_some_and(|last| activity_at < last)
+        {
+            return false;
+        }
+        let advanced = self
+            .last_activity_at
+            .is_none_or(|last| activity_at > last);
+        self.last_activity_at = Some(activity_at);
+        advanced
+    }
+}
 
 impl Default for IssueSessionRunnerConfig {
     fn default() -> Self {
@@ -2121,6 +2287,7 @@ impl IssueSessionRunner {
         }
     }
 
+    #[allow(unused_assignments)]
     async fn await_terminal_outcome<O>(
         &self,
         session: &mut ActiveSession,
@@ -2130,7 +2297,11 @@ impl IssueSessionRunner {
     where
         O: IssueSessionObserver,
     {
-        let deadline = Instant::now() + self.config.terminal_wait_timeout;
+        // Use a sliding progress deadline instead of a fixed total timeout.
+        // The deadline slides forward whenever a liveness signal (event, token bump,
+        // status change, reconcile progress) is observed.
+        let idle_timeout = self.config.terminal_wait_timeout;
+        let mut sliding_deadline = Instant::now() + idle_timeout;
         let mut next_token_accumulation = Instant::now() + Duration::from_secs(15);
 
         loop {
@@ -2146,21 +2317,33 @@ impl IssueSessionRunner {
                 next_token_accumulation = Instant::now() + Duration::from_secs(15);
             }
 
-            if let Some(outcome) = self
-                .terminal_outcome_from_state(&mut session.stream, baseline_event_ids, observer)
+            // Check terminal outcome; slide deadline when still running.
+            if let Some((outcome, liveness_signal)) = self
+                .terminal_outcome_from_state(
+                    &mut session.stream,
+                    baseline_event_ids,
+                    observer,
+                )
                 .await
             {
-                // Final token accumulation before returning
+                if liveness_signal {
+                    sliding_deadline = Instant::now() + idle_timeout;
+                    continue;
+                }
+                // Terminal state reached — final token accumulation before returning
                 session.accumulate_tokens();
                 return outcome;
             }
 
+            // Still running — slide the deadline as a liveness signal
+            sliding_deadline = Instant::now() + idle_timeout;
+
             // Calculate timeout for next_event considering the 15-second accumulation deadline
             let now = Instant::now();
-            let event_timeout = if next_token_accumulation < deadline {
+            let event_timeout = if next_token_accumulation < sliding_deadline {
                 next_token_accumulation - now
             } else {
-                deadline - now
+                sliding_deadline - now
             };
 
             let next_event = timeout_at(now + event_timeout, session.stream.next_event()).await;
@@ -2173,13 +2356,14 @@ impl IssueSessionRunner {
                         next_token_accumulation = Instant::now() + Duration::from_secs(15);
                     }
 
-                    // If we've reached the overall deadline, proceed with stall detection
-                    if Instant::now() >= deadline {
+                    // If we've reached the sliding deadline, proceed with stall detection
+                    if Instant::now() >= sliding_deadline {
                         if let Ok(inserted) = session.stream.reconcile_events().await
                             && inserted > 0
                         {
+                            // Reconcile found progress — this is a liveness signal
                             observe_latest_event(observer, &session.stream);
-                            if let Some(outcome) = self
+                            if let Some((outcome, liveness_signal)) = self
                                 .terminal_outcome_from_state(
                                     &mut session.stream,
                                     baseline_event_ids,
@@ -2187,9 +2371,16 @@ impl IssueSessionRunner {
                                 )
                                 .await
                             {
+                                if liveness_signal {
+                                    sliding_deadline = Instant::now() + idle_timeout;
+                                    continue;
+                                }
                                 session.accumulate_tokens();
                                 return outcome;
                             }
+                            // No terminal state yet, but we found progress — slide and continue
+                            sliding_deadline = Instant::now() + idle_timeout;
+                            continue;
                         }
                         return NormalizedOutcome {
                             kind: WorkerOutcomeKind::Stalled,
@@ -2197,20 +2388,25 @@ impl IssueSessionRunner {
                                 "runtime did not reach a terminal state before the stall timeout"
                                     .to_string(),
                             error: Some(format!(
-                                "no terminal runtime state was observed within {} ms",
+                                "no progress observed within {} ms idle timeout",
                                 self.config.terminal_wait_timeout.as_millis()
                             )),
                         };
                     }
                     // Otherwise continue the loop to accumulate tokens and check again
                 }
-                Ok(Ok(Some(event))) => observe_event(observer, &event),
+                Ok(Ok(Some(event))) => {
+                    // New event received — this is a liveness signal
+                    observe_event(observer, &event);
+                    sliding_deadline = Instant::now() + idle_timeout;
+                }
                 Ok(Ok(None)) => {
                     if let Ok(inserted) = session.stream.reconcile_events().await
                         && inserted > 0
                     {
+                        // Reconcile found progress — this is a liveness signal
                         observe_latest_event(observer, &session.stream);
-                        if let Some(outcome) = self
+                        if let Some((outcome, liveness_signal)) = self
                             .terminal_outcome_from_state(
                                 &mut session.stream,
                                 baseline_event_ids,
@@ -2218,9 +2414,16 @@ impl IssueSessionRunner {
                             )
                             .await
                         {
+                            if liveness_signal {
+                                sliding_deadline = Instant::now() + idle_timeout;
+                                continue;
+                            }
                             session.accumulate_tokens();
                             return outcome;
                         }
+                        // No terminal state yet, but we found progress — slide and continue
+                        sliding_deadline = Instant::now() + idle_timeout;
+                        continue;
                     }
 
                     session.accumulate_tokens();
@@ -2237,8 +2440,9 @@ impl IssueSessionRunner {
                     if let Ok(inserted) = session.stream.reconcile_events().await
                         && inserted > 0
                     {
+                        // Reconcile found progress — this is a liveness signal
                         observe_latest_event(observer, &session.stream);
-                        if let Some(outcome) = self
+                        if let Some((outcome, liveness_signal)) = self
                             .terminal_outcome_from_state(
                                 &mut session.stream,
                                 baseline_event_ids,
@@ -2246,9 +2450,16 @@ impl IssueSessionRunner {
                             )
                             .await
                         {
+                            if liveness_signal {
+                                sliding_deadline = Instant::now() + idle_timeout;
+                                continue;
+                            }
                             session.accumulate_tokens();
                             return outcome;
                         }
+                        // No terminal state yet, but we found progress — slide and continue
+                        sliding_deadline = Instant::now() + idle_timeout;
+                        continue;
                     }
                     return NormalizedOutcome {
                         kind: WorkerOutcomeKind::Failed,
@@ -2260,12 +2471,18 @@ impl IssueSessionRunner {
         }
     }
 
+    /// Check whether the runtime has reached a terminal state.
+    ///
+    /// Returns `Some(outcome)` when terminal, `None` when still active.
+    /// The second tuple element is `true` when a liveness signal was observed
+    /// (execution status changed while still running), allowing the caller
+    /// to slide the idle deadline.
     async fn terminal_outcome_from_state<O>(
         &self,
         stream: &mut RuntimeEventStream,
         baseline_event_ids: &HashSet<String>,
         observer: &mut O,
-    ) -> Option<NormalizedOutcome>
+    ) -> Option<(NormalizedOutcome, bool)>
     where
         O: IssueSessionObserver,
     {
@@ -2281,11 +2498,11 @@ impl IssueSessionRunner {
         if let Some(error_detail) =
             latest_current_turn_error(stream.event_cache().items(), baseline_event_ids)
         {
-            return Some(NormalizedOutcome {
+            return Some((NormalizedOutcome {
                 kind: WorkerOutcomeKind::Failed,
                 summary: "received ConversationErrorEvent during the current run".to_string(),
                 error: Some(error_detail),
-            });
+            }, false));
         }
 
         match stream.state_mirror().terminal_status() {
@@ -2294,11 +2511,11 @@ impl IssueSessionRunner {
                     .confirm_finished_terminal_state(stream, baseline_event_ids, observer)
                     .await
                 {
-                    Some(NormalizedOutcome {
+                    Some((NormalizedOutcome {
                         kind: WorkerOutcomeKind::Succeeded,
                         summary: "OpenHands execution_status `finished`".to_string(),
                         error: None,
-                    })
+                    }, false))
                 } else {
                     None
                 }
@@ -2306,13 +2523,13 @@ impl IssueSessionRunner {
             Some(TerminalExecutionStatus::Error) => {
                 let error_detail = extract_error_detail_from_state(stream.state_mirror())
                     .unwrap_or_else(|| "execution_status error".to_string());
-                Some(NormalizedOutcome {
+                Some((NormalizedOutcome {
                     kind: WorkerOutcomeKind::Failed,
                     summary: "OpenHands execution_status `error`".to_string(),
                     error: Some(error_detail),
-                })
+                }, false))
             }
-            Some(TerminalExecutionStatus::Stuck) => Some(NormalizedOutcome {
+            Some(TerminalExecutionStatus::Stuck) => Some((NormalizedOutcome {
                 kind: WorkerOutcomeKind::Stalled,
                 summary: "OpenHands execution_status `stuck`".to_string(),
                 error: Some(
@@ -2322,8 +2539,15 @@ impl IssueSessionRunner {
                         .unwrap_or_default()
                         .to_string(),
                 ),
-            }),
-            None => None,
+            }, false)),
+            None => {
+                // Still running — execution status change is a liveness signal
+                Some((NormalizedOutcome {
+                    kind: WorkerOutcomeKind::Failed,
+                    summary: "unexpected None outcome while still running".to_string(),
+                    error: None,
+                }, true))
+            }
         }
     }
 
@@ -2760,9 +2984,11 @@ fn run_status_for(outcome_kind: WorkerOutcomeKind) -> RunStatus {
     match outcome_kind {
         WorkerOutcomeKind::Succeeded => RunStatus::Succeeded,
         WorkerOutcomeKind::Cancelled => RunStatus::Cancelled,
-        WorkerOutcomeKind::Failed | WorkerOutcomeKind::TimedOut | WorkerOutcomeKind::Stalled => {
-            RunStatus::Failed
-        }
+        WorkerOutcomeKind::Failed
+        | WorkerOutcomeKind::TimedOut
+        | WorkerOutcomeKind::Stalled
+        | WorkerOutcomeKind::Detached
+        | WorkerOutcomeKind::CancelFailed => RunStatus::Failed,
     }
 }
 
@@ -3091,5 +3317,105 @@ mod tests {
             &context_overflow_outcome
         ));
         assert!(is_context_overflow_outcome(&context_overflow_outcome));
+    }
+
+    #[test]
+    fn liveness_tracker_slides_deadline_on_progress_signals() {
+        let idle = DurationMs::new(300_000); // 5 minute idle timeout
+        let cap = DurationMs::new(3_600_000); // 1 hour total runtime cap
+        let mut tracker = LivenessTracker::with_runtime_cap(idle, Some(cap));
+        let start = TimestampMs::new(1000);
+
+        // Before start, should not be stalled
+        assert!(!tracker.is_stalled_at(TimestampMs::new(1000)));
+
+        // Mark start
+        tracker.mark_started(start);
+        assert!(!tracker.is_stalled_at(start));
+
+        // At 4 minutes, should not be stalled (within idle timeout)
+        assert!(!tracker.is_stalled_at(TimestampMs::new(1000 + 240_000)));
+
+        // Record events at 3 minutes — slides idle deadline forward
+        let t3 = TimestampMs::new(1000 + 180_000);
+        tracker.record_event(t3);
+        // Now at 7 minutes total (3 min + 5 min idle), should not be stalled
+        assert!(!tracker.is_stalled_at(TimestampMs::new(1000 + 180_000 + 240_000)));
+
+        // Record tokens at 6 minutes — slides deadline again
+        let t6 = TimestampMs::new(1000 + 360_000);
+        tracker.record_tokens(100, 50, t6);
+        // Now at 10 minutes total (6 min + 4 min idle), should not be stalled
+        assert!(!tracker.is_stalled_at(TimestampMs::new(1000 + 360_000 + 240_000)));
+
+        // Past the idle deadline with no progress — should be stalled
+        assert!(tracker.is_stalled_at(TimestampMs::new(1000 + 360_000 + 360_000)));
+
+        // Past the total runtime cap — should be stalled even with recent progress
+        tracker.mark_started(start);
+        tracker.record_event(TimestampMs::new(start.as_u64() + 3_500_000));
+        assert!(tracker.is_stalled_at(TimestampMs::new(start.as_u64() + 3_600_000 + 1)));
+    }
+
+    #[test]
+    fn liveness_tracker_snapshot_produces_correct_deltas() {
+        let mut tracker = LivenessTracker::new(DurationMs::new(60_000));
+        tracker.mark_started(TimestampMs::new(1000));
+        tracker.record_event(TimestampMs::new(1100));
+        tracker.record_tokens(50, 25, TimestampMs::new(1200));
+
+        let initial = RuntimeProgressSnapshot::initial(RuntimeLivenessPhase::RunningTurn);
+        let snapshot = tracker.snapshot(&initial);
+
+        assert_eq!(snapshot.phase, RuntimeLivenessPhase::RunningTurn);
+        assert_eq!(snapshot.event_count, 1);
+        assert_eq!(snapshot.event_delta, 1);
+        assert_eq!(snapshot.input_tokens, 50);
+        assert_eq!(snapshot.input_token_delta, 50);
+        assert_eq!(snapshot.output_tokens, 25);
+        assert_eq!(snapshot.output_token_delta, 25);
+
+        // Second snapshot should have zero deltas if no new progress
+        let snapshot2 = tracker.snapshot(&snapshot);
+        assert_eq!(snapshot2.event_delta, 0);
+        assert_eq!(snapshot2.input_token_delta, 0);
+        assert_eq!(snapshot2.output_token_delta, 0);
+
+        // New progress should produce non-zero deltas
+        tracker.record_event(TimestampMs::new(1300));
+        tracker.record_tokens(10, 5, TimestampMs::new(1400));
+        let snapshot3 = tracker.snapshot(&snapshot2);
+        assert_eq!(snapshot3.event_delta, 1);
+        assert_eq!(snapshot3.input_token_delta, 10);
+        assert_eq!(snapshot3.output_token_delta, 5);
+    }
+
+    #[test]
+    fn liveness_tracker_waiting_on_prior_turn_phase() {
+        let tracker = LivenessTracker::new(DurationMs::new(60_000));
+        let initial = RuntimeProgressSnapshot::initial(RuntimeLivenessPhase::WaitingOnPriorTurn);
+        let snapshot = tracker.snapshot(&initial);
+
+        assert_eq!(snapshot.phase, RuntimeLivenessPhase::WaitingOnPriorTurn);
+        assert_eq!(snapshot.event_count, 0);
+        assert!(snapshot.last_activity_at.is_none());
+    }
+
+    #[test]
+    fn liveness_tracker_status_change_is_liveness_signal() {
+        let mut tracker = LivenessTracker::new(DurationMs::new(60_000));
+        tracker.mark_started(TimestampMs::new(1000));
+
+        // First status change should advance activity
+        let changed = tracker.record_status_change("running", TimestampMs::new(1100));
+        assert!(changed);
+
+        // Same status should not advance activity
+        let changed = tracker.record_status_change("running", TimestampMs::new(1200));
+        assert!(!changed);
+
+        // Different status should advance activity
+        let changed = tracker.record_status_change("finished", TimestampMs::new(1300));
+        assert!(changed);
     }
 }
