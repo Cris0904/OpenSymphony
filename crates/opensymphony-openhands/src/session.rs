@@ -116,7 +116,7 @@ impl IssueSessionObserver for () {}
 /// while ensuring the progress-based idle-detection contract is well-defined
 /// and verified.
 #[derive(Debug, Clone)]
-pub struct LivenessTracker {
+pub(crate) struct LivenessTracker {
     /// Monotonic count of events observed since the session started.
     event_count: u64,
     /// Cumulative input tokens.
@@ -135,6 +135,7 @@ pub struct LivenessTracker {
     started_at: Option<TimestampMs>,
 }
 
+#[allow(dead_code)]
 impl LivenessTracker {
     pub fn new(idle_timeout_ms: DurationMs) -> Self {
         Self::with_runtime_cap(idle_timeout_ms, None)
@@ -170,6 +171,7 @@ impl LivenessTracker {
     }
 
     /// Record a batch of newly-reconciled events.
+    #[cfg(test)]
     pub fn record_reconciled_events(&mut self, count: u64, reconciled_at: TimestampMs) -> bool {
         self.event_count = self.event_count.saturating_add(count);
         self.advance_activity(reconciled_at)

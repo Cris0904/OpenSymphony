@@ -29,7 +29,7 @@ pub use models::{
 pub use session::{
     ConversationLaunchProfile, IssueConversationManifest, IssueSessionContext, IssueSessionError,
     IssueSessionObserver, IssueSessionPromptKind, IssueSessionResult, IssueSessionReusePolicy,
-    IssueSessionRunner, IssueSessionRunnerConfig, LivenessTracker, LlmConfigFingerprint,
+    IssueSessionRunner, IssueSessionRunnerConfig, LlmConfigFingerprint,
     RUNTIME_CONTRACT_VERSION, RehydrationOptions, RehydrationResult, WorkpadComment,
     WorkpadCommentSource,
 };
