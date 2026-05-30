@@ -2477,6 +2477,11 @@ impl IssueSessionRunner {
             {
                 StateCheckResult::Terminal(outcome) => return ReconcileResult::Terminal(outcome),
                 StateCheckResult::StillRunningWithProgress => return ReconcileResult::Progress,
+                // `NoProgress` here means "activity was observed (inserted > 0) but no
+                // terminal state was reached."  This maps to `ReconcileResult::Progress`
+                // because the reconciliation itself found fresh events from the server,
+                // which is a valid liveness signal that should slide the stall deadline.
+                // The runner should keep waiting rather than declaring the session stalled.
                 StateCheckResult::NoProgress => return ReconcileResult::Progress,
             }
         }
