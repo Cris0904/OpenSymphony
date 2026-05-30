@@ -7,9 +7,10 @@ use std::{
 
 use crate::opensymphony_domain::{
     ConversationId, ConversationMetadata, DurationMs, IssueId, IssueIdentifier, NormalizedIssue,
-    RunAttempt, RuntimeLivenessPhase, RuntimeProgressSnapshot, RuntimeStreamState, TimestampMs,
-    WorkerId, WorkerOutcomeKind, WorkerOutcomeRecord,
+    RunAttempt, RuntimeStreamState, TimestampMs, WorkerId, WorkerOutcomeKind, WorkerOutcomeRecord,
 };
+#[cfg(test)]
+use crate::opensymphony_domain::{RuntimeLivenessPhase, RuntimeProgressSnapshot};
 use crate::opensymphony_workflow::{
     Environment, OpenHandsConversationToolConfig, ProcessEnvironment, ResolvedWorkflow,
 };
@@ -112,15 +113,14 @@ impl IssueSessionObserver for () {}
 /// progress, and terminal/log frames as liveness signals. When a progress signal is
 /// observed, the stall deadline slides forward.
 ///
-/// # Note
+/// # Integration with `await_terminal_outcome`
 ///
-/// This struct provides a self-contained, unit-tested liveness-tracking API.
-/// The current `await_terminal_outcome` implementation inlines similar
-/// sliding-deadline logic rather than delegating to this tracker.  The tracker
-/// exists as a clean, testable abstraction for future refactoring of the
-/// session runner.  Keeping it separate avoids a large, risky inline refactor
-/// while ensuring the progress-based idle-detection contract is well-defined
-/// and verified.
+/// This tracker records logical progress signals (events, tokens, status changes)
+/// using `TimestampMs` timestamps, while the runner's timeout mechanics use
+/// `Instant::now()` for wall-clock deadline tracking.  The two work together:
+/// the tracker provides structured progress accounting that survives reconnects
+/// and reconciliations, while the `Instant`-based sliding deadline handles the
+/// actual timeout waits.
 #[derive(Debug, Clone)]
 pub(crate) struct LivenessTracker {
     /// Monotonic count of events observed since the session started.
@@ -141,8 +141,8 @@ pub(crate) struct LivenessTracker {
     started_at: Option<TimestampMs>,
 }
 
-#[allow(dead_code)]
 impl LivenessTracker {
+    #[cfg(test)]
     pub fn new(idle_timeout_ms: DurationMs) -> Self {
         Self::with_runtime_cap(idle_timeout_ms, None)
     }
@@ -177,7 +177,6 @@ impl LivenessTracker {
     }
 
     /// Record a batch of newly-reconciled events.
-    #[cfg(test)]
     pub fn record_reconciled_events(&mut self, count: u64, reconciled_at: TimestampMs) -> bool {
         self.event_count = self.event_count.saturating_add(count);
         self.advance_activity(reconciled_at)
@@ -243,6 +242,7 @@ impl LivenessTracker {
     }
 
     /// Produce a progress snapshot relative to a previous snapshot.
+    #[cfg(test)]
     pub fn snapshot(&self, previous: &RuntimeProgressSnapshot) -> RuntimeProgressSnapshot {
         let phase = match (self.last_activity_at, self.started_at) {
             (None, None) => RuntimeLivenessPhase::WaitingOnPriorTurn,
@@ -2328,12 +2328,30 @@ impl IssueSessionRunner {
         O: IssueSessionObserver,
     {
         let idle_timeout = self.config.terminal_wait_timeout;
+        let idle_timeout_ms = DurationMs::new(idle_timeout.as_millis() as u64);
+        let total_runtime_cap_ms = self
+            .config
+            .total_runtime_cap_ms
+            .map(|d| DurationMs::new(d.as_millis() as u64));
+        let mut tracker =
+            LivenessTracker::with_runtime_cap(idle_timeout_ms, total_runtime_cap_ms);
+        tracker.mark_started(timestamp_ms_from_datetime(Utc::now()));
+
         let mut sliding_deadline = Instant::now() + idle_timeout;
         let mut next_token_accumulation = Instant::now() + Duration::from_secs(15);
 
         loop {
             if Instant::now() >= next_token_accumulation {
                 session.accumulate_tokens();
+                let (input, output) = (
+                    session.manifest.input_tokens,
+                    session.manifest.output_tokens,
+                );
+                tracker.record_tokens(
+                    input,
+                    output,
+                    timestamp_ms_from_datetime(Utc::now()),
+                );
                 observer.on_conversation_update(
                     &session
                         .manifest
@@ -2348,6 +2366,15 @@ impl IssueSessionRunner {
             {
                 StateCheckResult::Terminal(outcome) => {
                     session.accumulate_tokens();
+                    let (input, output) = (
+                        session.manifest.input_tokens,
+                        session.manifest.output_tokens,
+                    );
+                    tracker.record_tokens(
+                        input,
+                        output,
+                        timestamp_ms_from_datetime(Utc::now()),
+                    );
                     return outcome;
                 }
                 StateCheckResult::StillRunningWithProgress => {
@@ -2374,7 +2401,7 @@ impl IssueSessionRunner {
 
                     if Instant::now() >= sliding_deadline {
                         match self
-                            .handle_reconcile_progress(session, baseline_event_ids, observer)
+                            .handle_reconcile_progress(session, baseline_event_ids, observer, Some(&mut tracker))
                             .await
                         {
                             ReconcileResult::Terminal(outcome) => {
@@ -2383,9 +2410,28 @@ impl IssueSessionRunner {
                             }
                             ReconcileResult::Progress => {
                                 sliding_deadline = Instant::now() + idle_timeout;
+                                tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
                                 continue;
                             }
                             ReconcileResult::NoProgress => {}
+                        }
+                        // Cross-check with the liveness tracker's stall detection.  If the
+                        // tracker disagrees (it has seen recent token accumulation or status
+                        // changes that the `Instant`-based logic missed), honor its stall
+                        // deadline and keep waiting.
+                        let now_ts = timestamp_ms_from_datetime(Utc::now());
+                        let tracker_deadline = tracker.stall_deadline_at();
+                        let tracker_confirms_stall = tracker.is_stalled_at(now_ts);
+                        if !tracker_confirms_stall
+                            && let Some(deadline_ts) = tracker_deadline
+                        {
+                            let remaining_ms =
+                                deadline_ts.as_u64().saturating_sub(now_ts.as_u64());
+                            if remaining_ms > 0 {
+                                sliding_deadline =
+                                    Instant::now() + Duration::from_millis(remaining_ms);
+                                continue;
+                            }
                         }
                         return NormalizedOutcome {
                             kind: WorkerOutcomeKind::Stalled,
@@ -2402,10 +2448,17 @@ impl IssueSessionRunner {
                 Ok(Ok(Some(event))) => {
                     observe_event(observer, &event);
                     sliding_deadline = Instant::now() + idle_timeout;
+                    tracker.record_event(timestamp_ms_from_datetime(event.timestamp));
+                    if let Some(status) = session.stream.state_mirror().execution_status() {
+                        tracker.record_status_change(
+                            status,
+                            timestamp_ms_from_datetime(Utc::now()),
+                        );
+                    }
                 }
                 Ok(Ok(None)) => {
                     match self
-                        .handle_reconcile_progress(session, baseline_event_ids, observer)
+                        .handle_reconcile_progress(session, baseline_event_ids, observer, Some(&mut tracker))
                         .await
                     {
                         ReconcileResult::Terminal(outcome) => {
@@ -2414,6 +2467,7 @@ impl IssueSessionRunner {
                         }
                         ReconcileResult::Progress => {
                             sliding_deadline = Instant::now() + idle_timeout;
+                            tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
                             continue;
                         }
                         ReconcileResult::NoProgress => {}
@@ -2431,7 +2485,7 @@ impl IssueSessionRunner {
                 }
                 Ok(Err(error)) => {
                     match self
-                        .handle_reconcile_progress(session, baseline_event_ids, observer)
+                        .handle_reconcile_progress(session, baseline_event_ids, observer, Some(&mut tracker))
                         .await
                     {
                         ReconcileResult::Terminal(outcome) => {
@@ -2440,6 +2494,7 @@ impl IssueSessionRunner {
                         }
                         ReconcileResult::Progress => {
                             sliding_deadline = Instant::now() + idle_timeout;
+                            tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
                             continue;
                         }
                         ReconcileResult::NoProgress => {}
@@ -2458,11 +2513,15 @@ impl IssueSessionRunner {
     ///
     /// Extracts the repeated "reconcile -> check terminal -> slide deadline" pattern
     /// into a single place to avoid duplication.
+    ///
+    /// If a liveness tracker is provided, records newly-reconciled events so the
+    /// tracker's progress accounting stays in sync with what the runner observes.
     async fn handle_reconcile_progress<O>(
         &self,
         session: &mut ActiveSession,
         baseline_event_ids: &HashSet<String>,
         observer: &mut O,
+        tracker: Option<&mut LivenessTracker>,
     ) -> ReconcileResult
     where
         O: IssueSessionObserver,
@@ -2471,6 +2530,9 @@ impl IssueSessionRunner {
             && inserted > 0
         {
             observe_latest_event(observer, &session.stream);
+            if let Some(tracker) = tracker {
+                tracker.record_reconciled_events(inserted as u64, timestamp_ms_from_datetime(Utc::now()));
+            }
             match self
                 .terminal_outcome_from_state(&mut session.stream, baseline_event_ids, observer)
                 .await
