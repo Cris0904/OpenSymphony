@@ -66,6 +66,12 @@ pub struct IssueSessionRunnerConfig {
     pub reuse_policy: IssueSessionReusePolicy,
     pub runtime_stream: RuntimeStreamConfig,
     pub terminal_wait_timeout: Duration,
+    /// Optional absolute wall-clock cap on total runtime. When `None`, only the
+    /// idle/progress timeout (`terminal_wait_timeout`) applies. This field is a
+    /// future hook: it is not yet populated from the workflow config, but is
+    /// threaded through so the runner can eventually enforce a hard time limit
+    /// independent of progress-based idle detection.
+    pub total_runtime_cap_ms: Option<Duration>,
     pub finished_drain_timeout: Duration,
 }
 
@@ -270,6 +276,7 @@ impl Default for IssueSessionRunnerConfig {
             reuse_policy: IssueSessionReusePolicy::PerIssue,
             runtime_stream: RuntimeStreamConfig::default(),
             terminal_wait_timeout: Duration::from_secs(300),
+            total_runtime_cap_ms: None,
             finished_drain_timeout: Duration::from_millis(100),
         }
     }
@@ -291,6 +298,8 @@ impl IssueSessionRunnerConfig {
             terminal_wait_timeout: Duration::from_millis(
                 workflow.config.agent.stall_timeout_ms.unwrap_or(300_000),
             ),
+            // Future hook: not yet exposed in workflow agent config.
+            total_runtime_cap_ms: None,
             finished_drain_timeout: Duration::from_millis(100),
         }
     }
@@ -3138,6 +3147,7 @@ mod tests {
                     max_reconnect_attempts: 1,
                 },
                 terminal_wait_timeout: Duration::from_millis(25),
+                total_runtime_cap_ms: None,
                 finished_drain_timeout: Duration::from_millis(25),
             },
         );
