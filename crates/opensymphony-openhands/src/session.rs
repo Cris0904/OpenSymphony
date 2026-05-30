@@ -2333,8 +2333,7 @@ impl IssueSessionRunner {
             .config
             .total_runtime_cap_ms
             .map(|d| DurationMs::new(d.as_millis() as u64));
-        let mut tracker =
-            LivenessTracker::with_runtime_cap(idle_timeout_ms, total_runtime_cap_ms);
+        let mut tracker = LivenessTracker::with_runtime_cap(idle_timeout_ms, total_runtime_cap_ms);
         tracker.mark_started(timestamp_ms_from_datetime(Utc::now()));
 
         let mut sliding_deadline = Instant::now() + idle_timeout;
@@ -2347,11 +2346,7 @@ impl IssueSessionRunner {
                     session.manifest.input_tokens,
                     session.manifest.output_tokens,
                 );
-                tracker.record_tokens(
-                    input,
-                    output,
-                    timestamp_ms_from_datetime(Utc::now()),
-                );
+                tracker.record_tokens(input, output, timestamp_ms_from_datetime(Utc::now()));
                 observer.on_conversation_update(
                     &session
                         .manifest
@@ -2370,11 +2365,7 @@ impl IssueSessionRunner {
                         session.manifest.input_tokens,
                         session.manifest.output_tokens,
                     );
-                    tracker.record_tokens(
-                        input,
-                        output,
-                        timestamp_ms_from_datetime(Utc::now()),
-                    );
+                    tracker.record_tokens(input, output, timestamp_ms_from_datetime(Utc::now()));
                     return outcome;
                 }
                 StateCheckResult::StillRunningWithProgress => {
@@ -2401,7 +2392,12 @@ impl IssueSessionRunner {
 
                     if Instant::now() >= sliding_deadline {
                         match self
-                            .handle_reconcile_progress(session, baseline_event_ids, observer, Some(&mut tracker))
+                            .handle_reconcile_progress(
+                                session,
+                                baseline_event_ids,
+                                observer,
+                                Some(&mut tracker),
+                            )
                             .await
                         {
                             ReconcileResult::Terminal(outcome) => {
@@ -2422,11 +2418,8 @@ impl IssueSessionRunner {
                         let now_ts = timestamp_ms_from_datetime(Utc::now());
                         let tracker_deadline = tracker.stall_deadline_at();
                         let tracker_confirms_stall = tracker.is_stalled_at(now_ts);
-                        if !tracker_confirms_stall
-                            && let Some(deadline_ts) = tracker_deadline
-                        {
-                            let remaining_ms =
-                                deadline_ts.as_u64().saturating_sub(now_ts.as_u64());
+                        if !tracker_confirms_stall && let Some(deadline_ts) = tracker_deadline {
+                            let remaining_ms = deadline_ts.as_u64().saturating_sub(now_ts.as_u64());
                             if remaining_ms > 0 {
                                 sliding_deadline =
                                     Instant::now() + Duration::from_millis(remaining_ms);
@@ -2450,15 +2443,18 @@ impl IssueSessionRunner {
                     sliding_deadline = Instant::now() + idle_timeout;
                     tracker.record_event(timestamp_ms_from_datetime(event.timestamp));
                     if let Some(status) = session.stream.state_mirror().execution_status() {
-                        tracker.record_status_change(
-                            status,
-                            timestamp_ms_from_datetime(Utc::now()),
-                        );
+                        tracker
+                            .record_status_change(status, timestamp_ms_from_datetime(Utc::now()));
                     }
                 }
                 Ok(Ok(None)) => {
                     match self
-                        .handle_reconcile_progress(session, baseline_event_ids, observer, Some(&mut tracker))
+                        .handle_reconcile_progress(
+                            session,
+                            baseline_event_ids,
+                            observer,
+                            Some(&mut tracker),
+                        )
                         .await
                     {
                         ReconcileResult::Terminal(outcome) => {
@@ -2485,7 +2481,12 @@ impl IssueSessionRunner {
                 }
                 Ok(Err(error)) => {
                     match self
-                        .handle_reconcile_progress(session, baseline_event_ids, observer, Some(&mut tracker))
+                        .handle_reconcile_progress(
+                            session,
+                            baseline_event_ids,
+                            observer,
+                            Some(&mut tracker),
+                        )
                         .await
                     {
                         ReconcileResult::Terminal(outcome) => {
@@ -2531,7 +2532,10 @@ impl IssueSessionRunner {
         {
             observe_latest_event(observer, &session.stream);
             if let Some(tracker) = tracker {
-                tracker.record_reconciled_events(inserted as u64, timestamp_ms_from_datetime(Utc::now()));
+                tracker.record_reconciled_events(
+                    inserted as u64,
+                    timestamp_ms_from_datetime(Utc::now()),
+                );
             }
             match self
                 .terminal_outcome_from_state(&mut session.stream, baseline_event_ids, observer)

@@ -29,9 +29,8 @@ pub use models::{
 pub use session::{
     ConversationLaunchProfile, IssueConversationManifest, IssueSessionContext, IssueSessionError,
     IssueSessionObserver, IssueSessionPromptKind, IssueSessionResult, IssueSessionReusePolicy,
-    IssueSessionRunner, IssueSessionRunnerConfig, LlmConfigFingerprint,
-    RUNTIME_CONTRACT_VERSION, RehydrationOptions, RehydrationResult, WorkpadComment,
-    WorkpadCommentSource,
+    IssueSessionRunner, IssueSessionRunnerConfig, LlmConfigFingerprint, RUNTIME_CONTRACT_VERSION,
+    RehydrationOptions, RehydrationResult, WorkpadComment, WorkpadCommentSource,
 };
 pub use supervisor::{
     ExternalServerConfig, LaunchOwnership, LocalServerSupervisor, ProbeConfig, ServerMode,
