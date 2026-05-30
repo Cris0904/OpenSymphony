@@ -160,11 +160,7 @@ impl LivenessTracker {
     }
 
     /// Record a batch of newly-reconciled events.
-    pub fn record_reconciled_events(
-        &mut self,
-        count: u64,
-        reconciled_at: TimestampMs,
-    ) -> bool {
+    pub fn record_reconciled_events(&mut self, count: u64, reconciled_at: TimestampMs) -> bool {
         self.event_count = self.event_count.saturating_add(count);
         self.advance_activity(reconciled_at)
     }
@@ -251,15 +247,10 @@ impl LivenessTracker {
     }
 
     fn advance_activity(&mut self, activity_at: TimestampMs) -> bool {
-        if self
-            .last_activity_at
-            .is_some_and(|last| activity_at < last)
-        {
+        if self.last_activity_at.is_some_and(|last| activity_at < last) {
             return false;
         }
-        let advanced = self
-            .last_activity_at
-            .is_none_or(|last| activity_at > last);
+        let advanced = self.last_activity_at.is_none_or(|last| activity_at > last);
         self.last_activity_at = Some(activity_at);
         advanced
     }
@@ -2319,11 +2310,7 @@ impl IssueSessionRunner {
 
             // Check terminal outcome; slide deadline when still running.
             if let Some((outcome, liveness_signal)) = self
-                .terminal_outcome_from_state(
-                    &mut session.stream,
-                    baseline_event_ids,
-                    observer,
-                )
+                .terminal_outcome_from_state(&mut session.stream, baseline_event_ids, observer)
                 .await
             {
                 if liveness_signal {
@@ -2498,11 +2485,14 @@ impl IssueSessionRunner {
         if let Some(error_detail) =
             latest_current_turn_error(stream.event_cache().items(), baseline_event_ids)
         {
-            return Some((NormalizedOutcome {
-                kind: WorkerOutcomeKind::Failed,
-                summary: "received ConversationErrorEvent during the current run".to_string(),
-                error: Some(error_detail),
-            }, false));
+            return Some((
+                NormalizedOutcome {
+                    kind: WorkerOutcomeKind::Failed,
+                    summary: "received ConversationErrorEvent during the current run".to_string(),
+                    error: Some(error_detail),
+                },
+                false,
+            ));
         }
 
         match stream.state_mirror().terminal_status() {
@@ -2511,11 +2501,14 @@ impl IssueSessionRunner {
                     .confirm_finished_terminal_state(stream, baseline_event_ids, observer)
                     .await
                 {
-                    Some((NormalizedOutcome {
-                        kind: WorkerOutcomeKind::Succeeded,
-                        summary: "OpenHands execution_status `finished`".to_string(),
-                        error: None,
-                    }, false))
+                    Some((
+                        NormalizedOutcome {
+                            kind: WorkerOutcomeKind::Succeeded,
+                            summary: "OpenHands execution_status `finished`".to_string(),
+                            error: None,
+                        },
+                        false,
+                    ))
                 } else {
                     None
                 }
@@ -2523,30 +2516,39 @@ impl IssueSessionRunner {
             Some(TerminalExecutionStatus::Error) => {
                 let error_detail = extract_error_detail_from_state(stream.state_mirror())
                     .unwrap_or_else(|| "execution_status error".to_string());
-                Some((NormalizedOutcome {
-                    kind: WorkerOutcomeKind::Failed,
-                    summary: "OpenHands execution_status `error`".to_string(),
-                    error: Some(error_detail),
-                }, false))
+                Some((
+                    NormalizedOutcome {
+                        kind: WorkerOutcomeKind::Failed,
+                        summary: "OpenHands execution_status `error`".to_string(),
+                        error: Some(error_detail),
+                    },
+                    false,
+                ))
             }
-            Some(TerminalExecutionStatus::Stuck) => Some((NormalizedOutcome {
-                kind: WorkerOutcomeKind::Stalled,
-                summary: "OpenHands execution_status `stuck`".to_string(),
-                error: Some(
-                    stream
-                        .state_mirror()
-                        .execution_status()
-                        .unwrap_or_default()
-                        .to_string(),
-                ),
-            }, false)),
+            Some(TerminalExecutionStatus::Stuck) => Some((
+                NormalizedOutcome {
+                    kind: WorkerOutcomeKind::Stalled,
+                    summary: "OpenHands execution_status `stuck`".to_string(),
+                    error: Some(
+                        stream
+                            .state_mirror()
+                            .execution_status()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                },
+                false,
+            )),
             None => {
                 // Still running — execution status change is a liveness signal
-                Some((NormalizedOutcome {
-                    kind: WorkerOutcomeKind::Failed,
-                    summary: "unexpected None outcome while still running".to_string(),
-                    error: None,
-                }, true))
+                Some((
+                    NormalizedOutcome {
+                        kind: WorkerOutcomeKind::Failed,
+                        summary: "unexpected None outcome while still running".to_string(),
+                        error: None,
+                    },
+                    true,
+                ))
             }
         }
     }

@@ -884,19 +884,26 @@ async fn detached_outcome_does_not_schedule_retry() {
         .expect("first tick should dispatch");
 
     let issue_id = IssueId::new("lin-300").expect("issue id should be valid");
-    assert_eq!(scheduler.worker().launches.len(), 1, "should have one launch");
+    assert_eq!(
+        scheduler.worker().launches.len(),
+        1,
+        "should have one launch"
+    );
 
     let running = scheduler.worker().launches[0].run.clone();
-    scheduler.worker_mut().updates.push_back(WorkerUpdate::Finished {
-        worker_id: running.worker_id.clone(),
-        outcome: WorkerOutcomeRecord::from_run(
-            &running,
-            WorkerOutcomeKind::Detached,
-            ts(200),
-            Some("underlying run could not be stopped".to_string()),
-            None,
-        ),
-    });
+    scheduler
+        .worker_mut()
+        .updates
+        .push_back(WorkerUpdate::Finished {
+            worker_id: running.worker_id.clone(),
+            outcome: WorkerOutcomeRecord::from_run(
+                &running,
+                WorkerOutcomeKind::Detached,
+                ts(200),
+                Some("underlying run could not be stopped".to_string()),
+                None,
+            ),
+        });
 
     scheduler
         .tick(ts(200))
@@ -947,16 +954,19 @@ async fn cancel_failed_outcome_does_not_schedule_retry() {
 
     let issue_id = IssueId::new("lin-301").expect("issue id should be valid");
     let running = scheduler.worker().launches[0].run.clone();
-    scheduler.worker_mut().updates.push_back(WorkerUpdate::Finished {
-        worker_id: running.worker_id.clone(),
-        outcome: WorkerOutcomeRecord::from_run(
-            &running,
-            WorkerOutcomeKind::CancelFailed,
-            ts(200),
-            Some("cancel/stop was refused by runtime".to_string()),
-            None,
-        ),
-    });
+    scheduler
+        .worker_mut()
+        .updates
+        .push_back(WorkerUpdate::Finished {
+            worker_id: running.worker_id.clone(),
+            outcome: WorkerOutcomeRecord::from_run(
+                &running,
+                WorkerOutcomeKind::CancelFailed,
+                ts(200),
+                Some("cancel/stop was refused by runtime".to_string()),
+                None,
+            ),
+        });
 
     scheduler
         .tick(ts(200))

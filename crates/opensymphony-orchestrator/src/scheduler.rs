@@ -874,11 +874,12 @@ where
             execution.last_worker_outcome().map(|o| o.outcome),
             Some(WorkerOutcomeKind::Detached | WorkerOutcomeKind::CancelFailed)
         );
-        let mut execution = if execution.status() == SchedulerStatus::Released && !was_terminal_outcome {
-            execution.reopen(observed_at)?
-        } else {
-            execution
-        };
+        let mut execution =
+            if execution.status() == SchedulerStatus::Released && !was_terminal_outcome {
+                execution.reopen(observed_at)?
+            } else {
+                execution
+            };
 
         execution.refresh_issue(issue.clone())?;
         if let Some(workspace) = recovered_workspace {
