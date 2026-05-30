@@ -88,29 +88,77 @@ impl RuntimeProgressSnapshot {
         }
     }
 
-    /// Update this snapshot to produce a new one with deltas computed.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update(
-        &self,
-        phase: RuntimeLivenessPhase,
-        event_count: u64,
-        input_tokens: u64,
-        output_tokens: u64,
-        execution_status: Option<String>,
-        last_activity_at: Option<TimestampMs>,
-        stall_deadline_at: Option<TimestampMs>,
-    ) -> Self {
-        Self {
-            event_delta: event_count.saturating_sub(self.event_count),
-            input_token_delta: input_tokens.saturating_sub(self.input_tokens),
-            output_token_delta: output_tokens.saturating_sub(self.output_tokens),
+    /// Start building an updated snapshot from this snapshot's baseline.
+    pub fn update_with(&self, phase: RuntimeLivenessPhase) -> RuntimeProgressSnapshotBuilder<'_> {
+        RuntimeProgressSnapshotBuilder {
+            previous: self,
             phase,
-            event_count,
-            input_tokens,
-            output_tokens,
-            execution_status,
-            last_activity_at,
-            stall_deadline_at,
+            event_count: self.event_count,
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            execution_status: self.execution_status.clone(),
+            last_activity_at: self.last_activity_at,
+            stall_deadline_at: self.stall_deadline_at,
+        }
+    }
+}
+
+/// Builder for updating a [`RuntimeProgressSnapshot`] with delta computation.
+///
+/// Provides a fluent interface instead of a 7-argument `update` method,
+/// satisfying clippy's argument-count lint without sacrificing ergonomics.
+pub struct RuntimeProgressSnapshotBuilder<'a> {
+    previous: &'a RuntimeProgressSnapshot,
+    phase: RuntimeLivenessPhase,
+    event_count: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    execution_status: Option<String>,
+    last_activity_at: Option<TimestampMs>,
+    stall_deadline_at: Option<TimestampMs>,
+}
+
+impl RuntimeProgressSnapshotBuilder<'_> {
+    pub fn with_event_count(mut self, count: u64) -> Self {
+        self.event_count = count;
+        self
+    }
+    pub fn with_input_tokens(mut self, count: u64) -> Self {
+        self.input_tokens = count;
+        self
+    }
+    pub fn with_output_tokens(mut self, count: u64) -> Self {
+        self.output_tokens = count;
+        self
+    }
+    pub fn with_execution_status(mut self, status: Option<String>) -> Self {
+        self.execution_status = status;
+        self
+    }
+    pub fn with_last_activity_at(mut self, ts: Option<TimestampMs>) -> Self {
+        self.last_activity_at = ts;
+        self
+    }
+    pub fn with_stall_deadline_at(mut self, ts: Option<TimestampMs>) -> Self {
+        self.stall_deadline_at = ts;
+        self
+    }
+
+    /// Produce the new snapshot with computed deltas.
+    pub fn build(self) -> RuntimeProgressSnapshot {
+        RuntimeProgressSnapshot {
+            event_delta: self.event_count.saturating_sub(self.previous.event_count),
+            input_token_delta: self.input_tokens.saturating_sub(self.previous.input_tokens),
+            output_token_delta: self
+                .output_tokens
+                .saturating_sub(self.previous.output_tokens),
+            phase: self.phase,
+            event_count: self.event_count,
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            execution_status: self.execution_status,
+            last_activity_at: self.last_activity_at,
+            stall_deadline_at: self.stall_deadline_at,
         }
     }
 }
@@ -459,12 +507,15 @@ impl RunAttempt {
 /// - **Idle/progress timeout** (`idle_timeout_ms`): No liveness signal for this
 ///   duration triggers a stall. Slides forward on each new signal.
 /// - **Total runtime cap** (`total_runtime_cap_ms`): Absolute wall-clock limit
-///   regardless of progress. Only enforced when `Some`.
+///   regardless of progress, anchored to `started_at`. Only enforced when `Some`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StallMetadata {
+    /// Timestamp when the run started (used to anchor the hard runtime cap).
+    pub started_at: TimestampMs,
     /// Timestamp of the most recent liveness signal.
     pub last_activity_at: TimestampMs,
     /// Idle timeout in milliseconds. Slides forward on each progress signal.
+    #[serde(alias = "stall_timeout_ms")]
     pub idle_timeout_ms: DurationMs,
     /// Absolute wall-clock cap on total runtime, if configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,27 +526,28 @@ pub struct StallMetadata {
 
 impl StallMetadata {
     /// Create with an idle timeout and no total runtime cap.
-    pub fn new(last_activity_at: TimestampMs, idle_timeout_ms: DurationMs) -> Self {
-        Self::with_runtime_cap(last_activity_at, idle_timeout_ms, None)
+    pub fn new(started_at: TimestampMs, idle_timeout_ms: DurationMs) -> Self {
+        Self::with_runtime_cap(started_at, idle_timeout_ms, None)
     }
 
     /// Create with both an idle timeout and a total runtime cap.
     pub fn with_runtime_cap(
-        last_activity_at: TimestampMs,
+        started_at: TimestampMs,
         idle_timeout_ms: DurationMs,
         total_runtime_cap_ms: Option<DurationMs>,
     ) -> Self {
-        let idle_deadline = last_activity_at.saturating_add(idle_timeout_ms);
+        let idle_deadline = started_at.saturating_add(idle_timeout_ms);
         let stalled_at = match total_runtime_cap_ms {
             Some(cap) => {
-                let hard_cap = last_activity_at.saturating_add(cap);
+                let hard_cap = started_at.saturating_add(cap);
                 // Whichever deadline is sooner
                 idle_deadline.min(hard_cap)
             }
             None => idle_deadline,
         };
         Self {
-            last_activity_at,
+            started_at,
+            last_activity_at: started_at,
             idle_timeout_ms,
             total_runtime_cap_ms,
             stalled_at,
@@ -504,7 +556,10 @@ impl StallMetadata {
 
     /// Record a new progress signal and slide the idle deadline forward.
     ///
-    /// Returns `true` if the activity timestamp advanced the deadline.
+    /// The total runtime cap (if configured) remains anchored to `started_at`
+    /// and does NOT slide with activity signals.
+    ///
+    /// Returns `true` if the activity timestamp advanced the stall deadline.
     pub fn observe_activity(&mut self, activity_at: TimestampMs) -> bool {
         if activity_at < self.last_activity_at {
             return false;
@@ -512,10 +567,12 @@ impl StallMetadata {
 
         self.last_activity_at = activity_at;
 
+        // Idle deadline slides with each activity signal
         let idle_deadline = activity_at.saturating_add(self.idle_timeout_ms);
+        // Hard cap remains anchored to the original start time
         let new_stalled_at = match self.total_runtime_cap_ms {
             Some(cap) => {
-                let hard_cap = activity_at.saturating_add(cap);
+                let hard_cap = self.started_at.saturating_add(cap);
                 idle_deadline.min(hard_cap)
             }
             None => idle_deadline,

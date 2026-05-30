@@ -231,15 +231,15 @@ impl LivenessTracker {
             (Some(_), Some(_)) => RuntimeLivenessPhase::RunningTurn,
             _ => RuntimeLivenessPhase::WaitingOnPriorTurn,
         };
-        previous.update(
-            phase,
-            self.event_count,
-            self.input_tokens,
-            self.output_tokens,
-            self.execution_status.clone(),
-            self.last_activity_at,
-            self.stall_deadline_at(),
-        )
+        previous
+            .update_with(phase)
+            .with_event_count(self.event_count)
+            .with_input_tokens(self.input_tokens)
+            .with_output_tokens(self.output_tokens)
+            .with_execution_status(self.execution_status.clone())
+            .with_last_activity_at(self.last_activity_at)
+            .with_stall_deadline_at(self.stall_deadline_at())
+            .build()
     }
 
     fn advance_activity(&mut self, activity_at: TimestampMs) -> bool {
@@ -798,6 +798,29 @@ struct NormalizedOutcome {
     kind: WorkerOutcomeKind,
     summary: String,
     error: Option<String>,
+}
+
+/// Result of checking whether a runtime session has reached a terminal state.
+///
+/// Replaces the confusing `Option<(Outcome, bool)>` pattern where a fake
+/// `Failed` outcome was used to encode a liveness signal. Callers can now
+/// distinguish between three explicit cases:
+/// - `Terminal(outcome)`: the session reached a terminal state.
+/// - `StillRunningWithProgress`: the session is still running but a liveness
+///   signal was observed (e.g., execution status changed, new events arrived).
+/// - `NoProgress`: the session is still running with no new activity.
+#[derive(Debug, Clone)]
+enum StateCheckResult {
+    Terminal(NormalizedOutcome),
+    StillRunningWithProgress,
+    NoProgress,
+}
+
+/// Result of handling reconcile progress in the terminal-outcome loop.
+enum ReconcileResult {
+    Terminal(NormalizedOutcome),
+    Progress,
+    NoProgress,
 }
 
 pub struct ActiveSession {
@@ -2274,7 +2297,6 @@ impl IssueSessionRunner {
         }
     }
 
-    #[allow(unused_assignments)]
     async fn await_terminal_outcome<O>(
         &self,
         session: &mut ActiveSession,
@@ -2284,18 +2306,13 @@ impl IssueSessionRunner {
     where
         O: IssueSessionObserver,
     {
-        // Use a sliding progress deadline instead of a fixed total timeout.
-        // The deadline slides forward whenever a liveness signal (event, token bump,
-        // status change, reconcile progress) is observed.
         let idle_timeout = self.config.terminal_wait_timeout;
         let mut sliding_deadline = Instant::now() + idle_timeout;
         let mut next_token_accumulation = Instant::now() + Duration::from_secs(15);
 
         loop {
-            // Accumulate tokens every 15 seconds during streaming
             if Instant::now() >= next_token_accumulation {
                 session.accumulate_tokens();
-                // Notify observer of updated conversation metadata with new token counts
                 observer.on_conversation_update(
                     &session
                         .manifest
@@ -2304,24 +2321,20 @@ impl IssueSessionRunner {
                 next_token_accumulation = Instant::now() + Duration::from_secs(15);
             }
 
-            // Check terminal outcome; slide deadline when still running.
-            if let Some((outcome, liveness_signal)) = self
+            match self
                 .terminal_outcome_from_state(&mut session.stream, baseline_event_ids, observer)
                 .await
             {
-                if liveness_signal {
-                    sliding_deadline = Instant::now() + idle_timeout;
-                    continue;
+                StateCheckResult::Terminal(outcome) => {
+                    session.accumulate_tokens();
+                    return outcome;
                 }
-                // Terminal state reached — final token accumulation before returning
-                session.accumulate_tokens();
-                return outcome;
+                StateCheckResult::StillRunningWithProgress => {
+                    sliding_deadline = Instant::now() + idle_timeout;
+                }
+                StateCheckResult::NoProgress => {}
             }
 
-            // Still running — slide the deadline as a liveness signal
-            sliding_deadline = Instant::now() + idle_timeout;
-
-            // Calculate timeout for next_event considering the 15-second accumulation deadline
             let now = Instant::now();
             let event_timeout = if next_token_accumulation < sliding_deadline {
                 next_token_accumulation - now
@@ -2333,37 +2346,25 @@ impl IssueSessionRunner {
 
             match next_event {
                 Err(_) => {
-                    // Timeout occurred - could be token accumulation time or deadline
                     if Instant::now() >= next_token_accumulation {
                         session.accumulate_tokens();
                         next_token_accumulation = Instant::now() + Duration::from_secs(15);
                     }
 
-                    // If we've reached the sliding deadline, proceed with stall detection
                     if Instant::now() >= sliding_deadline {
-                        if let Ok(inserted) = session.stream.reconcile_events().await
-                            && inserted > 0
+                        match self
+                            .handle_reconcile_progress(session, baseline_event_ids, observer)
+                            .await
                         {
-                            // Reconcile found progress — this is a liveness signal
-                            observe_latest_event(observer, &session.stream);
-                            if let Some((outcome, liveness_signal)) = self
-                                .terminal_outcome_from_state(
-                                    &mut session.stream,
-                                    baseline_event_ids,
-                                    observer,
-                                )
-                                .await
-                            {
-                                if liveness_signal {
-                                    sliding_deadline = Instant::now() + idle_timeout;
-                                    continue;
-                                }
+                            ReconcileResult::Terminal(outcome) => {
                                 session.accumulate_tokens();
                                 return outcome;
                             }
-                            // No terminal state yet, but we found progress — slide and continue
-                            sliding_deadline = Instant::now() + idle_timeout;
-                            continue;
+                            ReconcileResult::Progress => {
+                                sliding_deadline = Instant::now() + idle_timeout;
+                                continue;
+                            }
+                            ReconcileResult::NoProgress => {}
                         }
                         return NormalizedOutcome {
                             kind: WorkerOutcomeKind::Stalled,
@@ -2376,37 +2377,25 @@ impl IssueSessionRunner {
                             )),
                         };
                     }
-                    // Otherwise continue the loop to accumulate tokens and check again
                 }
                 Ok(Ok(Some(event))) => {
-                    // New event received — this is a liveness signal
                     observe_event(observer, &event);
                     sliding_deadline = Instant::now() + idle_timeout;
                 }
                 Ok(Ok(None)) => {
-                    if let Ok(inserted) = session.stream.reconcile_events().await
-                        && inserted > 0
+                    match self
+                        .handle_reconcile_progress(session, baseline_event_ids, observer)
+                        .await
                     {
-                        // Reconcile found progress — this is a liveness signal
-                        observe_latest_event(observer, &session.stream);
-                        if let Some((outcome, liveness_signal)) = self
-                            .terminal_outcome_from_state(
-                                &mut session.stream,
-                                baseline_event_ids,
-                                observer,
-                            )
-                            .await
-                        {
-                            if liveness_signal {
-                                sliding_deadline = Instant::now() + idle_timeout;
-                                continue;
-                            }
+                        ReconcileResult::Terminal(outcome) => {
                             session.accumulate_tokens();
                             return outcome;
                         }
-                        // No terminal state yet, but we found progress — slide and continue
-                        sliding_deadline = Instant::now() + idle_timeout;
-                        continue;
+                        ReconcileResult::Progress => {
+                            sliding_deadline = Instant::now() + idle_timeout;
+                            continue;
+                        }
+                        ReconcileResult::NoProgress => {}
                     }
 
                     session.accumulate_tokens();
@@ -2420,29 +2409,19 @@ impl IssueSessionRunner {
                     };
                 }
                 Ok(Err(error)) => {
-                    if let Ok(inserted) = session.stream.reconcile_events().await
-                        && inserted > 0
+                    match self
+                        .handle_reconcile_progress(session, baseline_event_ids, observer)
+                        .await
                     {
-                        // Reconcile found progress — this is a liveness signal
-                        observe_latest_event(observer, &session.stream);
-                        if let Some((outcome, liveness_signal)) = self
-                            .terminal_outcome_from_state(
-                                &mut session.stream,
-                                baseline_event_ids,
-                                observer,
-                            )
-                            .await
-                        {
-                            if liveness_signal {
-                                sliding_deadline = Instant::now() + idle_timeout;
-                                continue;
-                            }
+                        ReconcileResult::Terminal(outcome) => {
                             session.accumulate_tokens();
                             return outcome;
                         }
-                        // No terminal state yet, but we found progress — slide and continue
-                        sliding_deadline = Instant::now() + idle_timeout;
-                        continue;
+                        ReconcileResult::Progress => {
+                            sliding_deadline = Instant::now() + idle_timeout;
+                            continue;
+                        }
+                        ReconcileResult::NoProgress => {}
                     }
                     return NormalizedOutcome {
                         kind: WorkerOutcomeKind::Failed,
@@ -2454,18 +2433,47 @@ impl IssueSessionRunner {
         }
     }
 
+    /// Helper: reconcile events and check for terminal outcome if progress found.
+    ///
+    /// Extracts the repeated "reconcile -> check terminal -> slide deadline" pattern
+    /// into a single place to avoid duplication.
+    async fn handle_reconcile_progress<O>(
+        &self,
+        session: &mut ActiveSession,
+        baseline_event_ids: &HashSet<String>,
+        observer: &mut O,
+    ) -> ReconcileResult
+    where
+        O: IssueSessionObserver,
+    {
+        if let Ok(inserted) = session.stream.reconcile_events().await
+            && inserted > 0
+        {
+            observe_latest_event(observer, &session.stream);
+            match self
+                .terminal_outcome_from_state(&mut session.stream, baseline_event_ids, observer)
+                .await
+            {
+                StateCheckResult::Terminal(outcome) => return ReconcileResult::Terminal(outcome),
+                StateCheckResult::StillRunningWithProgress => return ReconcileResult::Progress,
+                StateCheckResult::NoProgress => return ReconcileResult::Progress,
+            }
+        }
+        ReconcileResult::NoProgress
+    }
+
     /// Check whether the runtime has reached a terminal state.
     ///
-    /// Returns `Some(outcome)` when terminal, `None` when still active.
-    /// The second tuple element is `true` when a liveness signal was observed
-    /// (execution status changed while still running), allowing the caller
-    /// to slide the idle deadline.
+    /// Returns `StateCheckResult::Terminal(outcome)` when a terminal state is reached,
+    /// `StateCheckResult::StillRunningWithProgress` when the session is still running
+    /// but a liveness signal was observed, and `StateCheckResult::NoProgress` when
+    /// there is no new activity to report.
     async fn terminal_outcome_from_state<O>(
         &self,
         stream: &mut RuntimeEventStream,
         baseline_event_ids: &HashSet<String>,
         observer: &mut O,
-    ) -> Option<(NormalizedOutcome, bool)>
+    ) -> StateCheckResult
     where
         O: IssueSessionObserver,
     {
@@ -2475,20 +2483,17 @@ impl IssueSessionRunner {
             .iter()
             .any(|event| !baseline_event_ids.contains(&event.id));
         if !has_current_turn_activity {
-            return None;
+            return StateCheckResult::NoProgress;
         }
 
         if let Some(error_detail) =
             latest_current_turn_error(stream.event_cache().items(), baseline_event_ids)
         {
-            return Some((
-                NormalizedOutcome {
-                    kind: WorkerOutcomeKind::Failed,
-                    summary: "received ConversationErrorEvent during the current run".to_string(),
-                    error: Some(error_detail),
-                },
-                false,
-            ));
+            return StateCheckResult::Terminal(NormalizedOutcome {
+                kind: WorkerOutcomeKind::Failed,
+                summary: "received ConversationErrorEvent during the current run".to_string(),
+                error: Some(error_detail),
+            });
         }
 
         match stream.state_mirror().terminal_status() {
@@ -2497,55 +2502,36 @@ impl IssueSessionRunner {
                     .confirm_finished_terminal_state(stream, baseline_event_ids, observer)
                     .await
                 {
-                    Some((
-                        NormalizedOutcome {
-                            kind: WorkerOutcomeKind::Succeeded,
-                            summary: "OpenHands execution_status `finished`".to_string(),
-                            error: None,
-                        },
-                        false,
-                    ))
+                    StateCheckResult::Terminal(NormalizedOutcome {
+                        kind: WorkerOutcomeKind::Succeeded,
+                        summary: "OpenHands execution_status `finished`".to_string(),
+                        error: None,
+                    })
                 } else {
-                    None
+                    StateCheckResult::NoProgress
                 }
             }
             Some(TerminalExecutionStatus::Error) => {
                 let error_detail = extract_error_detail_from_state(stream.state_mirror())
                     .unwrap_or_else(|| "execution_status error".to_string());
-                Some((
-                    NormalizedOutcome {
-                        kind: WorkerOutcomeKind::Failed,
-                        summary: "OpenHands execution_status `error`".to_string(),
-                        error: Some(error_detail),
-                    },
-                    false,
-                ))
+                StateCheckResult::Terminal(NormalizedOutcome {
+                    kind: WorkerOutcomeKind::Failed,
+                    summary: "OpenHands execution_status `error`".to_string(),
+                    error: Some(error_detail),
+                })
             }
-            Some(TerminalExecutionStatus::Stuck) => Some((
-                NormalizedOutcome {
-                    kind: WorkerOutcomeKind::Stalled,
-                    summary: "OpenHands execution_status `stuck`".to_string(),
-                    error: Some(
-                        stream
-                            .state_mirror()
-                            .execution_status()
-                            .unwrap_or_default()
-                            .to_string(),
-                    ),
-                },
-                false,
-            )),
-            None => {
-                // Still running — execution status change is a liveness signal
-                Some((
-                    NormalizedOutcome {
-                        kind: WorkerOutcomeKind::Failed,
-                        summary: "unexpected None outcome while still running".to_string(),
-                        error: None,
-                    },
-                    true,
-                ))
-            }
+            Some(TerminalExecutionStatus::Stuck) => StateCheckResult::Terminal(NormalizedOutcome {
+                kind: WorkerOutcomeKind::Stalled,
+                summary: "OpenHands execution_status `stuck`".to_string(),
+                error: Some(
+                    stream
+                        .state_mirror()
+                        .execution_status()
+                        .unwrap_or_default()
+                        .to_string(),
+                ),
+            }),
+            None => StateCheckResult::StillRunningWithProgress,
         }
     }
 
