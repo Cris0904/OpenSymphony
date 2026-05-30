@@ -105,6 +105,16 @@ impl IssueSessionObserver for () {}
 /// Counts event deltas, token deltas, execution-status changes, reconnect/reconcile
 /// progress, and terminal/log frames as liveness signals. When a progress signal is
 /// observed, the stall deadline slides forward.
+///
+/// # Note
+///
+/// This struct provides a self-contained, unit-tested liveness-tracking API.
+/// The current `await_terminal_outcome` implementation inlines similar
+/// sliding-deadline logic rather than delegating to this tracker.  The tracker
+/// exists as a clean, testable abstraction for future refactoring of the
+/// session runner.  Keeping it separate avoids a large, risky inline refactor
+/// while ensuring the progress-based idle-detection contract is well-defined
+/// and verified.
 #[derive(Debug, Clone)]
 pub struct LivenessTracker {
     /// Monotonic count of events observed since the session started.
