@@ -2336,7 +2336,6 @@ impl IssueSessionRunner {
         let mut tracker = LivenessTracker::with_runtime_cap(idle_timeout_ms, total_runtime_cap_ms);
         tracker.mark_started(timestamp_ms_from_datetime(Utc::now()));
 
-        let mut sliding_deadline = Instant::now() + idle_timeout;
         let mut next_token_accumulation = Instant::now() + Duration::from_secs(15);
 
         loop {
@@ -2369,17 +2368,16 @@ impl IssueSessionRunner {
                     return outcome;
                 }
                 StateCheckResult::StillRunningWithProgress => {
-                    sliding_deadline = Instant::now() + idle_timeout;
+                    // Progress was observed during state check; record it so the tracker
+                    // slides the stall deadline accordingly.
+                    tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
                 }
                 StateCheckResult::NoProgress => {}
             }
 
             let now = Instant::now();
-            let event_timeout = if next_token_accumulation < sliding_deadline {
-                next_token_accumulation - now
-            } else {
-                sliding_deadline - now
-            };
+            let event_timeout =
+                compute_timeout_duration(&tracker, next_token_accumulation, now, idle_timeout);
 
             let next_event = timeout_at(now + event_timeout, session.stream.next_event()).await;
 
@@ -2390,7 +2388,8 @@ impl IssueSessionRunner {
                         next_token_accumulation = Instant::now() + Duration::from_secs(15);
                     }
 
-                    if Instant::now() >= sliding_deadline {
+                    let now_ts = timestamp_ms_from_datetime(Utc::now());
+                    if tracker.is_stalled_at(now_ts) {
                         match self
                             .handle_reconcile_progress(
                                 session,
@@ -2405,42 +2404,34 @@ impl IssueSessionRunner {
                                 return outcome;
                             }
                             ReconcileResult::Progress => {
-                                sliding_deadline = Instant::now() + idle_timeout;
-                                tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
+                                // `handle_reconcile_progress` already called
+                                // `record_reconciled_events()` which updates the tracker's
+                                // activity timestamp and event count, sliding the stall
+                                // deadline. No additional `record_event()` call is needed
+                                // here — that would double-count the reconciled batch.
                                 continue;
                             }
                             ReconcileResult::NoProgress => {}
                         }
-                        // Cross-check with the liveness tracker's stall detection.  If the
-                        // tracker disagrees (it has seen recent token accumulation or status
-                        // changes that the `Instant`-based logic missed), honor its stall
-                        // deadline and keep waiting.
+                        // Re-check stall after reconciliation: the tracker's deadline
+                        // may have been extended by reconciled events or token updates.
                         let now_ts = timestamp_ms_from_datetime(Utc::now());
-                        let tracker_deadline = tracker.stall_deadline_at();
-                        let tracker_confirms_stall = tracker.is_stalled_at(now_ts);
-                        if !tracker_confirms_stall && let Some(deadline_ts) = tracker_deadline {
-                            let remaining_ms = deadline_ts.as_u64().saturating_sub(now_ts.as_u64());
-                            if remaining_ms > 0 {
-                                sliding_deadline =
-                                    Instant::now() + Duration::from_millis(remaining_ms);
-                                continue;
-                            }
+                        if tracker.is_stalled_at(now_ts) {
+                            return NormalizedOutcome {
+                                kind: WorkerOutcomeKind::Stalled,
+                                summary:
+                                    "runtime did not reach a terminal state before the stall timeout"
+                                        .to_string(),
+                                error: Some(format!(
+                                    "no progress observed within {} ms idle timeout",
+                                    self.config.terminal_wait_timeout.as_millis()
+                                )),
+                            };
                         }
-                        return NormalizedOutcome {
-                            kind: WorkerOutcomeKind::Stalled,
-                            summary:
-                                "runtime did not reach a terminal state before the stall timeout"
-                                    .to_string(),
-                            error: Some(format!(
-                                "no progress observed within {} ms idle timeout",
-                                self.config.terminal_wait_timeout.as_millis()
-                            )),
-                        };
                     }
                 }
                 Ok(Ok(Some(event))) => {
                     observe_event(observer, &event);
-                    sliding_deadline = Instant::now() + idle_timeout;
                     tracker.record_event(timestamp_ms_from_datetime(event.timestamp));
                     if let Some(status) = session.stream.state_mirror().execution_status() {
                         tracker
@@ -2462,8 +2453,9 @@ impl IssueSessionRunner {
                             return outcome;
                         }
                         ReconcileResult::Progress => {
-                            sliding_deadline = Instant::now() + idle_timeout;
-                            tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
+                            // `handle_reconcile_progress` already called
+                            // `record_reconciled_events()` — no additional
+                            // `record_event()` needed to avoid double-counting.
                             continue;
                         }
                         ReconcileResult::NoProgress => {}
@@ -2494,8 +2486,9 @@ impl IssueSessionRunner {
                             return outcome;
                         }
                         ReconcileResult::Progress => {
-                            sliding_deadline = Instant::now() + idle_timeout;
-                            tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
+                            // `handle_reconcile_progress` already called
+                            // `record_reconciled_events()` — no additional
+                            // `record_event()` needed to avoid double-counting.
                             continue;
                         }
                         ReconcileResult::NoProgress => {}
@@ -3117,6 +3110,35 @@ fn observed_run_for_turn(run: &RunAttempt) -> RunAttempt {
 
 fn timestamp_ms_from_datetime(value: DateTime<Utc>) -> TimestampMs {
     TimestampMs::new(value.timestamp_millis().max(0) as u64)
+}
+
+/// Compute the remaining wait duration before the next event timeout fires.
+///
+/// The timeout is the earlier of:
+/// 1. The next token-accumulation poll (wall-clock `Instant`).
+/// 2. The tracker's stall deadline (logical `TimestampMs`), converted to a
+///    wall-clock duration.  If the tracker hasn't recorded a deadline yet,
+///    fall back to the configured idle timeout.
+fn compute_timeout_duration(
+    tracker: &LivenessTracker,
+    next_token_accumulation: Instant,
+    now: Instant,
+    idle_timeout: Duration,
+) -> Duration {
+    let token_remaining = next_token_accumulation.saturating_duration_since(now);
+
+    let stall_remaining = match tracker.stall_deadline_at() {
+        Some(deadline_ts) => {
+            let now_ts = timestamp_ms_from_datetime(Utc::now());
+            let remaining_ms = deadline_ts.as_u64().saturating_sub(now_ts.as_u64());
+            Duration::from_millis(remaining_ms)
+        }
+        None => idle_timeout,
+    };
+
+    token_remaining
+        .min(stall_remaining)
+        .max(Duration::from_millis(1))
 }
 
 fn parse_uuid(value: &str) -> Result<Uuid, String> {
