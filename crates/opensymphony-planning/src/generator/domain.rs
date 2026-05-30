@@ -48,6 +48,18 @@ pub enum TaskPriority {
     Low = 4,
 }
 
+impl TaskPriority {
+    /// Returns the numeric Linear priority value used in task frontmatter.
+    pub fn as_linear_priority(self) -> u8 {
+        match self {
+            Self::Urgent => 1,
+            Self::High => 2,
+            Self::Normal => 3,
+            Self::Low => 4,
+        }
+    }
+}
+
 /// A sub-issue represents a bounded implementation, validation, documentation,
 /// or cleanup unit small enough for one agent run or one bounded sequence of runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,7 +218,10 @@ impl RegenerationScope {
 
     /// Returns true if the milestone index should be regenerated.
     pub fn includes_milestone_index(&self) -> bool {
-        matches!(self, Self::Full | Self::MilestoneIndex) || self.includes_milestones()
+        matches!(self, Self::Full | Self::MilestoneIndex)
+            || self.includes_milestones()
+            || self.includes_issues()
+            || self.includes_sub_issues()
     }
 
     /// Returns true if task files should be regenerated.

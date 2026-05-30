@@ -9,7 +9,7 @@
 //! - Individual task file contents
 //! - Acceptance criteria, verification steps, and dependencies
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use chrono::Utc;
 
@@ -48,9 +48,8 @@ fn yaml_escape(s: &str) -> String {
     result
 }
 
-/// Escapes a string for safe use in markdown list items within task files.
-/// Newlines in the content are escaped to prevent breaking markdown formatting.
-fn markdown_escape(s: &str) -> String {
+/// Collapses a string to one rendered Markdown line for list items and summaries.
+fn collapse_markdown_line(s: &str) -> String {
     s.replace('\n', "\\n").replace('\r', "")
 }
 
@@ -97,15 +96,21 @@ impl PlanGenerator {
         scope: &RegenerationScope,
     ) -> Result<PlanArtifacts, GenerationError> {
         self.validate_session()?;
+        self.seed_task_counter_from_existing(existing);
 
-        // Handle selective milestone/issue regeneration based on scope IDs
         let milestones = match scope {
             RegenerationScope::Issues {
+                milestone_ids: None,
+            } => self.regenerate_issues_for_milestones(&existing.milestones, None),
+            RegenerationScope::Issues {
                 milestone_ids: Some(ids),
-            } => self.regenerate_issues_for_milestones(&existing.milestones, ids),
+            } => self.regenerate_issues_for_milestones(&existing.milestones, Some(ids)),
+            RegenerationScope::SubIssues { issue_ids: None } => {
+                self.regenerate_sub_issues_for_issues(&existing.milestones, None)
+            }
             RegenerationScope::SubIssues {
                 issue_ids: Some(ids),
-            } => self.regenerate_sub_issues_for_issues(&existing.milestones, ids),
+            } => self.regenerate_sub_issues_for_issues(&existing.milestones, Some(ids)),
             _ if scope.includes_milestones() => self.generate_milestones(),
             _ => existing.milestones.clone(),
         };
@@ -138,29 +143,58 @@ impl PlanGenerator {
         })
     }
 
+    fn seed_task_counter_from_existing(&mut self, existing: &PlanArtifacts) {
+        for milestone in &existing.milestones {
+            self.observe_task_id(&milestone.id);
+            for issue in &milestone.issues {
+                self.observe_task_id(&issue.id);
+                for sub_issue in &issue.sub_issues {
+                    self.observe_task_id(&sub_issue.id);
+                }
+            }
+        }
+    }
+
+    fn observe_task_id(&mut self, id: &TaskId) {
+        if let Some(number) =
+            id.0.strip_prefix("TASK-")
+                .and_then(|suffix| suffix.parse::<usize>().ok())
+        {
+            self.task_counter = self.task_counter.max(number);
+        }
+    }
+
     /// Regenerates issues only for the specified milestone IDs, preserving others.
     fn regenerate_issues_for_milestones(
         &mut self,
         existing: &[PlannedMilestone],
-        target_ids: &[TaskId],
+        target_ids: Option<&[TaskId]>,
     ) -> Vec<PlannedMilestone> {
-        let target_set: HashSet<&TaskId> = target_ids.iter().collect();
+        let target_set: Option<HashSet<&TaskId>> =
+            target_ids.map(|ids| ids.iter().collect::<HashSet<_>>());
+        let requirements_by_milestone = self.requirements_by_milestone(existing.len());
 
         existing
             .iter()
-            .map(|milestone| {
-                if target_set.contains(&milestone.id) {
-                    // Regenerate issues for this milestone
+            .enumerate()
+            .map(|(ms_idx, milestone)| {
+                if target_set
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&milestone.id))
+                {
                     let intake = IntakeContext {
                         planning_wave: self.session.intake.planning_wave.clone(),
                         project_description: self.session.intake.project_description.clone(),
                         success_criteria: self.session.intake.success_criteria.clone(),
-                        requirements: self.session.intake.requirements.clone(),
+                        requirements: requirements_by_milestone
+                            .get(ms_idx)
+                            .cloned()
+                            .unwrap_or_default(),
                         constraints: self.session.intake.constraints.clone(),
                         open_questions: self.session.intake.open_questions.clone(),
                         reference_docs: self.session.intake.reference_docs.clone(),
                     };
-                    let issues = self.generate_issues_for_milestone(&milestone.id, &intake);
+                    let issues = self.generate_issues_for_milestone(&intake);
                     PlannedMilestone {
                         id: milestone.id.clone(),
                         name: milestone.name.clone(),
@@ -171,7 +205,6 @@ impl PlanGenerator {
                         notes: milestone.notes.clone(),
                     }
                 } else {
-                    // Preserve this milestone as-is
                     milestone.clone()
                 }
             })
@@ -182,9 +215,10 @@ impl PlanGenerator {
     fn regenerate_sub_issues_for_issues(
         &mut self,
         existing: &[PlannedMilestone],
-        target_ids: &[TaskId],
+        target_ids: Option<&[TaskId]>,
     ) -> Vec<PlannedMilestone> {
-        let target_set: HashSet<&TaskId> = target_ids.iter().collect();
+        let target_set: Option<HashSet<&TaskId>> =
+            target_ids.map(|ids| ids.iter().collect::<HashSet<_>>());
 
         existing
             .iter()
@@ -193,8 +227,10 @@ impl PlanGenerator {
                     .issues
                     .iter()
                     .map(|issue| {
-                        if target_set.contains(&issue.id) {
-                            // Find the requirement text for this issue to regenerate sub-issues
+                        if target_set
+                            .as_ref()
+                            .is_none_or(|ids| ids.contains(&issue.id))
+                        {
                             let requirement = issue.title.clone();
                             let intake = IntakeContext {
                                 planning_wave: self.session.intake.planning_wave.clone(),
@@ -234,7 +270,6 @@ impl PlanGenerator {
                                 task_file: issue.task_file.clone(),
                             }
                         } else {
-                            // Preserve this issue as-is
                             issue.clone()
                         }
                     })
@@ -251,6 +286,17 @@ impl PlanGenerator {
                 }
             })
             .collect()
+    }
+
+    fn requirements_by_milestone(&self, milestone_count: usize) -> Vec<Vec<String>> {
+        let effective_count = milestone_count.max(1);
+        let mut grouped = vec![Vec::new(); effective_count];
+
+        for (idx, requirement) in self.session.intake.requirements.iter().enumerate() {
+            grouped[idx % effective_count].push(requirement.clone());
+        }
+
+        grouped
     }
 
     fn validate_session(&self) -> Result<(), GenerationError> {
@@ -314,7 +360,7 @@ impl PlanGenerator {
                     .join(" ")
             );
 
-            let issues = self.generate_issues_for_milestone(&milestone_id, &intake);
+            let issues = self.generate_issues_for_milestone(&intake);
 
             milestones.push(PlannedMilestone {
                 id: milestone_id,
@@ -335,12 +381,7 @@ impl PlanGenerator {
         } else {
             // Distribute requirements across Linear milestones using round-robin
             // to ensure all requirements are assigned without dropping any
-            let mut milestone_requirements: Vec<Vec<&String>> =
-                vec![Vec::new(); linear_milestones.len()];
-
-            for (req_idx, req) in requirements.iter().enumerate() {
-                milestone_requirements[req_idx % linear_milestones.len()].push(req);
-            }
+            let milestone_requirements = self.requirements_by_milestone(linear_milestones.len());
 
             for (ms_idx, ms) in linear_milestones.iter().enumerate() {
                 let milestone_id = self.next_task_id();
@@ -355,12 +396,9 @@ impl PlanGenerator {
                 }
 
                 let mut milestone_intake = intake.clone();
-                milestone_intake.requirements = milestone_requirements[ms_idx]
-                    .iter()
-                    .map(|r| (**r).clone())
-                    .collect();
+                milestone_intake.requirements = milestone_requirements[ms_idx].clone();
 
-                let issues = self.generate_issues_for_milestone(&milestone_id, &milestone_intake);
+                let issues = self.generate_issues_for_milestone(&milestone_intake);
 
                 milestones.push(PlannedMilestone {
                     id: milestone_id,
@@ -377,11 +415,7 @@ impl PlanGenerator {
         milestones
     }
 
-    fn generate_issues_for_milestone(
-        &mut self,
-        _milestone_id: &TaskId,
-        intake: &IntakeContext,
-    ) -> Vec<PlannedIssue> {
+    fn generate_issues_for_milestone(&mut self, intake: &IntakeContext) -> Vec<PlannedIssue> {
         let mut issues: Vec<PlannedIssue> = Vec::new();
 
         // Generate one issue per requirement as a starting point
@@ -680,7 +714,7 @@ parent: null
             issue.id,
             yaml_escape(&issue.title),
             yaml_escape(&milestone.name),
-            issue.priority as u8,
+            issue.priority.as_linear_priority(),
             issue
                 .estimate
                 .map(|e| e.to_string())
@@ -697,11 +731,11 @@ parent: null
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>()
                 .join(", "),
-            markdown_escape(&issue.summary),
+            collapse_markdown_line(&issue.summary),
             issue
                 .scope_in
                 .iter()
-                .map(|s| format!("- {}", markdown_escape(s)))
+                .map(|s| format!("- {}", collapse_markdown_line(s)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             if issue.scope_out.is_empty() {
@@ -710,44 +744,44 @@ parent: null
                 issue
                     .scope_out
                     .iter()
-                    .map(|s| format!("- {}", markdown_escape(s)))
+                    .map(|s| format!("- {}", collapse_markdown_line(s)))
                     .collect::<Vec<_>>()
                     .join("\n")
             },
             issue
                 .deliverables
                 .iter()
-                .map(|d| format!("- {}", markdown_escape(d)))
+                .map(|d| format!("- {}", collapse_markdown_line(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .acceptance_criteria
                 .iter()
-                .map(|c| format!("- [ ] {}", markdown_escape(&c.description)))
+                .map(|c| format!("- [ ] {}", collapse_markdown_line(&c.description)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .verification_steps
                 .iter()
-                .map(|v| format!("- {}", markdown_escape(v)))
+                .map(|v| format!("- {}", collapse_markdown_line(v)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .context
                 .iter()
-                .map(|c| format!("- {}", markdown_escape(c)))
+                .map(|c| format!("- {}", collapse_markdown_line(c)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .definition_of_ready
                 .iter()
-                .map(|d| format!("- [ ] {}", markdown_escape(d)))
+                .map(|d| format!("- [ ] {}", collapse_markdown_line(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             issue
                 .notes
                 .as_deref()
-                .map(markdown_escape)
+                .map(collapse_markdown_line)
                 .unwrap_or_else(|| "None".to_string()),
         );
 
@@ -821,7 +855,7 @@ parent: {}
             sub_issue.id,
             yaml_escape(&sub_issue.title),
             yaml_escape(&milestone.name),
-            sub_issue.priority as u8,
+            sub_issue.priority.as_linear_priority(),
             sub_issue
                 .estimate
                 .map(|e| e.to_string())
@@ -839,11 +873,11 @@ parent: {}
                 .collect::<Vec<_>>()
                 .join(", "),
             parent_issue.id,
-            markdown_escape(&sub_issue.summary),
+            collapse_markdown_line(&sub_issue.summary),
             sub_issue
                 .scope_in
                 .iter()
-                .map(|s| format!("- {}", markdown_escape(s)))
+                .map(|s| format!("- {}", collapse_markdown_line(s)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             if sub_issue.scope_out.is_empty() {
@@ -852,44 +886,44 @@ parent: {}
                 sub_issue
                     .scope_out
                     .iter()
-                    .map(|s| format!("- {}", markdown_escape(s)))
+                    .map(|s| format!("- {}", collapse_markdown_line(s)))
                     .collect::<Vec<_>>()
                     .join("\n")
             },
             sub_issue
                 .deliverables
                 .iter()
-                .map(|d| format!("- {}", markdown_escape(d)))
+                .map(|d| format!("- {}", collapse_markdown_line(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .acceptance_criteria
                 .iter()
-                .map(|c| format!("- [ ] {}", markdown_escape(&c.description)))
+                .map(|c| format!("- [ ] {}", collapse_markdown_line(&c.description)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .verification_steps
                 .iter()
-                .map(|v| format!("- {}", markdown_escape(v)))
+                .map(|v| format!("- {}", collapse_markdown_line(v)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .context
                 .iter()
-                .map(|c| format!("- {}", markdown_escape(c)))
+                .map(|c| format!("- {}", collapse_markdown_line(c)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .definition_of_ready
                 .iter()
-                .map(|d| format!("- [ ] {}", markdown_escape(d)))
+                .map(|d| format!("- [ ] {}", collapse_markdown_line(d)))
                 .collect::<Vec<_>>()
                 .join("\n"),
             sub_issue
                 .notes
                 .as_deref()
-                .map(markdown_escape)
+                .map(collapse_markdown_line)
                 .unwrap_or_else(|| "None".to_string()),
         );
 
@@ -916,21 +950,49 @@ pub fn validate_dependency_graph(artifacts: &PlanArtifacts) -> Result<(), Genera
     Ok(())
 }
 
-/// Builds a lookup map from task ID to its blocked_by dependencies.
-/// Note: blocks field is the inverse of blocked_by and represents the same
-/// dependency relationship from the other direction. We only need one direction
-/// for cycle detection - blocked_by is the canonical source.
+/// Builds a lookup map from task ID to dependency IDs.
+///
+/// `blocked_by` is already in dependency orientation: task -> blocker.
+/// `blocks` is the inverse metadata: blocker -> blocked task, so it must be
+/// reversed before adding it to the dependency map. That lets validation catch
+/// cycles recorded only in `blocks` without treating normal symmetric metadata
+/// as a false two-node cycle.
 fn build_dependency_map(artifacts: &PlanArtifacts) -> BTreeMap<TaskId, Vec<TaskId>> {
-    let mut map = BTreeMap::new();
+    let mut map: BTreeMap<TaskId, BTreeSet<TaskId>> = BTreeMap::new();
     for milestone in &artifacts.milestones {
         for issue in &milestone.issues {
-            map.insert(issue.id.clone(), issue.blocked_by.clone());
+            add_dependency_edges(&mut map, &issue.id, &issue.blocked_by, &issue.blocks);
             for sub_issue in &issue.sub_issues {
-                map.insert(sub_issue.id.clone(), sub_issue.blocked_by.clone());
+                add_dependency_edges(
+                    &mut map,
+                    &sub_issue.id,
+                    &sub_issue.blocked_by,
+                    &sub_issue.blocks,
+                );
             }
         }
     }
-    map
+
+    map.into_iter()
+        .map(|(task_id, dependencies)| (task_id, dependencies.into_iter().collect()))
+        .collect()
+}
+
+fn add_dependency_edges(
+    map: &mut BTreeMap<TaskId, BTreeSet<TaskId>>,
+    task_id: &TaskId,
+    blocked_by: &[TaskId],
+    blocks: &[TaskId],
+) {
+    map.entry(task_id.clone())
+        .or_default()
+        .extend(blocked_by.iter().cloned());
+
+    for blocked_task in blocks {
+        map.entry(blocked_task.clone())
+            .or_default()
+            .insert(task_id.clone());
+    }
 }
 
 fn validate_task_dependencies_with_map(
@@ -1091,6 +1153,79 @@ mod tests {
 
         // Task files should be preserved
         assert_eq!(original.task_files.len(), regenerated.task_files.len());
+    }
+
+    #[test]
+    fn regeneration_with_unscoped_issues_regenerates_all_issues() {
+        let session = make_sample_session();
+        let mut generator = PlanGenerator::new(session);
+        let original = generator.generate().expect("generation should succeed");
+
+        let mut updated_session = make_sample_session();
+        updated_session.intake.requirements = vec!["Feature C".to_string()];
+        let mut generator = PlanGenerator::new(updated_session);
+        let regenerated = generator
+            .regenerate(
+                &original,
+                &RegenerationScope::Issues {
+                    milestone_ids: None,
+                },
+            )
+            .expect("issue regeneration should succeed");
+
+        let milestone = regenerated
+            .milestones
+            .first()
+            .expect("milestone should be preserved");
+        assert_eq!(milestone.issues.len(), 1);
+        assert_eq!(milestone.issues[0].title, "Feature C");
+        assert_ne!(original.milestone_index, regenerated.milestone_index);
+        assert!(regenerated.task_files.contains_key(&milestone.issues[0].id));
+        assert_ne!(milestone.id, milestone.issues[0].id);
+    }
+
+    #[test]
+    fn regeneration_with_unscoped_sub_issues_regenerates_all_sub_issues() {
+        let session = make_sample_session();
+        let mut generator = PlanGenerator::new(session);
+        let original = generator.generate().expect("generation should succeed");
+        let original_issue = &original.milestones[0].issues[0];
+        let original_sub_issue_ids: Vec<TaskId> = original_issue
+            .sub_issues
+            .iter()
+            .map(|sub_issue| sub_issue.id.clone())
+            .collect();
+
+        let mut updated_session = make_sample_session();
+        updated_session
+            .intake
+            .constraints
+            .push("Must include operator evidence".to_string());
+        let mut generator = PlanGenerator::new(updated_session);
+        let regenerated = generator
+            .regenerate(&original, &RegenerationScope::SubIssues { issue_ids: None })
+            .expect("sub-issue regeneration should succeed");
+
+        let regenerated_issue = &regenerated.milestones[0].issues[0];
+        let regenerated_sub_issue_ids: Vec<TaskId> = regenerated_issue
+            .sub_issues
+            .iter()
+            .map(|sub_issue| sub_issue.id.clone())
+            .collect();
+
+        assert_eq!(original_issue.id, regenerated_issue.id);
+        assert_ne!(original_sub_issue_ids, regenerated_sub_issue_ids);
+        assert!(
+            regenerated_issue.sub_issues[0]
+                .context
+                .iter()
+                .any(|entry| entry.contains("Must include operator evidence"))
+        );
+        assert!(
+            regenerated
+                .task_files
+                .contains_key(&regenerated_issue.sub_issues[0].id)
+        );
     }
 
     #[test]
@@ -1373,5 +1508,97 @@ mod tests {
             }
             other => panic!("expected CircularDependency, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn dependency_graph_validation_detects_blocks_only_cycle() {
+        let cycle_a = TaskId("TASK-001".to_string());
+        let cycle_b = TaskId("TASK-002".to_string());
+        let cycle_c = TaskId("TASK-003".to_string());
+
+        let artifacts = PlanArtifacts {
+            generated_at: Utc::now(),
+            planning_wave: "test".to_string(),
+            milestones: vec![PlannedMilestone {
+                id: TaskId("MS-1".to_string()),
+                name: "M1: Test".to_string(),
+                goal: "Test goal".to_string(),
+                issues: vec![
+                    PlannedIssue {
+                        id: cycle_a.clone(),
+                        title: "Task A".to_string(),
+                        summary: "A".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![],
+                        blocks: vec![cycle_b.clone()],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                    PlannedIssue {
+                        id: cycle_b.clone(),
+                        title: "Task B".to_string(),
+                        summary: "B".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![],
+                        blocks: vec![cycle_c.clone()],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                    PlannedIssue {
+                        id: cycle_c.clone(),
+                        title: "Task C".to_string(),
+                        summary: "C".to_string(),
+                        scope_in: vec![],
+                        scope_out: vec![],
+                        deliverables: vec![],
+                        acceptance_criteria: vec![],
+                        verification_steps: vec![],
+                        context: vec![],
+                        definition_of_ready: vec![],
+                        notes: None,
+                        priority: TaskPriority::Normal,
+                        estimate: None,
+                        blocked_by: vec![],
+                        blocks: vec![cycle_a.clone()],
+                        sub_issues: vec![],
+                        task_file: None,
+                    },
+                ],
+                acceptance_criteria: vec![],
+                verification_steps: vec![],
+                notes: None,
+            }],
+            manifest: TaskPackageManifest {
+                planning_wave: "test".to_string(),
+                tasks_dir: "docs/tasks".to_string(),
+                milestones: vec!["M1: Test".to_string()],
+                tasks: vec![],
+            },
+            milestone_index: String::new(),
+            task_files: BTreeMap::new(),
+        };
+
+        assert!(
+            validate_dependency_graph(&artifacts).is_err(),
+            "cycles represented only by blocks edges should be detected"
+        );
     }
 }
