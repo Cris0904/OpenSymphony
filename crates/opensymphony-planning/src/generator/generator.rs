@@ -9,7 +9,7 @@
 //! - Individual task file contents
 //! - Acceptance criteria, verification steps, and dependencies
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use chrono::Utc;
 
@@ -89,6 +89,8 @@ impl PlanGenerator {
     }
 
     /// Regenerates only the artifacts specified in the scope, preserving others.
+    /// When `RegenerationScope::Issues { milestone_ids }` or `SubIssues { issue_ids }`
+    /// is used with specific IDs, only those milestones/issues are regenerated.
     pub fn regenerate(
         &mut self,
         existing: &PlanArtifacts,
@@ -96,10 +98,16 @@ impl PlanGenerator {
     ) -> Result<PlanArtifacts, GenerationError> {
         self.validate_session()?;
 
-        let milestones = if scope.includes_milestones() {
-            self.generate_milestones()
-        } else {
-            existing.milestones.clone()
+        // Handle selective milestone/issue regeneration based on scope IDs
+        let milestones = match scope {
+            RegenerationScope::Issues {
+                milestone_ids: Some(ids),
+            } => self.regenerate_issues_for_milestones(&existing.milestones, ids),
+            RegenerationScope::SubIssues {
+                issue_ids: Some(ids),
+            } => self.regenerate_sub_issues_for_issues(&existing.milestones, ids),
+            _ if scope.includes_milestones() => self.generate_milestones(),
+            _ => existing.milestones.clone(),
         };
 
         let manifest = if scope.includes_manifest() {
@@ -128,6 +136,121 @@ impl PlanGenerator {
             milestone_index,
             task_files,
         })
+    }
+
+    /// Regenerates issues only for the specified milestone IDs, preserving others.
+    fn regenerate_issues_for_milestones(
+        &mut self,
+        existing: &[PlannedMilestone],
+        target_ids: &[TaskId],
+    ) -> Vec<PlannedMilestone> {
+        let target_set: HashSet<&TaskId> = target_ids.iter().collect();
+
+        existing
+            .iter()
+            .map(|milestone| {
+                if target_set.contains(&milestone.id) {
+                    // Regenerate issues for this milestone
+                    let intake = IntakeContext {
+                        planning_wave: self.session.intake.planning_wave.clone(),
+                        project_description: self.session.intake.project_description.clone(),
+                        success_criteria: self.session.intake.success_criteria.clone(),
+                        requirements: self.session.intake.requirements.clone(),
+                        constraints: self.session.intake.constraints.clone(),
+                        open_questions: self.session.intake.open_questions.clone(),
+                        reference_docs: self.session.intake.reference_docs.clone(),
+                    };
+                    let issues = self.generate_issues_for_milestone(&milestone.id, &intake);
+                    PlannedMilestone {
+                        id: milestone.id.clone(),
+                        name: milestone.name.clone(),
+                        goal: milestone.goal.clone(),
+                        issues,
+                        acceptance_criteria: milestone.acceptance_criteria.clone(),
+                        verification_steps: milestone.verification_steps.clone(),
+                        notes: milestone.notes.clone(),
+                    }
+                } else {
+                    // Preserve this milestone as-is
+                    milestone.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// Regenerates sub-issues only for the specified issue IDs, preserving others.
+    fn regenerate_sub_issues_for_issues(
+        &mut self,
+        existing: &[PlannedMilestone],
+        target_ids: &[TaskId],
+    ) -> Vec<PlannedMilestone> {
+        let target_set: HashSet<&TaskId> = target_ids.iter().collect();
+
+        existing
+            .iter()
+            .map(|milestone| {
+                let issues = milestone
+                    .issues
+                    .iter()
+                    .map(|issue| {
+                        if target_set.contains(&issue.id) {
+                            // Find the requirement text for this issue to regenerate sub-issues
+                            let requirement = issue.title.clone();
+                            let intake = IntakeContext {
+                                planning_wave: self.session.intake.planning_wave.clone(),
+                                project_description: self
+                                    .session
+                                    .intake
+                                    .project_description
+                                    .clone(),
+                                success_criteria: self.session.intake.success_criteria.clone(),
+                                requirements: vec![requirement.clone()],
+                                constraints: self.session.intake.constraints.clone(),
+                                open_questions: self.session.intake.open_questions.clone(),
+                                reference_docs: self.session.intake.reference_docs.clone(),
+                            };
+                            let sub_issues = self.generate_sub_issues_for_issue(
+                                &issue.id,
+                                &requirement,
+                                &intake,
+                            );
+                            PlannedIssue {
+                                id: issue.id.clone(),
+                                title: issue.title.clone(),
+                                summary: issue.summary.clone(),
+                                scope_in: issue.scope_in.clone(),
+                                scope_out: issue.scope_out.clone(),
+                                deliverables: issue.deliverables.clone(),
+                                acceptance_criteria: issue.acceptance_criteria.clone(),
+                                verification_steps: issue.verification_steps.clone(),
+                                context: issue.context.clone(),
+                                definition_of_ready: issue.definition_of_ready.clone(),
+                                notes: issue.notes.clone(),
+                                priority: issue.priority,
+                                estimate: issue.estimate,
+                                blocked_by: issue.blocked_by.clone(),
+                                blocks: issue.blocks.clone(),
+                                sub_issues,
+                                task_file: issue.task_file.clone(),
+                            }
+                        } else {
+                            // Preserve this issue as-is
+                            issue.clone()
+                        }
+                    })
+                    .collect();
+
+                PlannedMilestone {
+                    id: milestone.id.clone(),
+                    name: milestone.name.clone(),
+                    goal: milestone.goal.clone(),
+                    issues,
+                    acceptance_criteria: milestone.acceptance_criteria.clone(),
+                    verification_steps: milestone.verification_steps.clone(),
+                    notes: milestone.notes.clone(),
+                }
+            })
+            .collect()
     }
 
     fn validate_session(&self) -> Result<(), GenerationError> {
@@ -224,9 +347,9 @@ impl PlanGenerator {
 
                 // Warn when a milestone has no assigned requirements instead of silently skipping
                 if milestone_requirements[ms_idx].is_empty() {
-                    eprintln!(
-                        "Warning: Linear milestone '{}' has no assigned requirements, skipping.",
-                        ms.milestone_name
+                    tracing::warn!(
+                        milestone = %ms.milestone_name,
+                        "Linear milestone has no assigned requirements, skipping."
                     );
                     continue;
                 }
@@ -325,9 +448,9 @@ impl PlanGenerator {
 
     fn generate_sub_issues_for_issue(
         &mut self,
-        _issue_id: &TaskId,
+        issue_id: &TaskId,
         requirement: &str,
-        _intake: &IntakeContext,
+        intake: &IntakeContext,
     ) -> Vec<PlannedSubIssue> {
         let mut sub_issues = Vec::new();
 
@@ -337,11 +460,26 @@ impl PlanGenerator {
         // Generate validation sub-issue (needs impl_id for blocked_by)
         let val_id = self.next_task_id();
 
+        // Build context from intake parameters for richer sub-issue descriptions
+        let mut context = vec![
+            format!("Parent issue: {}", issue_id),
+            format!("Planning wave: {}", intake.planning_wave),
+        ];
+        if !intake.constraints.is_empty() {
+            context.push(format!(
+                "Technical constraints: {}",
+                intake.constraints.join(", ")
+            ));
+        }
+
         // Implementation sub-issue blocks the validation sub-issue
         sub_issues.push(PlannedSubIssue {
             id: impl_id.clone(),
             title: format!("Implement {}", requirement),
-            summary: format!("Implementation unit for {}", requirement),
+            summary: format!(
+                "Implementation unit for {} in the {} planning wave",
+                requirement, intake.planning_wave
+            ),
             scope_in: vec![format!("Core implementation of {}", requirement)],
             scope_out: vec![format!("Testing and validation of {}", requirement)],
             deliverables: vec!["Implementation code".to_string(), "Unit tests".to_string()],
@@ -356,7 +494,7 @@ impl PlanGenerator {
                 "Run unit tests".to_string(),
                 "Verify code style".to_string(),
             ],
-            context: vec![format!("Sub-issue of {}", requirement)],
+            context: context.clone(),
             definition_of_ready: vec![
                 "Requirements are clear and understood.".to_string(),
                 "Dependencies are available.".to_string(),
@@ -368,6 +506,15 @@ impl PlanGenerator {
             blocks: vec![val_id.clone()],
             task_file: Some(format!("{}/{}.md", self.session.tasks_dir, impl_id)),
         });
+
+        // Validation context referencing parent issue and intake success criteria
+        let mut validation_context = vec![format!("Validates implementation of {}", requirement)];
+        if !intake.success_criteria.is_empty() {
+            validation_context.push(format!(
+                "Success criteria: {}",
+                intake.success_criteria.join("; ")
+            ));
+        }
 
         // Validation sub-issue is blocked by the implementation sub-issue
         sub_issues.push(PlannedSubIssue {
@@ -389,7 +536,7 @@ impl PlanGenerator {
                 "Verify acceptance criteria".to_string(),
                 "Generate validation report".to_string(),
             ],
-            context: vec![format!("Validates implementation of {}", requirement)],
+            context: validation_context,
             definition_of_ready: vec![
                 "Implementation is complete.".to_string(),
                 "Test environment is configured.".to_string(),
