@@ -3,10 +3,12 @@
 This document covers the remaining human checks for the OpenHands PR review
 workflow.
 
-`opensymphony init` now tries to configure the GitHub Actions variables, label,
-and optional review secret automatically when `gh` is installed and can access
-the target repository. Use this guide to verify that setup, finish anything you
-skipped, or complete the fallback path when GitHub automation was unavailable.
+`opensymphony init` now tries to configure the GitHub Actions variables and
+label automatically when `gh` is installed and can access the target repository.
+It also prompts you to commit and push the generated OpenSymphony files so this
+workflow is present in GitHub before agents start opening story PRs.
+Use this guide to verify that setup, finish anything you skipped, or complete
+the fallback path when GitHub automation was unavailable.
 
 Useful references:
 
@@ -31,8 +33,8 @@ Verify or add the following **Secret**:
 |------|-------|
 | `AI_REVIEW_API_KEY` | Your AI review provider API key |
 
-The scaffolded workflow uses `AI_REVIEW_API_KEY` as the only review secret
-name.
+The scaffolded workflow uses `AI_REVIEW_API_KEY` as the only required review
+secret name.
 
 ### 2. Configure Repository Variables
 
@@ -193,7 +195,8 @@ The default implementation does **not** expose the LLM secret to fork PR workflo
 
 The workflow only receives:
 - `AI_REVIEW_API_KEY` for the review LLM
-- `GITHUB_TOKEN` (to post comments)
+- The automatic `GITHUB_TOKEN`, scoped by the workflow job permissions, to post
+  review comments as `github-actions[bot]`
 
 No deployment credentials, cloud keys, package publishing tokens, or database secrets are exposed.
 

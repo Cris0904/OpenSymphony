@@ -1,0 +1,22 @@
+{
+  "name": "@opensymphony/desktop",
+  "version": "1.0.0",
+  "description": "OpenSymphony Tauri desktop app shell (stub)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "dev": "serve dist -l 1420",
+    "build": "node scripts/build-stub.mjs"
+  },
+  "dependencies": {
+    "@opensymphony/api-client": "*",
+    "@opensymphony/gateway-schema": "*",
+    "@opensymphony/state": "*",
+    "@opensymphony/ui-core": "*"
+  },
+  "devDependencies": {
+    "serve": "^14.2.4",
+    "typescript": "^5.8.0"
+  }
+}
