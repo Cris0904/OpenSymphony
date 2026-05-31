@@ -182,11 +182,16 @@ impl LivenessTracker {
         self.advance_activity(reconciled_at)
     }
 
-    /// Record a token accumulation update.
+    /// Record cumulative token totals from the conversation manifest.
     pub fn record_tokens(&mut self, input: u64, output: u64, recorded_at: TimestampMs) -> bool {
-        self.input_tokens = self.input_tokens.saturating_add(input);
-        self.output_tokens = self.output_tokens.saturating_add(output);
-        self.advance_activity(recorded_at)
+        let advanced = input > self.input_tokens || output > self.output_tokens;
+        self.input_tokens = self.input_tokens.max(input);
+        self.output_tokens = self.output_tokens.max(output);
+        if advanced {
+            self.advance_activity(recorded_at)
+        } else {
+            false
+        }
     }
 
     /// Record an execution-status change as a liveness signal.
@@ -3480,13 +3485,20 @@ mod tests {
         assert_eq!(snapshot2.input_token_delta, 0);
         assert_eq!(snapshot2.output_token_delta, 0);
 
-        // New progress should produce non-zero deltas
-        tracker.record_event(TimestampMs::new(1300));
-        tracker.record_tokens(10, 5, TimestampMs::new(1400));
+        // Re-reading the same cumulative totals should not produce phantom deltas.
+        let unchanged = tracker.record_tokens(50, 25, TimestampMs::new(1300));
+        assert!(!unchanged);
         let snapshot3 = tracker.snapshot(&snapshot2);
-        assert_eq!(snapshot3.event_delta, 1);
-        assert_eq!(snapshot3.input_token_delta, 10);
-        assert_eq!(snapshot3.output_token_delta, 5);
+        assert_eq!(snapshot3.input_token_delta, 0);
+        assert_eq!(snapshot3.output_token_delta, 0);
+
+        // Higher cumulative totals should produce non-zero deltas.
+        tracker.record_event(TimestampMs::new(1300));
+        tracker.record_tokens(60, 30, TimestampMs::new(1400));
+        let snapshot4 = tracker.snapshot(&snapshot3);
+        assert_eq!(snapshot4.event_delta, 1);
+        assert_eq!(snapshot4.input_token_delta, 10);
+        assert_eq!(snapshot4.output_token_delta, 5);
     }
 
     #[test]
