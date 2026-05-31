@@ -2327,8 +2327,7 @@ impl IssueSessionRunner {
     where
         O: IssueSessionObserver,
     {
-        let idle_timeout = self.config.terminal_wait_timeout;
-        let idle_timeout_ms = DurationMs::new(idle_timeout.as_millis() as u64);
+        let idle_timeout_ms = DurationMs::new(self.config.terminal_wait_timeout.as_millis() as u64);
         let total_runtime_cap_ms = self
             .config
             .total_runtime_cap_ms
@@ -2368,16 +2367,18 @@ impl IssueSessionRunner {
                     return outcome;
                 }
                 StateCheckResult::StillRunningWithProgress => {
-                    // Progress was observed during state check; record it so the tracker
-                    // slides the stall deadline accordingly.
-                    tracker.record_event(timestamp_ms_from_datetime(Utc::now()));
+                    // The state check only confirms current-turn activity already exists
+                    // in the cache. Event accounting happens when the event is first read
+                    // from the stream or reconciled from the server, so do not record a
+                    // synthetic event here.
                 }
                 StateCheckResult::NoProgress => {}
             }
 
             let now = Instant::now();
+            let now_ts = timestamp_ms_from_datetime(Utc::now());
             let event_timeout =
-                compute_timeout_duration(&tracker, next_token_accumulation, now, idle_timeout);
+                compute_timeout_duration(&tracker, next_token_accumulation, now, now_ts);
 
             let next_event = timeout_at(now + event_timeout, session.stream.next_event()).await;
 
@@ -3117,24 +3118,21 @@ fn timestamp_ms_from_datetime(value: DateTime<Utc>) -> TimestampMs {
 /// The timeout is the earlier of:
 /// 1. The next token-accumulation poll (wall-clock `Instant`).
 /// 2. The tracker's stall deadline (logical `TimestampMs`), converted to a
-///    wall-clock duration.  If the tracker hasn't recorded a deadline yet,
-///    fall back to the configured idle timeout.
+///    wall-clock duration with the caller's sampled logical timestamp.
 fn compute_timeout_duration(
     tracker: &LivenessTracker,
     next_token_accumulation: Instant,
     now: Instant,
-    idle_timeout: Duration,
+    now_ts: TimestampMs,
 ) -> Duration {
     let token_remaining = next_token_accumulation.saturating_duration_since(now);
 
-    let stall_remaining = match tracker.stall_deadline_at() {
-        Some(deadline_ts) => {
-            let now_ts = timestamp_ms_from_datetime(Utc::now());
+    let stall_remaining = tracker
+        .stall_deadline_at()
+        .map_or(Duration::MAX, |deadline_ts| {
             let remaining_ms = deadline_ts.as_u64().saturating_sub(now_ts.as_u64());
             Duration::from_millis(remaining_ms)
-        }
-        None => idle_timeout,
-    };
+        });
 
     token_remaining
         .min(stall_remaining)
@@ -3518,5 +3516,36 @@ mod tests {
         // Different status should advance activity
         let changed = tracker.record_status_change("finished", TimestampMs::new(1300));
         assert!(changed);
+    }
+
+    #[test]
+    fn compute_timeout_duration_uses_tracker_deadline_with_sampled_logical_time() {
+        let mut tracker = LivenessTracker::new(DurationMs::new(5_000));
+        tracker.mark_started(TimestampMs::new(1_000));
+
+        let now = Instant::now();
+        let timeout = compute_timeout_duration(
+            &tracker,
+            now + Duration::from_secs(30),
+            now,
+            TimestampMs::new(3_000),
+        );
+
+        assert_eq!(timeout, Duration::from_millis(3_000));
+    }
+
+    #[test]
+    fn compute_timeout_duration_uses_token_poll_when_tracker_has_no_deadline() {
+        let tracker = LivenessTracker::new(DurationMs::new(5_000));
+        let now = Instant::now();
+
+        let timeout = compute_timeout_duration(
+            &tracker,
+            now + Duration::from_millis(750),
+            now,
+            TimestampMs::new(3_000),
+        );
+
+        assert_eq!(timeout, Duration::from_millis(750));
     }
 }
