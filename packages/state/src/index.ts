@@ -416,14 +416,14 @@ export function gatewayReducer(
         action.events.length,
       );
 
-      // Respect terminal run statuses — do not override completed/cancelled runs to "active".
+      // Respect deriveRunPhaseState's computation for all phase states — including
+      // retry_queued, degraded, stalled, and quiet. Only override when the stream
+      // is healthy and we have fresh events.
       const computedPhase = deriveRunPhaseState(runDetail, computedLiveness, false);
 
       liveness.set(action.runId, {
         ...computedLiveness,
-        phaseState: computedPhase === "completed" || computedPhase === "cancelled"
-          ? computedPhase
-          : "active",
+        phaseState: computedPhase,
         lastEventAt: msToIso(action.nowMs),
         isStreamStale: false,
         streamHealth: "healthy",
@@ -695,18 +695,18 @@ export function gatewayReducer(
       const streamStale = new Map(state.terminal.streamStale);
       streamStale.set(action.runId, false);
 
-      // Restore liveness — terminal statuses (released) are already stable, so
-      // we only need to reset non-terminal liveness entries back to active.
+      // Restore liveness — delegate to deriveRunPhaseState so terminal run
+      // statuses (completed/cancelled) are preserved correctly and non-terminal
+      // runs transition to active on recovery.
       const liveness = new Map(state.run.liveness);
       const existing = liveness.get(action.runId);
       const runDetail = state.run.runs.get(action.runId);
 
       if (existing) {
+        const phaseState = deriveRunPhaseState(runDetail, existing, false);
         liveness.set(action.runId, {
           ...existing,
-          phaseState: existing.phaseState === "cancelled" || existing.phaseState === "detached"
-            ? existing.phaseState
-            : "active",
+          phaseState,
           isStreamStale: false,
           streamHealth: "healthy",
           lastEventAt: msToIso(action.nowMs),
