@@ -789,7 +789,7 @@ describe("cancelled and retry_queued run states", () => {
 
 describe("all run phase states", () => {
   it("active: running with fresh events", () => {
-    expect(deriveRunPhaseState("running", {
+    expect(deriveRunPhaseState({ status: "running" } as any, {
       runId: "r",
       phaseState: "active",
       lastEventAt: null,
@@ -802,7 +802,7 @@ describe("all run phase states", () => {
   });
 
   it("quiet: running with no recent events", () => {
-    expect(deriveRunPhaseState("running", {
+    expect(deriveRunPhaseState({ status: "running" } as any, {
       runId: "r",
       phaseState: "quiet",
       lastEventAt: null,
@@ -815,11 +815,11 @@ describe("all run phase states", () => {
   });
 
   it("degraded: stale stream but run alive", () => {
-    expect(deriveRunPhaseState("running", undefined, true)).toBe("degraded");
+    expect(deriveRunPhaseState({ status: "running" } as any, undefined, true)).toBe("degraded");
   });
 
   it("stalled: no events for extended period", () => {
-    expect(deriveRunPhaseState("running", {
+    expect(deriveRunPhaseState({ status: "running" } as any, {
       runId: "r",
       phaseState: "stalled",
       lastEventAt: null,
@@ -832,15 +832,15 @@ describe("all run phase states", () => {
   });
 
   it("retry_queued: run queued for retry", () => {
-    expect(deriveRunPhaseState("retry_queued", undefined, false)).toBe("retry_queued");
+    expect(deriveRunPhaseState({ status: "retry_queued" } as any, undefined, false)).toBe("retry_queued");
   });
 
   it("cancelled: run released", () => {
-    expect(deriveRunPhaseState("released", undefined, false)).toBe("cancelled");
+    expect(deriveRunPhaseState({ status: "released" } as any, undefined, false)).toBe("cancelled");
   });
 
   it("detached: long gap with stale stream", () => {
-    expect(deriveRunPhaseState("running", {
+    expect(deriveRunPhaseState({ status: "running" } as any, {
       runId: "r",
       phaseState: "detached",
       lastEventAt: null,

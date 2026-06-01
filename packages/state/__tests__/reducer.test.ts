@@ -607,15 +607,15 @@ describe("action receipts", () => {
 
 describe("deriveRunPhaseState", () => {
   it("retry_queued run status maps to retry_queued phase", () => {
-    expect(deriveRunPhaseState("retry_queued", undefined, false)).toBe("retry_queued");
+    expect(deriveRunPhaseState({ status: "retry_queued" } as any, undefined, false)).toBe("retry_queued");
   });
 
   it("released run status maps to cancelled phase", () => {
-    expect(deriveRunPhaseState("released", undefined, false)).toBe("cancelled");
+    expect(deriveRunPhaseState({ status: "released" } as any, undefined, false)).toBe("cancelled");
   });
 
   it("stale stream maps to degraded phase when run is still alive", () => {
-    expect(deriveRunPhaseState("running", undefined, true)).toBe("degraded");
+    expect(deriveRunPhaseState({ status: "running" } as any, undefined, true)).toBe("degraded");
   });
 
   it("active run with fresh stream is active", () => {
@@ -629,7 +629,7 @@ describe("deriveRunPhaseState", () => {
       isStreamStale: false,
       streamHealth: "healthy" as const,
     };
-    expect(deriveRunPhaseState("running", liveness, false)).toBe("active");
+    expect(deriveRunPhaseState({ status: "running" } as any, liveness, false)).toBe("active");
   });
 });
 

@@ -226,19 +226,25 @@ export type GatewayAction =
   | { type: "ERROR"; error: string }
   | { type: "LOADING"; loading: boolean };
 
-/** Determine the run phase state from run status and stream activity. */
+/** Determine the run phase state from run detail and stream activity. */
 export function deriveRunPhaseState(
-  runStatus: RunStatus,
+  runDetail: RunDetail | undefined,
   liveness: RunLivenessState | undefined,
   streamStale: boolean,
 ): RunPhaseState {
-  // Terminal statuses from the run itself take priority.
-  if (runStatus === "retry_queued") return "retry_queued";
-  if (runStatus === "released") {
-    return "cancelled"; // Simplified; actual reason would refine this.
-  }
+  const status = runDetail?.status ?? "unclaimed";
+  const releaseReason = runDetail?.release_reason;
 
-  // If the stream is stale but the run hasn't failed, keep it as degraded, not failed.
+  // Terminal run statuses take absolute priority.
+  if (status === "released") {
+    // Use release_reason to distinguish final state.
+    if (releaseReason === "completed" || releaseReason === "tracker_terminal") return "active";
+    if (releaseReason === "cancelled" || releaseReason === "tracker_inactive" || releaseReason === "retry_exhausted") return "cancelled";
+    return "cancelled";
+  }
+  if (status === "retry_queued") return "retry_queued";
+
+  // If the stream is stale but the run has not terminated, keep it as degraded.
   if (streamStale) return "degraded";
 
   if (!liveness) return "active";
@@ -396,7 +402,7 @@ export function gatewayReducer(
 
       liveness.set(action.runId, {
         runId: action.runId,
-        phaseState: existingLiveness?.phaseState ?? "active",
+        phaseState: "active",
         lastEventAt: msToIso(action.nowMs),
         lastStatusUpdateAt: existingLiveness?.lastStatusUpdateAt ?? msToIso(action.nowMs),
         eventCount: (existingLiveness?.eventCount ?? 0) + action.events.length,
@@ -617,7 +623,7 @@ export function gatewayReducer(
 
       // Determine phase state considering stream staleness.
       const runStatus: RunStatus = runDetail?.status ?? "unclaimed";
-      const phaseState = deriveRunPhaseState(runStatus, livenessState, isStreamStale);
+      const phaseState = deriveRunPhaseState(runDetail, livenessState, isStreamStale);
 
       const liveness = new Map(state.run.liveness);
       liveness.set(runId, { ...livenessState, phaseState });
@@ -649,7 +655,7 @@ export function gatewayReducer(
         });
       } else if (runDetail) {
         // Create liveness entry for runs that haven't received events yet.
-        const phaseState = deriveRunPhaseState(runStatus, undefined, true);
+        const phaseState = deriveRunPhaseState(runDetail, undefined, true);
         liveness.set(action.runId, {
           runId: action.runId,
           phaseState,
@@ -691,7 +697,7 @@ export function gatewayReducer(
         });
       } else if (runDetail) {
         // Create liveness entry for runs that haven't received events yet.
-        const phaseState = deriveRunPhaseState(runStatus, undefined, false);
+        const phaseState = deriveRunPhaseState(runDetail, undefined, false);
         liveness.set(action.runId, {
           runId: action.runId,
           phaseState,

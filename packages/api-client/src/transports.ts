@@ -90,58 +90,18 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
       url.searchParams.set("cursor_sequence", String(fromCursor.sequence));
       url.searchParams.set("cursor_partition", fromCursor.partition);
     }
-
-    while (!this.closed) {
-      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-      let shouldReconnect = false;
-      try {
-        const controller = new AbortController();
-        this.abortController = controller;
-        const response = await fetch(url.toString(), {
-          ...this.buildRequestInit(),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          console.error(`Event stream HTTP error: ${response.status} ${response.statusText}`);
-          shouldReconnect = true;
-        } else {
-          reader = response.body?.getReader() ?? null;
-          if (!reader) {
-            console.error("Event stream response has no readable body");
-            shouldReconnect = true;
-          } else {
-            for await (const envelope of this.parseSSE(reader)) {
-              this.lastEventTimestamp = Date.now();
-              this.streamHealthy = true;
-              this.reconnectAttempts = 0;
-              yield envelope;
-            }
-          }
-        }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          break; // Intentional close.
-        }
-        console.error("Event stream fetch/parse error:", err);
-        shouldReconnect = true;
-      } finally {
-        reader?.releaseLock();
-      }
-
-      // Reconnect logic.
-      if (!this.closed && shouldReconnect) {
-        this.streamHealthy = false;
-        await this.waitForReconnect();
-      }
-    }
+    yield* this.streamEvents(url);
   }
 
   async *terminalFrames(runId: string): AsyncIterable<GatewayEnvelope> {
     const url = new URL(
       `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/terminal/stream`,
     );
+    yield* this.streamEvents(url);
+  }
 
+  /** Shared SSE stream handler with reconnect logic. */
+  private async *streamEvents(url: URL): AsyncIterable<GatewayEnvelope> {
     while (!this.closed) {
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       let shouldReconnect = false;
@@ -154,12 +114,12 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
         });
 
         if (!response.ok) {
-          console.error(`Terminal stream HTTP error: ${response.status} ${response.statusText}`);
+          console.error(`Stream HTTP error: ${response.status} ${response.statusText}`);
           shouldReconnect = true;
         } else {
           reader = response.body?.getReader() ?? null;
           if (!reader) {
-            console.error("Terminal stream response has no readable body");
+            console.error("Stream response has no readable body");
             shouldReconnect = true;
           } else {
             for await (const envelope of this.parseSSE(reader)) {
@@ -174,7 +134,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
         if (err instanceof DOMException && err.name === "AbortError") {
           break; // Intentional close.
         }
-        console.error("Terminal stream fetch/parse error:", err);
+        console.error("Stream fetch/parse error:", err);
         shouldReconnect = true;
       } finally {
         reader?.releaseLock();
@@ -182,7 +142,6 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
       if (!this.closed && shouldReconnect) {
         this.streamHealthy = false;
-        this.reconnectAttempts = 0;
         await this.waitForReconnect();
       }
     }
