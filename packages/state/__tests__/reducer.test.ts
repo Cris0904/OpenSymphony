@@ -428,6 +428,7 @@ describe("connection state", () => {
     const state = gatewayReducer(initialState, {
       type: "RECONNECT_ATTEMPTED",
       attempts: 2,
+      nowMs: NOW,
     });
     expect(state.connection.reconnectAttempts).toBe(2);
     expect(state.connection.state).toBe("reconnecting");

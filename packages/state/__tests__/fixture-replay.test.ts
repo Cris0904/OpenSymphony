@@ -673,9 +673,11 @@ describe("reconnect behavior", () => {
     state = gatewayReducer(state, {
       type: "RECONNECT_ATTEMPTED",
       attempts: 1,
+      nowMs: NOW,
     });
     expect(state.connection.reconnectAttempts).toBe(1);
     expect(state.connection.state).toBe("reconnecting");
+    expect(state.connection.lastDisconnectedAt).toBeTruthy();
   });
 
   it("reducer handles connection failure", () => {
@@ -839,7 +841,7 @@ describe("all run phase states", () => {
     expect(deriveRunPhaseState({ status: "released" } as any, undefined, false)).toBe("cancelled");
   });
 
-  it("detached: long gap with stale stream", () => {
+  it("stale stream overrides detached liveness to degraded", () => {
     expect(deriveRunPhaseState({ status: "running" } as any, {
       runId: "r",
       phaseState: "detached",

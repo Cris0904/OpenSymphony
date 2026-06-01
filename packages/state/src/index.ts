@@ -334,6 +334,7 @@ export function gatewayReducer(
           ...state.connection,
           reconnectAttempts: action.attempts,
           state: action.attempts > 0 ? "reconnecting" : state.connection.state,
+          lastDisconnectedAt: action.attempts > 0 ? msToIso(action.nowMs) : state.connection.lastDisconnectedAt,
         },
       };
     }
