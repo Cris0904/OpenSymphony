@@ -244,10 +244,12 @@ export function deriveRunPhaseState(
   }
   if (status === "retry_queued") return "retry_queued";
 
-  // Stream staleness only matters when there is an active run (claimed or running).
-  // Unclaimed runs have no stream to be stale.
+  // Stream staleness overrides liveness for active runs — a stale stream should
+  // show as degraded rather than collapsing into detached/failed, even when the
+  // underlying liveness gap is large.
   if (streamStale && (status === "claimed" || status === "running")) return "degraded";
 
+  // No liveness data yet means the run has not produced events; default to active.
   if (!liveness) return "active";
 
   return liveness.phaseState;
@@ -623,7 +625,6 @@ export function gatewayReducer(
       );
 
       // Determine phase state considering stream staleness.
-      const runStatus: RunStatus = runDetail?.status ?? "unclaimed";
       const phaseState = deriveRunPhaseState(runDetail, livenessState, isStreamStale);
 
       const liveness = new Map(state.run.liveness);
@@ -639,18 +640,17 @@ export function gatewayReducer(
       const streamStale = new Map(state.terminal.streamStale);
       streamStale.set(action.runId, true);
 
-      // Update liveness to degraded (not failed!).
+      // Update liveness to reflect stale stream — but delegate to deriveRunPhaseState
+      // so terminal run statuses (released) are not collapsed into degraded.
       const liveness = new Map(state.run.liveness);
       const existing = liveness.get(action.runId);
       const runDetail = state.run.runs.get(action.runId);
-      const runStatus: RunStatus = runDetail?.status ?? "unclaimed";
 
       if (existing) {
+        const phaseState = deriveRunPhaseState(runDetail, existing, true);
         liveness.set(action.runId, {
           ...existing,
-          phaseState: existing.phaseState === "cancelled" || existing.phaseState === "detached"
-            ? existing.phaseState
-            : "degraded",
+          phaseState,
           isStreamStale: true,
           streamHealth: "stale",
         });
@@ -680,11 +680,11 @@ export function gatewayReducer(
       const streamStale = new Map(state.terminal.streamStale);
       streamStale.set(action.runId, false);
 
-      // Update liveness back to active if the run is still running.
+      // Restore liveness — terminal statuses (released) are already stable, so
+      // we only need to reset non-terminal liveness entries back to active.
       const liveness = new Map(state.run.liveness);
       const existing = liveness.get(action.runId);
       const runDetail = state.run.runs.get(action.runId);
-      const runStatus: RunStatus = runDetail?.status ?? "unclaimed";
 
       if (existing) {
         liveness.set(action.runId, {

@@ -750,4 +750,57 @@ describe("stream staleness vs failed run", () => {
     });
     expect(state.terminal.streamStale.get("run-1")).toBe(false);
   });
+
+  it("released/completed run does not collapse to degraded on stream staleness", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      nowMs: NOW,
+      payload: {
+        ...makeRunDetail("released"),
+        release_reason: "completed",
+      },
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
+      runId: "run-1",
+    });
+
+    const liveness = state.run.liveness.get("run-1");
+    // Completed run stays "active" even when stream is stale.
+    expect(liveness?.phaseState).toBe("active");
+    expect(liveness?.isStreamStale).toBe(true);
+  });
+
+  it("released/cancelled run stays cancelled on stream staleness", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      nowMs: NOW,
+      payload: {
+        ...makeRunDetail("released"),
+        release_reason: "cancelled",
+      },
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
+      runId: "run-1",
+    });
+
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness?.phaseState).toBe("cancelled");
+    expect(liveness?.isStreamStale).toBe(true);
+  });
 });
