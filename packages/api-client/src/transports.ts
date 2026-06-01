@@ -93,6 +93,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
     while (!this.closed) {
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+      let shouldReconnect = false;
       try {
         const controller = new AbortController();
         this.abortController = controller;
@@ -103,33 +104,33 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
         if (!response.ok) {
           console.error(`Event stream HTTP error: ${response.status} ${response.statusText}`);
-          break; // Exit inner try, will hit reconnect below.
-        }
-
-        reader = response.body?.getReader() ?? null;
-        if (!reader) {
-          console.error("Event stream response has no readable body");
-          break;
-        }
-
-        for await (const envelope of this.parseSSE(reader)) {
-          this.lastEventTimestamp = Date.now();
-          this.streamHealthy = true;
-          this.reconnectAttempts = 0;
-          yield envelope;
+          shouldReconnect = true;
+        } else {
+          reader = response.body?.getReader() ?? null;
+          if (!reader) {
+            console.error("Event stream response has no readable body");
+            shouldReconnect = true;
+          } else {
+            for await (const envelope of this.parseSSE(reader)) {
+              this.lastEventTimestamp = Date.now();
+              this.streamHealthy = true;
+              this.reconnectAttempts = 0;
+              yield envelope;
+            }
+          }
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
           break; // Intentional close.
         }
         console.error("Event stream fetch/parse error:", err);
-        // Fall through to reconnect.
+        shouldReconnect = true;
       } finally {
         reader?.releaseLock();
       }
 
       // Reconnect logic.
-      if (!this.closed) {
+      if (!this.closed && shouldReconnect) {
         this.streamHealthy = false;
         await this.waitForReconnect();
       }
@@ -143,6 +144,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
     while (!this.closed) {
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+      let shouldReconnect = false;
       try {
         const controller = new AbortController();
         this.abortController = controller;
@@ -153,28 +155,29 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
         if (!response.ok) {
           console.error(`Terminal stream HTTP error: ${response.status} ${response.statusText}`);
-          break;
-        }
-
-        reader = response.body?.getReader() ?? null;
-        if (!reader) {
-          console.error("Terminal stream response has no readable body");
-          break;
-        }
-
-        for await (const envelope of this.parseSSE(reader)) {
-          yield envelope;
+          shouldReconnect = true;
+        } else {
+          reader = response.body?.getReader() ?? null;
+          if (!reader) {
+            console.error("Terminal stream response has no readable body");
+            shouldReconnect = true;
+          } else {
+            for await (const envelope of this.parseSSE(reader)) {
+              yield envelope;
+            }
+          }
         }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
-          break;
+          break; // Intentional close.
         }
         console.error("Terminal stream fetch/parse error:", err);
+        shouldReconnect = true;
       } finally {
         reader?.releaseLock();
       }
 
-      if (!this.closed) {
+      if (!this.closed && shouldReconnect) {
         await this.waitForReconnect();
       }
     }
