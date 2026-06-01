@@ -695,17 +695,25 @@ export function gatewayReducer(
       const streamStale = new Map(state.terminal.streamStale);
       streamStale.set(action.runId, false);
 
-      // Restore liveness — delegate to deriveRunPhaseState so terminal run
-      // statuses (completed/cancelled) are preserved correctly and non-terminal
-      // runs transition to active on recovery.
+      // Restore liveness — recompute phaseState based on current event recency
+      // so terminal run statuses (completed/cancelled) are preserved correctly
+      // and non-terminal runs transition based on actual gap. Recovery implies
+      // at least one event has arrived, so we signal 1 event since last check.
       const liveness = new Map(state.run.liveness);
       const existing = liveness.get(action.runId);
       const runDetail = state.run.runs.get(action.runId);
 
       if (existing) {
-        const phaseState = deriveRunPhaseState(runDetail, existing, false);
+        const recomputedLiveness = computeLivenessState(
+          action.runId,
+          existing,
+          action.nowMs,
+          1, // Recovery means activity resumed.
+        );
+        const phaseState = deriveRunPhaseState(runDetail, recomputedLiveness, false);
         liveness.set(action.runId, {
           ...existing,
+          ...recomputedLiveness,
           phaseState,
           isStreamStale: false,
           streamHealth: "healthy",
