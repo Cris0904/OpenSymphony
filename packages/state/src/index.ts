@@ -704,9 +704,12 @@ export function gatewayReducer(
       const runDetail = state.run.runs.get(action.runId);
 
       if (existing) {
+        // Update lastEventAt before computing liveness so the gap calculation
+        // reflects the recovery timestamp rather than the stale previous one.
+        const freshLiveness = { ...existing, lastEventAt: msToIso(action.nowMs) };
         const recomputedLiveness = computeLivenessState(
           action.runId,
-          existing,
+          freshLiveness,
           action.nowMs,
           1, // Recovery means activity resumed.
         );
@@ -717,7 +720,6 @@ export function gatewayReducer(
           phaseState,
           isStreamStale: false,
           streamHealth: "healthy",
-          lastEventAt: msToIso(action.nowMs),
         });
       } else if (runDetail) {
         // Create liveness entry for runs that haven't received events yet.
