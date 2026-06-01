@@ -244,8 +244,9 @@ export function deriveRunPhaseState(
   }
   if (status === "retry_queued") return "retry_queued";
 
-  // If the stream is stale but the run has not terminated, keep it as degraded.
-  if (streamStale) return "degraded";
+  // Stream staleness only matters when there is an active run (claimed or running).
+  // Unclaimed runs have no stream to be stale.
+  if (streamStale && (status === "claimed" || status === "running")) return "degraded";
 
   if (!liveness) return "active";
 

@@ -618,6 +618,14 @@ describe("deriveRunPhaseState", () => {
     expect(deriveRunPhaseState({ status: "running" } as any, undefined, true)).toBe("degraded");
   });
 
+  it("stale stream ignored for unclaimed run", () => {
+    expect(deriveRunPhaseState({ status: "unclaimed" } as any, undefined, true)).toBe("active");
+  });
+
+  it("stale stream maps to degraded for claimed run", () => {
+    expect(deriveRunPhaseState({ status: "claimed" } as any, undefined, true)).toBe("degraded");
+  });
+
   it("active run with fresh stream is active", () => {
     const liveness = {
       runId: "run-1",
