@@ -413,6 +413,7 @@ export function gatewayReducer(
         action.runId,
         existingLiveness,
         action.nowMs,
+        action.events.length,
       );
 
       // Respect terminal run statuses — do not override completed/cancelled runs to "active".
@@ -635,6 +636,7 @@ export function gatewayReducer(
         runId,
         existingLiveness,
         nowMs,
+        0, // No new events since last health check.
       );
 
       // Determine phase state considering stream staleness.

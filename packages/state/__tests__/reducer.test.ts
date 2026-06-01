@@ -466,8 +466,8 @@ describe("run events and liveness", () => {
     });
     const liveness = state.run.liveness.get("run-1");
     expect(liveness).toBeTruthy();
-    // eventCount is not incremented by RUN_EVENTS_RECEIVED anymore — liveness tracks recency, not count.
-    expect(liveness?.eventCount).toBe(0);
+    // eventCount is incremented by RUN_EVENTS_RECEIVED via computeLivenessState.
+    expect(liveness?.eventCount).toBe(2);
     expect(liveness?.lastEventAt).toBeTruthy();
     expect(liveness?.gapSeconds).toBe(0);
   });
@@ -660,6 +660,7 @@ describe("computeLivenessState", () => {
         streamHealth: "healthy",
       },
       baseTime + 2000,
+      0, // No new events since last health check.
     );
     // With the gap (2s) far below the quiet threshold (300s), stays quiet.
     expect(liveness.phaseState).toBe("quiet");
@@ -671,8 +672,30 @@ describe("computeLivenessState", () => {
       "run-1",
       undefined,
       baseTime,
+      0, // No new events.
     );
     expect(liveness.phaseState).toBe("quiet");
+  });
+
+  it("fresh events -> active", () => {
+    const liveness = computeLivenessState(
+      "run-1",
+      {
+        runId: "run-1",
+        phaseState: "quiet",
+        lastEventAt: new Date(baseTime).toISOString(),
+        lastStatusUpdateAt: null,
+        eventCount: 5,
+        gapSeconds: 0,
+        isStreamStale: false,
+        streamHealth: "healthy",
+      },
+      baseTime + 2000,
+      3, // 3 new events since last check.
+    );
+    // With fresh events and small gap, should be active.
+    expect(liveness.phaseState).toBe("active");
+    expect(liveness.eventCount).toBe(8);
   });
 });
 

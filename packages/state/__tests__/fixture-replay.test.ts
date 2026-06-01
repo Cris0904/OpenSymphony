@@ -222,8 +222,8 @@ describe("snapshot + stream replay rebuilds state", () => {
 
     expect(state.run.runs.has("run-1")).toBe(true);
     const liveness = state.run.liveness.get("run-1");
-    // eventCount is not incremented by RUN_EVENTS_RECEIVED anymore — liveness tracks recency, not count.
-    expect(liveness?.eventCount).toBe(0);
+    // eventCount is incremented by RUN_EVENTS_RECEIVED via computeLivenessState.
+    expect(liveness?.eventCount).toBe(3);
   });
 
   it("rebuilds terminal state via TERMINAL_FRAMES_RECEIVED", async () => {
@@ -595,8 +595,8 @@ describe("long-running run state rebuild without live socket", () => {
     // Verify state rebuild.
     expect(state.run.runs.get("run-long-1")?.status).toBe("running");
     const liveness = state.run.liveness.get("run-long-1");
-    // eventCount is preserved from existing liveness, not incremented by envelope replay.
-    expect(liveness?.eventCount).toBe(0);
+    // eventCount is incremented by RUN_EVENTS_RECEIVED via computeLivenessState.
+    expect(liveness?.eventCount).toBe(5);
     expect(state.cache.runs.has("run-long-1")).toBe(true);
   });
 
