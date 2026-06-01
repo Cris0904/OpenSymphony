@@ -10,7 +10,7 @@ import type {
   ActionReceipt,
   PageCursor,
 } from "@opensymphony/gateway-schema";
-import type { GatewayTransport, GatewayTransportConfig } from "./index.js";
+import type { GatewayTransport, GatewayTransportConfig, ActionCapableTransport } from "./index.js";
 
 /**
  * HTTP-based transport adapter using fetch().
@@ -19,12 +19,9 @@ import type { GatewayTransport, GatewayTransportConfig } from "./index.js";
  * for live event streams. Designed to be the baseline contract
  * that all other transport adapters must satisfy.
  */
-export class HttpGatewayTransport implements GatewayTransport {
+export class HttpGatewayTransport implements GatewayTransport, ActionCapableTransport {
   readonly baseUri: string;
   private authToken?: string;
-  private eventSource?: EventSource;
-  private eventQueue: GatewayEnvelope[] = [];
-  private eventResolvers: Array<(value: IteratorResult<GatewayEnvelope>) => void> = [];
   private closed = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
@@ -32,6 +29,7 @@ export class HttpGatewayTransport implements GatewayTransport {
   private lastEventTimestamp: number | null = null;
   private streamHealthy = true;
   private readonly streamHealthTimeoutMs = 30_000;
+  private abortController: AbortController | null = null;
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
@@ -94,7 +92,12 @@ export class HttpGatewayTransport implements GatewayTransport {
     }
 
     while (!this.closed) {
-      const response = await fetch(url.toString(), this.buildRequestInit());
+      const controller = new AbortController();
+      this.abortController = controller;
+      const response = await fetch(url.toString(), {
+        ...this.buildRequestInit(),
+        signal: controller.signal,
+      });
 
       if (!response.ok) {
         throw new Error(`Event stream failed: ${response.status} ${response.statusText}`);
@@ -105,31 +108,12 @@ export class HttpGatewayTransport implements GatewayTransport {
         throw new Error("Event stream response has no readable body");
       }
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
       try {
-        while (!this.closed) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const envelope = JSON.parse(line.slice(6)) as GatewayEnvelope;
-                this.lastEventTimestamp = Date.now();
-                this.streamHealthy = true;
-                this.reconnectAttempts = 0;
-                yield envelope;
-              } catch {
-                // Malformed event, skip silently.
-              }
-            }
-          }
+        for await (const envelope of this.parseSSE(reader)) {
+          this.lastEventTimestamp = Date.now();
+          this.streamHealthy = true;
+          this.reconnectAttempts = 0;
+          yield envelope;
         }
       } finally {
         reader.releaseLock();
@@ -149,7 +133,12 @@ export class HttpGatewayTransport implements GatewayTransport {
     );
 
     while (!this.closed) {
-      const response = await fetch(url.toString(), this.buildRequestInit());
+      const controller = new AbortController();
+      this.abortController = controller;
+      const response = await fetch(url.toString(), {
+        ...this.buildRequestInit(),
+        signal: controller.signal,
+      });
 
       if (!response.ok) {
         throw new Error(`Terminal stream failed: ${response.status} ${response.statusText}`);
@@ -160,35 +149,77 @@ export class HttpGatewayTransport implements GatewayTransport {
         throw new Error("Terminal stream response has no readable body");
       }
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
       try {
-        while (!this.closed) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              try {
-                const envelope = JSON.parse(line.slice(6)) as GatewayEnvelope;
-                yield envelope;
-              } catch {
-                // Malformed event, skip silently.
-              }
-            }
-          }
-        }
+        yield* this.parseSSE(reader);
       } finally {
         reader.releaseLock();
       }
 
       if (!this.closed) {
         await this.waitForReconnect();
+      }
+    }
+  }
+
+  /** Parse an SSE stream into GatewayEnvelope objects. */
+  private async *parseSSE(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+  ): AsyncIterable<GatewayEnvelope> {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "";
+    let currentId = "";
+    let currentRetry = 0;
+    let currentData = "";
+
+    while (!this.closed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        // Empty line = end of event block.
+        if (line === "") {
+          if (currentData) {
+            try {
+              const envelope = JSON.parse(currentData) as GatewayEnvelope;
+              yield envelope;
+            } catch (err) {
+              console.error("SSE parse error: malformed JSON event data", err);
+            }
+            currentEvent = "";
+            currentId = "";
+            currentRetry = 0;
+            currentData = "";
+          }
+          continue;
+        }
+
+        if (line.startsWith("event: ")) {
+          currentEvent = line.slice(7);
+        } else if (line.startsWith("id: ")) {
+          currentId = line.slice(4);
+        } else if (line.startsWith("retry: ")) {
+          currentRetry = parseInt(line.slice(7), 10) || 0;
+        } else if (line.startsWith("data: ")) {
+          // Multi-line data: append with newline.
+          if (currentData) currentData += "\n";
+          currentData += line.slice(6);
+        } else if (line.startsWith(":")) {
+          // SSE comment line, ignore.
+        }
+        // Any other line is treated as data continuation.
+        else {
+          if (currentData) currentData += "\n";
+          currentData += line;
+        }
+      }
+
+      if (currentRetry > 0) {
+        this.reconnectDelayMs = currentRetry;
       }
     }
   }
@@ -240,13 +271,7 @@ export class HttpGatewayTransport implements GatewayTransport {
 
   async close(): Promise<void> {
     this.closed = true;
-    this.eventSource?.close();
-    this.eventSource = undefined;
-    // Resolve any pending event consumers.
-    for (const resolver of this.eventResolvers) {
-      resolver({ done: true, value: undefined });
-    }
-    this.eventResolvers = [];
+    this.abortController?.abort();
   }
 
   // -- Stream health diagnostics --

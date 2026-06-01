@@ -449,17 +449,14 @@ describe("run events and liveness", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
       payload: makeRunDetail(),
+      nowMs: baseTime,
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
       runId: "run-1",
       events: [makeRunEvent(1)],
+      nowMs: baseTime,
     });
-    // Force lastEventAt to a known time.
-    const liveness = state.run.liveness.get("run-1");
-    if (liveness) {
-      liveness.lastEventAt = new Date(baseTime).toISOString();
-    }
 
     // Check health 10 seconds later -> still quiet.
     state = gatewayReducer(state, {

@@ -175,19 +175,22 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   async *events(
     fromCursor?: { sequence: number; partition: string },
   ): AsyncIterable<GatewayEnvelope> {
+    // Filter events by partition if specified, otherwise replay all.
+    const events = fromCursor?.partition
+      ? this.mockEvents.filter((e) => e.cursor.partition === fromCursor.partition)
+      : this.mockEvents;
+
     let startIdx = 0;
     if (fromCursor) {
       // Replay starts AFTER the given cursor (strictly greater).
-      startIdx = this.mockEvents.findIndex(
-        (e) => e.cursor.sequence > fromCursor.sequence,
-      );
-      if (startIdx === -1) startIdx = this.mockEvents.length;
+      startIdx = events.findIndex((e) => e.cursor.sequence > fromCursor.sequence);
+      if (startIdx === -1) startIdx = events.length;
     }
 
-    for (let i = startIdx; i < this.mockEvents.length; i++) {
+    for (let i = startIdx; i < events.length; i++) {
       this.lastEventTimestamp = Date.now();
       this.reconnectAttemptsCount = 0;
-      yield this.mockEvents[i];
+      yield events[i];
     }
   }
 

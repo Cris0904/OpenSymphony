@@ -381,18 +381,14 @@ describe("stale stream handling", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
       payload: makeRunDetail("run-1", "running"),
+      nowMs: baseTime,
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
       runId: "run-1",
       events: [makeRunEvent(1)],
+      nowMs: baseTime,
     });
-
-    // Force lastEventAt to a known time.
-    const liveness = state.run.liveness.get("run-1");
-    if (liveness) {
-      liveness.lastEventAt = new Date(baseTime).toISOString();
-    }
 
     // 35 seconds -> degraded.
     state = gatewayReducer(state, {
@@ -672,18 +668,15 @@ describe("degraded stream handling", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
       payload: makeRunDetail("run-1", "running"),
+      nowMs: baseTime,
     });
 
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
       runId: "run-1",
       events: [makeRunEvent(1)],
+      nowMs: baseTime,
     });
-
-    const liveness = state.run.liveness.get("run-1");
-    if (liveness) {
-      liveness.lastEventAt = new Date(baseTime).toISOString();
-    }
 
     // 45 seconds gap -> degraded.
     state = gatewayReducer(state, {

@@ -201,27 +201,30 @@ export const initialState: GatewayState = {
 
 // -- Action types --
 
+/** Optional deterministic timestamp for reducer purity (tests). */
+type WithTimestamp = { nowMs?: number };
+
 export type GatewayAction =
   // Connection actions
-  | { type: "CONNECTION_STATE_CHANGED"; state: ConnectionState; error?: string }
+  | { type: "CONNECTION_STATE_CHANGED"; state: ConnectionState; error?: string; nowMs?: number }
   | { type: "RECONNECT_ATTEMPTED"; attempts: number }
   // Snapshot/actions
-  | { type: "SNAPSHOT_RECEIVED"; payload: DashboardSnapshot }
-  | { type: "TASK_GRAPH_RECEIVED"; payload: TaskGraphSnapshot }
-  | { type: "RUN_UPDATED"; payload: RunDetail }
-  | { type: "TERMINAL_FRAMES_RECEIVED"; runId: string; frames: TerminalFrame[] }
-  | { type: "APPROVAL_RECEIVED"; payload: ApprovalRequest }
-  | { type: "APPROVAL_RESOLVED"; approvalId: string; payload: ApprovalRequest }
-  | { type: "PLANNING_SESSION_UPDATED"; payload: PlanningSessionSummary }
-  | { type: "RUN_EVENTS_RECEIVED"; runId: string; events: RunEvent[] }
+  | { type: "SNAPSHOT_RECEIVED"; payload: DashboardSnapshot; nowMs?: number }
+  | { type: "TASK_GRAPH_RECEIVED"; payload: TaskGraphSnapshot; nowMs?: number }
+  | { type: "RUN_UPDATED"; payload: RunDetail; nowMs?: number }
+  | { type: "TERMINAL_FRAMES_RECEIVED"; runId: string; frames: TerminalFrame[]; nowMs?: number }
+  | { type: "APPROVAL_RECEIVED"; payload: ApprovalRequest; nowMs?: number }
+  | { type: "APPROVAL_RESOLVED"; approvalId: string; payload: ApprovalRequest; nowMs?: number }
+  | { type: "PLANNING_SESSION_UPDATED"; payload: PlanningSessionSummary; nowMs?: number }
+  | { type: "RUN_EVENTS_RECEIVED"; runId: string; events: RunEvent[]; nowMs?: number }
   // Envelope/actions
   | { type: "ENVELOPE_RECEIVED"; payload: GatewayEnvelope }
-  | { type: "ACTION_RECEIPT_RECEIVED"; receipt: ActionReceipt }
-  | { type: "ACTION_DISPATCHED"; correlationId: string }
+  | { type: "ACTION_RECEIPT_RECEIVED"; receipt: ActionReceipt; nowMs?: number }
+  | { type: "ACTION_DISPATCHED"; correlationId: string; nowMs?: number }
   // Liveness/stream health
   | { type: "STREAM_HEALTH_CHECK"; runId: string; nowMs?: number }
-  | { type: "STREAM_STALE_DETECTED"; runId: string }
-  | { type: "STREAM_RECOVERED"; runId: string }
+  | { type: "STREAM_STALE_DETECTED"; runId: string; nowMs?: number }
+  | { type: "STREAM_RECOVERED"; runId: string; nowMs?: number }
   // Generic
   | { type: "ERROR"; error: string }
   | { type: "LOADING"; loading: boolean };
@@ -291,8 +294,9 @@ export function computeLivenessState(
 
 // -- Reducer --
 
-function nowIso(): string {
-  return new Date().toISOString();
+/** Convert milliseconds to ISO string deterministically (for reducer purity). */
+function msToIso(ms: number): string {
+  return new Date(ms).toISOString();
 }
 
 export function gatewayReducer(
@@ -309,8 +313,8 @@ export function gatewayReducer(
           ...state.connection,
           state: action.state,
           error: connError,
-          lastConnectedAt: action.state === "connected" ? nowIso() : state.connection.lastConnectedAt,
-          lastDisconnectedAt: action.state === "disconnected" ? nowIso() : state.connection.lastDisconnectedAt,
+          lastConnectedAt: action.state === "connected" ? msToIso(action.nowMs ?? Date.now()) : state.connection.lastConnectedAt,
+          lastDisconnectedAt: action.state === "disconnected" ? msToIso(action.nowMs ?? Date.now()) : state.connection.lastDisconnectedAt,
           reconnectAttempts: action.state === "reconnecting" ? state.connection.reconnectAttempts + 1 : state.connection.reconnectAttempts,
         },
       };
@@ -335,7 +339,7 @@ export function gatewayReducer(
           snapshot: action.payload,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
       };
 
@@ -348,7 +352,7 @@ export function gatewayReducer(
           rootIds: action.payload.root_ids,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
       };
     }
@@ -360,7 +364,7 @@ export function gatewayReducer(
       // Update entity cache.
       const cacheRuns = new Map(state.cache.runs);
       cacheRuns.set(action.payload.run_id, {
-        lastSeen: nowIso(),
+        lastSeen: msToIso(action.nowMs ?? Date.now()),
         version: (cacheRuns.get(action.payload.run_id)?.version ?? 0) + 1,
         data: action.payload,
       });
@@ -371,7 +375,7 @@ export function gatewayReducer(
       if (existingLiveness) {
         liveness.set(action.payload.run_id, {
           ...existingLiveness,
-          lastStatusUpdateAt: nowIso(),
+          lastStatusUpdateAt: msToIso(action.nowMs ?? Date.now()),
         });
       }
 
@@ -383,7 +387,7 @@ export function gatewayReducer(
           liveness,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
         cache: { ...state.cache, runs: cacheRuns },
       };
@@ -397,8 +401,8 @@ export function gatewayReducer(
       liveness.set(action.runId, {
         runId: action.runId,
         phaseState: existingLiveness?.phaseState ?? "active",
-        lastEventAt: nowIso(),
-        lastStatusUpdateAt: existingLiveness?.lastStatusUpdateAt ?? nowIso(),
+        lastEventAt: msToIso(action.nowMs ?? Date.now()),
+        lastStatusUpdateAt: existingLiveness?.lastStatusUpdateAt ?? msToIso(action.nowMs ?? Date.now()),
         eventCount: (existingLiveness?.eventCount ?? 0) + action.events.length,
         gapSeconds: 0,
         isStreamStale: false,
@@ -413,7 +417,7 @@ export function gatewayReducer(
           liveness,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
       };
     }
@@ -436,7 +440,7 @@ export function gatewayReducer(
       // Update entity cache.
       const cacheTerminals = new Map(state.cache.terminals);
       cacheTerminals.set(action.runId, {
-        lastSeen: nowIso(),
+        lastSeen: msToIso(action.nowMs ?? Date.now()),
         version: (cacheTerminals.get(action.runId)?.version ?? 0) + 1,
         data: action.frames,
       });
@@ -449,7 +453,7 @@ export function gatewayReducer(
           cursor,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
         cache: { ...state.cache, terminals: cacheTerminals },
       };
@@ -467,12 +471,12 @@ export function gatewayReducer(
             : [...state.approval.pending, action.payload],
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
         cache: {
           ...state.cache,
           approvals: new Map(state.cache.approvals).set(action.payload.approval_id, {
-            lastSeen: nowIso(),
+            lastSeen: msToIso(action.nowMs ?? Date.now()),
             version: 1,
             data: action.payload,
           }),
@@ -488,7 +492,7 @@ export function gatewayReducer(
       // Update entity cache.
       const cacheApprovals = new Map(state.cache.approvals);
       cacheApprovals.set(approvalId, {
-        lastSeen: nowIso(),
+        lastSeen: msToIso(action.nowMs ?? Date.now()),
         version: (cacheApprovals.get(approvalId)?.version ?? 0) + 1,
         data: action.payload,
       });
@@ -501,7 +505,7 @@ export function gatewayReducer(
           resolved,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
         cache: { ...state.cache, approvals: cacheApprovals },
       };
@@ -514,7 +518,7 @@ export function gatewayReducer(
       // Update entity cache.
       const cachePlanning = new Map(state.cache.planning);
       cachePlanning.set(action.payload.session_id, {
-        lastSeen: nowIso(),
+        lastSeen: msToIso(action.nowMs ?? Date.now()),
         version: (cachePlanning.get(action.payload.session_id)?.version ?? 0) + 1,
         data: action.payload,
       });
@@ -525,7 +529,7 @@ export function gatewayReducer(
           sessions,
           loading: false,
           error: null,
-          lastUpdated: nowIso(),
+          lastUpdated: msToIso(action.nowMs ?? Date.now()),
         },
         cache: { ...state.cache, planning: cachePlanning },
       };
@@ -589,7 +593,7 @@ export function gatewayReducer(
       const pending = new Map(state.actionReceipts.pending);
       pending.set(action.correlationId, {
         correlationId: action.correlationId,
-        dispatchedAt: nowIso(),
+        dispatchedAt: msToIso(action.nowMs ?? Date.now()),
       });
       return {
         ...state,
@@ -601,7 +605,7 @@ export function gatewayReducer(
 
     case "STREAM_HEALTH_CHECK": {
       const { runId } = action;
-      const now = action.nowMs ?? Date.now();
+      const nowMs = action.nowMs ?? Date.now();
       const existingLiveness = state.run.liveness.get(runId);
       const runDetail = state.run.runs.get(runId);
       const isStreamStale = state.terminal.streamStale.get(runId) ?? false;
@@ -611,7 +615,7 @@ export function gatewayReducer(
       const livenessState = computeLivenessState(
         runId,
         existingLiveness,
-        now,
+        nowMs,
         0, // No new events since last check.
       );
 
@@ -687,7 +691,7 @@ export function gatewayReducer(
             : "active",
           isStreamStale: false,
           streamHealth: "healthy",
-          lastEventAt: nowIso(),
+          lastEventAt: msToIso(action.nowMs ?? Date.now()),
         });
       } else if (runDetail) {
         // Create liveness entry for runs that haven't received events yet.
@@ -695,7 +699,7 @@ export function gatewayReducer(
         liveness.set(action.runId, {
           runId: action.runId,
           phaseState,
-          lastEventAt: nowIso(),
+          lastEventAt: msToIso(action.nowMs ?? Date.now()),
           lastStatusUpdateAt: null,
           eventCount: 0,
           gapSeconds: 0,
