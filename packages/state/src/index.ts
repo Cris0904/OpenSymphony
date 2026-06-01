@@ -257,7 +257,7 @@ export function deriveRunPhaseState(
   return liveness.phaseState;
 }
 
-/** Compute liveness state for a run based on event activity. */
+/** Compute liveness state for a run based on event recency. */
 export function computeLivenessState(
   runId: string,
   existingLiveness: RunLivenessState | undefined,
@@ -407,18 +407,23 @@ export function gatewayReducer(
       const existingLiveness = liveness.get(action.runId);
       const runDetail = runs.get(action.runId);
 
+      // Use computeLivenessState for consistency with STREAM_HEALTH_CHECK
+      // and to eliminate dead code path.
+      const computedLiveness = computeLivenessState(
+        action.runId,
+        existingLiveness,
+        action.nowMs,
+      );
+
       // Respect terminal run statuses — do not override completed/cancelled runs to "active".
-      const computedPhase = deriveRunPhaseState(runDetail, existingLiveness, false);
+      const computedPhase = deriveRunPhaseState(runDetail, computedLiveness, false);
 
       liveness.set(action.runId, {
-        runId: action.runId,
+        ...computedLiveness,
         phaseState: computedPhase === "completed" || computedPhase === "cancelled"
           ? computedPhase
           : "active",
         lastEventAt: msToIso(action.nowMs),
-        lastStatusUpdateAt: existingLiveness?.lastStatusUpdateAt ?? msToIso(action.nowMs),
-        eventCount: (existingLiveness?.eventCount ?? 0) + action.events.length,
-        gapSeconds: 0,
         isStreamStale: false,
         streamHealth: "healthy",
       });
@@ -630,7 +635,6 @@ export function gatewayReducer(
         runId,
         existingLiveness,
         nowMs,
-        0, // No new events since last check.
       );
 
       // Determine phase state considering stream staleness.
