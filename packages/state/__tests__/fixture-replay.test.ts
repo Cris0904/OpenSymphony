@@ -396,13 +396,11 @@ describe("stale stream handling", () => {
     const baseTime = 1_700_000_000_000;
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
-      nowMs: NOW,
       payload: makeRunDetail("run-1", "running"),
       nowMs: baseTime,
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
-      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1)],
       nowMs: baseTime,
@@ -411,7 +409,6 @@ describe("stale stream handling", () => {
     // 35 seconds -> degraded.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 35_000,
     });
@@ -420,7 +417,6 @@ describe("stale stream handling", () => {
     // 95 seconds -> stalled.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 95_000,
     });
@@ -429,7 +425,6 @@ describe("stale stream handling", () => {
     // 155 seconds -> detached.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 155_000,
     });
@@ -625,7 +620,6 @@ describe("long-running run state rebuild without live socket", () => {
     const baseTime = 1_700_000_000_000;
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-detached",
       nowMs: baseTime + 160_000,
     });
@@ -701,14 +695,12 @@ describe("degraded stream handling", () => {
     const baseTime = 1_700_000_000_000;
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
-      nowMs: NOW,
       payload: makeRunDetail("run-1", "running"),
       nowMs: baseTime,
     });
 
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
-      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1)],
       nowMs: baseTime,
@@ -717,7 +709,6 @@ describe("degraded stream handling", () => {
     // 45 seconds gap -> degraded.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 45_000,
     });
@@ -755,7 +746,6 @@ describe("cancelled and retry_queued run states", () => {
       type: "STREAM_HEALTH_CHECK",
       nowMs: NOW,
       runId: "run-1",
-      nowMs: Date.now(),
     });
 
     expect(state.run.liveness.get("run-1")?.phaseState).toBe("retry_queued");
@@ -772,7 +762,6 @@ describe("cancelled and retry_queued run states", () => {
       type: "STREAM_HEALTH_CHECK",
       nowMs: NOW,
       runId: "run-1",
-      nowMs: Date.now(),
     });
 
     expect(state.run.liveness.get("run-1")?.phaseState).toBe("cancelled");

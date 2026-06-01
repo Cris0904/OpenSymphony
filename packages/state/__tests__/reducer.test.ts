@@ -474,13 +474,11 @@ describe("run events and liveness", () => {
     const baseTime = 1_700_000_000_000; // Fixed timestamp for deterministic tests.
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
-      nowMs: NOW,
       payload: makeRunDetail(),
       nowMs: baseTime,
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
-      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1)],
       nowMs: baseTime,
@@ -489,7 +487,6 @@ describe("run events and liveness", () => {
     // Check health 10 seconds later -> still quiet.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 10_000,
     });
@@ -499,7 +496,6 @@ describe("run events and liveness", () => {
     // Check health 45 seconds later -> degraded.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 45_000,
     });
@@ -509,7 +505,6 @@ describe("run events and liveness", () => {
     // Check health 90 seconds later -> stalled.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 90_000,
     });
@@ -519,7 +514,6 @@ describe("run events and liveness", () => {
     // Check health 150 seconds later -> detached.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
-      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 150_000,
     });

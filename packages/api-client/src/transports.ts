@@ -163,6 +163,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
             shouldReconnect = true;
           } else {
             for await (const envelope of this.parseSSE(reader)) {
+              this.lastEventTimestamp = Date.now();
               yield envelope;
             }
           }
