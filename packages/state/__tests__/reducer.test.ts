@@ -19,6 +19,9 @@ import type {
   RunEvent,
 } from "@opensymphony/gateway-schema";
 
+/** Deterministic timestamp used by all test actions. */
+const NOW = 1_700_000_000_000;
+
 // -- Helpers — typed factories aligned with gateway-schema interfaces --
 
 function makeSnapshot(): DashboardSnapshot {
@@ -147,6 +150,7 @@ describe("gatewayReducer", () => {
   it("SNAPSHOT_RECEIVED sets snapshot and clears loading/error", () => {
     const state = gatewayReducer(initialState, {
       type: "SNAPSHOT_RECEIVED",
+      nowMs: NOW,
       payload: makeSnapshot(),
     });
     expect(state.dashboard.snapshot).toBeTruthy();
@@ -158,6 +162,7 @@ describe("gatewayReducer", () => {
   it("TASK_GRAPH_RECEIVED sets nodes and clears loading/error", () => {
     const state = gatewayReducer(initialState, {
       type: "TASK_GRAPH_RECEIVED",
+      nowMs: NOW,
       payload: makeTaskGraphSnapshot(),
     });
     expect(state.taskGraph.nodes.size).toBe(0);
@@ -170,6 +175,7 @@ describe("gatewayReducer", () => {
     const run = makeRunDetail();
     const state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: run,
     });
     expect(state.run.runs.get("run-1")).toBe(run);
@@ -182,6 +188,7 @@ describe("gatewayReducer", () => {
     const frame = makeFrame(1);
     const state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [frame],
     });
@@ -197,6 +204,7 @@ describe("gatewayReducer", () => {
     const f2 = makeFrame(2);
     let state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [f1, f2],
     });
@@ -204,6 +212,7 @@ describe("gatewayReducer", () => {
     const f3 = makeFrame(3);
     state = gatewayReducer(state, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [f1, f3],
     });
@@ -215,6 +224,7 @@ describe("gatewayReducer", () => {
     // Batch 1: frames 1-5, cursor = 5.
     let state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [makeFrame(1), makeFrame(2), makeFrame(3), makeFrame(4), makeFrame(5)],
     });
@@ -222,6 +232,7 @@ describe("gatewayReducer", () => {
     // Batch 2: frames 3-4 arrive late (lower seq), cursor should stay at 5.
     state = gatewayReducer(state, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [makeFrame(3), makeFrame(4)],
     });
@@ -232,6 +243,7 @@ describe("gatewayReducer", () => {
     // Batch arrives with frames 2, 1 (unsorted within batch).
     const state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [makeFrame(2), makeFrame(1)],
     });
@@ -242,11 +254,13 @@ describe("gatewayReducer", () => {
   it("TERMINAL_FRAMES_RECEIVED does not reset cursor for empty batch", () => {
     let state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [makeFrame(5)],
     });
     state = gatewayReducer(state, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [],
     });
@@ -257,6 +271,7 @@ describe("gatewayReducer", () => {
     const approval = makeApproval("appr-1");
     const state = gatewayReducer(initialState, {
       type: "APPROVAL_RECEIVED",
+      nowMs: NOW,
       payload: approval,
     });
     expect(state.approval.pending).toHaveLength(1);
@@ -269,10 +284,12 @@ describe("gatewayReducer", () => {
     const approval = makeApproval("appr-1");
     let state = gatewayReducer(initialState, {
       type: "APPROVAL_RECEIVED",
+      nowMs: NOW,
       payload: approval,
     });
     state = gatewayReducer(state, {
       type: "APPROVAL_RECEIVED",
+      nowMs: NOW,
       payload: approval,
     });
     expect(state.approval.pending).toHaveLength(1);
@@ -282,10 +299,12 @@ describe("gatewayReducer", () => {
     const approval = makeApproval("appr-1");
     let state = gatewayReducer(initialState, {
       type: "APPROVAL_RECEIVED",
+      nowMs: NOW,
       payload: approval,
     });
     state = gatewayReducer(state, {
       type: "APPROVAL_RESOLVED",
+      nowMs: NOW,
       approvalId: "appr-1",
       payload: approval,
     });
@@ -300,6 +319,7 @@ describe("gatewayReducer", () => {
     const session = makePlanningSummary();
     const state = gatewayReducer(initialState, {
       type: "PLANNING_SESSION_UPDATED",
+      nowMs: NOW,
       payload: session,
     });
     expect(state.planning.sessions.get("sess-1")).toBe(session);
@@ -375,6 +395,7 @@ describe("connection state", () => {
   it("CONNECTION_STATE_CHANGED updates connection slice", () => {
     const state = gatewayReducer(initialState, {
       type: "CONNECTION_STATE_CHANGED",
+      nowMs: NOW,
       state: "connecting",
     });
     expect(state.connection.state).toBe("connecting");
@@ -383,6 +404,7 @@ describe("connection state", () => {
   it("CONNECTION_STATE_CHANGED records connected timestamp", () => {
     const state = gatewayReducer(initialState, {
       type: "CONNECTION_STATE_CHANGED",
+      nowMs: NOW,
       state: "connected",
     });
     expect(state.connection.lastConnectedAt).toBeTruthy();
@@ -391,10 +413,12 @@ describe("connection state", () => {
   it("CONNECTION_STATE_CHANGED records disconnected timestamp", () => {
     let state = gatewayReducer(initialState, {
       type: "CONNECTION_STATE_CHANGED",
+      nowMs: NOW,
       state: "connected",
     });
     state = gatewayReducer(state, {
       type: "CONNECTION_STATE_CHANGED",
+      nowMs: NOW,
       state: "disconnected",
     });
     expect(state.connection.lastDisconnectedAt).toBeTruthy();
@@ -430,10 +454,12 @@ describe("run events and liveness", () => {
   it("RUN_EVENTS_RECEIVED updates liveness state", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1), makeRunEvent(2)],
     });
@@ -448,11 +474,13 @@ describe("run events and liveness", () => {
     const baseTime = 1_700_000_000_000; // Fixed timestamp for deterministic tests.
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
       nowMs: baseTime,
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1)],
       nowMs: baseTime,
@@ -461,6 +489,7 @@ describe("run events and liveness", () => {
     // Check health 10 seconds later -> still quiet.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
+      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 10_000,
     });
@@ -470,6 +499,7 @@ describe("run events and liveness", () => {
     // Check health 45 seconds later -> degraded.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
+      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 45_000,
     });
@@ -479,6 +509,7 @@ describe("run events and liveness", () => {
     // Check health 90 seconds later -> stalled.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
+      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 90_000,
     });
@@ -488,6 +519,7 @@ describe("run events and liveness", () => {
     // Check health 150 seconds later -> detached.
     state = gatewayReducer(state, {
       type: "STREAM_HEALTH_CHECK",
+      nowMs: NOW,
       runId: "run-1",
       nowMs: baseTime + 150_000,
     });
@@ -498,16 +530,19 @@ describe("run events and liveness", () => {
   it("STREAM_STALE_DETECTED sets degraded state, not failed", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1)],
     });
 
     state = gatewayReducer(state, {
       type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
       runId: "run-1",
     });
 
@@ -522,20 +557,24 @@ describe("run events and liveness", () => {
   it("STREAM_RECOVERED restores active state", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
     });
     state = gatewayReducer(state, {
       type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       events: [makeRunEvent(1)],
     });
     state = gatewayReducer(state, {
       type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
       runId: "run-1",
     });
 
     state = gatewayReducer(state, {
       type: "STREAM_RECOVERED",
+      nowMs: NOW,
       runId: "run-1",
     });
 
@@ -550,6 +589,7 @@ describe("action receipts", () => {
   it("ACTION_DISPATCHED adds to pending", () => {
     const state = gatewayReducer(initialState, {
       type: "ACTION_DISPATCHED",
+      nowMs: NOW,
       correlationId: "corr-1",
     });
     expect(state.actionReceipts.pending.has("corr-1")).toBe(true);
@@ -558,10 +598,12 @@ describe("action receipts", () => {
   it("ACTION_RECEIPT_RECEIVED moves from pending to receipts", () => {
     let state = gatewayReducer(initialState, {
       type: "ACTION_DISPATCHED",
+      nowMs: NOW,
       correlationId: "corr-1",
     });
     state = gatewayReducer(state, {
       type: "ACTION_RECEIPT_RECEIVED",
+      nowMs: NOW,
       receipt: makeActionReceipt("corr-1"),
     });
     expect(state.actionReceipts.pending.has("corr-1")).toBe(false);
@@ -635,6 +677,7 @@ describe("entity cache", () => {
   it("RUN_UPDATED populates entity cache", () => {
     const state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
     });
     expect(state.cache.runs.has("run-1")).toBe(true);
@@ -644,6 +687,7 @@ describe("entity cache", () => {
   it("APPROVAL_RECEIVED populates entity cache", () => {
     const state = gatewayReducer(initialState, {
       type: "APPROVAL_RECEIVED",
+      nowMs: NOW,
       payload: makeApproval("appr-1"),
     });
     expect(state.cache.approvals.has("appr-1")).toBe(true);
@@ -652,6 +696,7 @@ describe("entity cache", () => {
   it("TERMINAL_FRAMES_RECEIVED populates entity cache", () => {
     const state = gatewayReducer(initialState, {
       type: "TERMINAL_FRAMES_RECEIVED",
+      nowMs: NOW,
       runId: "run-1",
       frames: [makeFrame(1)],
     });
@@ -661,6 +706,7 @@ describe("entity cache", () => {
   it("PLANNING_SESSION_UPDATED populates entity cache", () => {
     const state = gatewayReducer(initialState, {
       type: "PLANNING_SESSION_UPDATED",
+      nowMs: NOW,
       payload: makePlanningSummary(),
     });
     expect(state.cache.planning.has("sess-1")).toBe(true);
@@ -671,10 +717,12 @@ describe("stream staleness vs failed run", () => {
   it("stale stream does not set run error", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
     });
     state = gatewayReducer(state, {
       type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
       runId: "run-1",
     });
     // Stream is stale but run should not be errored out.
@@ -685,14 +733,17 @@ describe("stream staleness vs failed run", () => {
   it("stream recovery clears staleness flag", () => {
     let state = gatewayReducer(initialState, {
       type: "RUN_UPDATED",
+      nowMs: NOW,
       payload: makeRunDetail(),
     });
     state = gatewayReducer(state, {
       type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
       runId: "run-1",
     });
     state = gatewayReducer(state, {
       type: "STREAM_RECOVERED",
+      nowMs: NOW,
       runId: "run-1",
     });
     expect(state.terminal.streamStale.get("run-1")).toBe(false);

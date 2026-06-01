@@ -193,7 +193,18 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
     while (!this.closed) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Process any remaining buffer content before exiting.
+        if (currentData) {
+          try {
+            const envelope = JSON.parse(currentData) as GatewayEnvelope;
+            yield envelope;
+          } catch (err) {
+            console.error("SSE parse error: malformed JSON event data (trailing buffer)", err);
+          }
+        }
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -230,11 +241,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
         } else if (line.startsWith(":")) {
           // SSE comment line, ignore.
         }
-        // Any other line is treated as data continuation.
-        else {
-          if (currentData) currentData += "\n";
-          currentData += line;
-        }
+        // Per SSE spec, unrecognized field names are discarded.
       }
 
       if (currentRetry > 0) {
@@ -259,7 +266,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
   async cancelRun(runId: string): Promise<ActionReceipt> {
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
-      correlation_id: `cancel-${runId}-${Date.now()}`,
+      correlation_id: `cancel-${runId}-${crypto.randomUUID()}`,
       action_kind: "cancel",
       target_entity: { entity_kind: "run", entity_id: runId },
       idempotency_key: `cancel-${runId}`,
@@ -269,7 +276,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
   async retryRun(runId: string): Promise<ActionReceipt> {
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
-      correlation_id: `retry-${runId}-${Date.now()}`,
+      correlation_id: `retry-${runId}-${crypto.randomUUID()}`,
       action_kind: "retry",
       target_entity: { entity_kind: "run", entity_id: runId },
       idempotency_key: `retry-${runId}`,
@@ -279,7 +286,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
   async resumeRun(runId: string): Promise<ActionReceipt> {
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
-      correlation_id: `resume-${runId}-${Date.now()}`,
+      correlation_id: `resume-${runId}-${crypto.randomUUID()}`,
       action_kind: "resume",
       target_entity: { entity_kind: "run", entity_id: runId },
       idempotency_key: `resume-${runId}`,
@@ -324,13 +331,17 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
   }
 
   private async fetchJson(url: string, init?: RequestInit): Promise<unknown> {
-    const requestInit: RequestInit = {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
+    const method = init?.method ?? "GET";
+    const headers: Record<string, string> = {
+      ...(init?.headers as Record<string, string> ?? {}),
     };
+
+    // Only set Content-Type for requests with a body.
+    if (method !== "GET" && method !== "HEAD") {
+      headers["Content-Type"] = "application/json";
+    }
+
+    const requestInit: RequestInit = { ...init, headers };
     if (this.authToken) {
       requestInit.headers = {
         ...requestInit.headers,

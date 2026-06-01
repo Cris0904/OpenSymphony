@@ -31,6 +31,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   private streamHealthyFlag = true;
   private lastEventTimestamp: number | null = null;
   private reconnectAttemptsCount = 0;
+  private actionCounter = 0;
 
   constructor(opts?: {
     baseUri?: string;
@@ -109,7 +110,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
 
     this.mockTerminalSnapshot = new Map();
     for (const snap of opts?.terminalSnapshots ?? []) {
-      this.mockTerminalSnapshot.set(snap.terminal_session_id, snap);
+      this.mockTerminalSnapshot.set(`${snap.run_id}:${snap.terminal_session_id}`, snap);
     }
 
     this.mockEvents = opts?.events ?? [];
@@ -206,13 +207,14 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   async dispatchAction(action: ActionDispatch): Promise<ActionReceipt> {
     const receipt = this.mockActionReceipts.get(action.correlation_id);
     if (!receipt) {
+      this.actionCounter++;
       return {
         schema_version: { major: 1, minor: 0, patch: 0 },
-        action_id: `mock-action-${Date.now()}`,
+        action_id: `mock-action-${this.actionCounter}`,
         correlation_id: action.correlation_id,
         status: "accepted",
         expected_events: [],
-        issued_at: new Date().toISOString(),
+        issued_at: new Date(1000000000000 + this.actionCounter).toISOString(),
       };
     }
     return receipt;
@@ -221,7 +223,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   async cancelRun(runId: string): Promise<ActionReceipt> {
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
-      correlation_id: `cancel-${runId}`,
+      correlation_id: `cancel-${runId}-${crypto.randomUUID()}`,
       action_kind: "cancel",
       target_entity: { entity_kind: "run", entity_id: runId },
     });
@@ -230,7 +232,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   async retryRun(runId: string): Promise<ActionReceipt> {
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
-      correlation_id: `retry-${runId}`,
+      correlation_id: `retry-${runId}-${crypto.randomUUID()}`,
       action_kind: "retry",
       target_entity: { entity_kind: "run", entity_id: runId },
     });
@@ -239,7 +241,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   async resumeRun(runId: string): Promise<ActionReceipt> {
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
-      correlation_id: `resume-${runId}`,
+      correlation_id: `resume-${runId}-${crypto.randomUUID()}`,
       action_kind: "resume",
       target_entity: { entity_kind: "run", entity_id: runId },
     });
