@@ -164,6 +164,8 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
           } else {
             for await (const envelope of this.parseSSE(reader)) {
               this.lastEventTimestamp = Date.now();
+              this.streamHealthy = true;
+              this.reconnectAttempts = 0;
               yield envelope;
             }
           }
@@ -179,6 +181,8 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
       }
 
       if (!this.closed && shouldReconnect) {
+        this.streamHealthy = false;
+        this.reconnectAttempts = 0;
         await this.waitForReconnect();
       }
     }
@@ -199,12 +203,44 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
       const { done, value } = await reader.read();
       if (done) {
         // Process any remaining buffer content before exiting.
+        // First, flush any accumulated currentData.
         if (currentData) {
           try {
             const envelope = JSON.parse(currentData) as GatewayEnvelope;
             yield envelope;
           } catch (err) {
             console.error("SSE parse error: malformed JSON event data (trailing buffer)", err);
+          }
+        }
+        // Also process any remaining buffer that might contain a partial event.
+        if (buffer.trim()) {
+          // Treat remaining buffer as potential data if it doesn't start with a field prefix.
+          const remainingLines = buffer.trim().split("\n");
+          let pendingData = "";
+          for (const line of remainingLines) {
+            if (line.startsWith("data: ")) {
+              pendingData += (pendingData ? "\n" : "") + line.slice(6);
+            } else if (line === "") {
+              // Empty line marks event boundary.
+              if (pendingData) {
+                try {
+                  const envelope = JSON.parse(pendingData) as GatewayEnvelope;
+                  yield envelope;
+                } catch (err) {
+                  console.error("SSE parse error: malformed JSON event data (buffer flush)", err);
+                }
+                pendingData = "";
+              }
+            }
+          }
+          // Flush any remaining pending data.
+          if (pendingData) {
+            try {
+              const envelope = JSON.parse(pendingData) as GatewayEnvelope;
+              yield envelope;
+            } catch (err) {
+              console.error("SSE parse error: malformed JSON event data (final buffer)", err);
+            }
           }
         }
         break;
@@ -367,7 +403,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
 
   private async waitForReconnect(): Promise<void> {
     this.reconnectAttempts++;
-    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       throw new Error(
         `Max reconnect attempts (${this.maxReconnectAttempts}) reached`,
       );

@@ -198,6 +198,8 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   async *terminalFrames(runId: string): AsyncIterable<GatewayEnvelope> {
     const frames = this.mockTerminalFrames.get(runId) ?? [];
     for (const frame of frames) {
+      this.lastEventTimestamp = Date.now();
+      this.reconnectAttemptsCount = 0;
       yield frame;
     }
   }
@@ -226,6 +228,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       correlation_id: `cancel-${runId}-${crypto.randomUUID()}`,
       action_kind: "cancel",
       target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `cancel-${runId}`,
     });
   }
 
@@ -235,6 +238,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       correlation_id: `retry-${runId}-${crypto.randomUUID()}`,
       action_kind: "retry",
       target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `retry-${runId}`,
     });
   }
 
@@ -244,6 +248,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       correlation_id: `resume-${runId}-${crypto.randomUUID()}`,
       action_kind: "resume",
       target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `resume-${runId}`,
     });
   }
 
