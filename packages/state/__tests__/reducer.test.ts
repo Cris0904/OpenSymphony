@@ -827,4 +827,77 @@ describe("stream staleness vs failed run", () => {
     expect(liveness?.phaseState).toBe("cancelled");
     expect(liveness?.isStreamStale).toBe(true);
   });
+
+  it("RUN_EVENTS_RECEIVED does not force stalled run to active", () => {
+    // Create a running run and drive it to stalled via health checks.
+    const baseTime = 1_700_000_000_000;
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      nowMs: baseTime,
+      payload: makeRunDetail("running"),
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      nowMs: baseTime,
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+    // Drive liveness to stalled by checking health at 90s (60-120s window).
+    state = gatewayReducer(state, {
+      type: "STREAM_HEALTH_CHECK",
+      runId: "run-1",
+      nowMs: baseTime + 90_000,
+    });
+    expect(state.run.liveness.get("run-1")?.phaseState).toBe("stalled");
+
+    // Now dispatch events — the gap is still large so phase should
+    // NOT be forced to "active" by the reducer.
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      nowMs: baseTime + 95_000,
+      runId: "run-1",
+      events: [makeRunEvent(2)],
+    });
+
+    const liveness = state.run.liveness.get("run-1");
+    // deriveRunPhaseState correctly preserves "stalled" for a running run with
+    // a large event gap, rather than the old hardcoded "active" override.
+    expect(liveness?.phaseState).toBe("stalled");
+    expect(liveness?.isStreamStale).toBe(false);
+  });
+
+  it("STREAM_RECOVERED preserves completed run phase state", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      nowMs: NOW,
+      payload: {
+        ...makeRunDetail("released"),
+        release_reason: "completed",
+      },
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      nowMs: NOW,
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+    // Simulate stream going stale then recovering.
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      nowMs: NOW,
+      runId: "run-1",
+    });
+    expect(state.run.liveness.get("run-1")?.phaseState).toBe("completed");
+
+    state = gatewayReducer(state, {
+      type: "STREAM_RECOVERED",
+      nowMs: NOW + 1000,
+      runId: "run-1",
+    });
+
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness?.phaseState).toBe("completed");
+    expect(liveness?.isStreamStale).toBe(false);
+    expect(liveness?.streamHealth).toBe("healthy");
+  });
 });
