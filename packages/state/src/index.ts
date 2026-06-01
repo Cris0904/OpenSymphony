@@ -65,6 +65,7 @@ export interface EntityCacheSlice {
  * - stalled:  No events for an extended period; run may be stuck.
  * - retry_queued: Run status indicates it is queued for retry.
  * - cancelled: Run was explicitly cancelled.
+ * - completed: Run completed successfully (terminal state).
  * - detached: Client lost connection; run may still be executing server-side.
  */
 export type RunPhaseState =
@@ -74,6 +75,7 @@ export type RunPhaseState =
   | "stalled"
   | "retry_queued"
   | "cancelled"
+  | "completed"
   | "detached";
 
 export interface RunLivenessState {
@@ -204,7 +206,7 @@ export const initialState: GatewayState = {
 export type GatewayAction =
   // Connection actions
   | { type: "CONNECTION_STATE_CHANGED"; state: ConnectionState; error?: string; nowMs: number }
-  | { type: "RECONNECT_ATTEMPTED"; attempts: number }
+  | { type: "RECONNECT_ATTEMPTED"; attempts: number; nowMs: number }
   // Snapshot/actions
   | { type: "SNAPSHOT_RECEIVED"; payload: DashboardSnapshot; nowMs: number }
   | { type: "TASK_GRAPH_RECEIVED"; payload: TaskGraphSnapshot; nowMs: number }
@@ -238,7 +240,7 @@ export function deriveRunPhaseState(
   // Terminal run statuses take absolute priority.
   if (status === "released") {
     // Use release_reason to distinguish final state.
-    if (releaseReason === "completed" || releaseReason === "tracker_terminal") return "active";
+    if (releaseReason === "completed" || releaseReason === "tracker_terminal") return "completed";
     if (releaseReason === "cancelled" || releaseReason === "tracker_inactive" || releaseReason === "retry_exhausted") return "cancelled";
     return "cancelled";
   }
@@ -402,10 +404,16 @@ export function gatewayReducer(
       const runs = new Map(state.run.runs);
       const liveness = new Map(state.run.liveness);
       const existingLiveness = liveness.get(action.runId);
+      const runDetail = runs.get(action.runId);
+
+      // Respect terminal run statuses — do not override completed/cancelled runs to "active".
+      const computedPhase = deriveRunPhaseState(runDetail, existingLiveness, false);
 
       liveness.set(action.runId, {
         runId: action.runId,
-        phaseState: "active",
+        phaseState: computedPhase === "completed" || computedPhase === "cancelled"
+          ? computedPhase
+          : "active",
         lastEventAt: msToIso(action.nowMs),
         lastStatusUpdateAt: existingLiveness?.lastStatusUpdateAt ?? msToIso(action.nowMs),
         eventCount: (existingLiveness?.eventCount ?? 0) + action.events.length,

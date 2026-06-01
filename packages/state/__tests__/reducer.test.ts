@@ -773,8 +773,8 @@ describe("stream staleness vs failed run", () => {
     });
 
     const liveness = state.run.liveness.get("run-1");
-    // Completed run stays "active" even when stream is stale.
-    expect(liveness?.phaseState).toBe("active");
+    // Completed run stays "completed" even when stream is stale.
+    expect(liveness?.phaseState).toBe("completed");
     expect(liveness?.isStreamStale).toBe(true);
   });
 
