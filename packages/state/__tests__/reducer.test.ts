@@ -3,6 +3,9 @@
 import {
   gatewayReducer,
   initialState,
+  deriveRunPhaseState,
+  computeLivenessState,
+  LIVENESS_THRESHOLDS,
 } from "@opensymphony/state";
 import type {
   DashboardSnapshot,
@@ -12,6 +15,8 @@ import type {
   ApprovalRequest,
   PlanningSessionSummary,
   GatewayEnvelope,
+  ActionReceipt,
+  RunEvent,
 } from "@opensymphony/gateway-schema";
 
 // -- Helpers — typed factories aligned with gateway-schema interfaces --
@@ -45,14 +50,14 @@ function makeTaskGraphSnapshot(): TaskGraphSnapshot {
   };
 }
 
-function makeRunDetail(): RunDetail {
+function makeRunDetail(status = "running"): RunDetail {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
     run_id: "run-1",
     issue_id: "issue-1",
     issue_identifier: "COE-001",
     worker_id: "worker-1",
-    status: "running",
+    status: status as RunDetail["status"],
     claimed_at: "2025-01-01T00:00:00Z",
     turn_count: 0,
     max_turns: 50,
@@ -105,13 +110,34 @@ function makePlanningSummary(): PlanningSessionSummary {
   };
 }
 
-function makeEnvelope(): GatewayEnvelope {
+function makeEnvelope(eventKind = "run_updated"): GatewayEnvelope {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
     cursor: { sequence: 1, partition: "p1" },
     entity_ref: { kind: "run", id: "run-1" },
-    event_kind: "run_updated",
+    event_kind: eventKind,
     emitted_at: "2025-01-01T00:00:00Z",
+  };
+}
+
+function makeRunEvent(sequence: number): RunEvent {
+  return {
+    sequence,
+    event_id: `evt-${sequence}`,
+    happened_at: "2025-01-01T00:00:00Z",
+    kind: "ConversationStateUpdateEvent",
+    summary: `Event ${sequence}`,
+  };
+}
+
+function makeActionReceipt(correlationId: string): ActionReceipt {
+  return {
+    schema_version: { major: 1, minor: 0, patch: 0 },
+    action_id: "action-1",
+    correlation_id: correlationId,
+    status: "accepted",
+    expected_events: [],
+    issued_at: "2025-01-01T00:00:00Z",
   };
 }
 
@@ -126,6 +152,7 @@ describe("gatewayReducer", () => {
     expect(state.dashboard.snapshot).toBeTruthy();
     expect(state.dashboard.loading).toBe(false);
     expect(state.dashboard.error).toBeNull();
+    expect(state.dashboard.lastUpdated).toBeTruthy();
   });
 
   it("TASK_GRAPH_RECEIVED sets nodes and clears loading/error", () => {
@@ -136,6 +163,7 @@ describe("gatewayReducer", () => {
     expect(state.taskGraph.nodes.size).toBe(0);
     expect(state.taskGraph.loading).toBe(false);
     expect(state.taskGraph.error).toBeNull();
+    expect(state.taskGraph.lastUpdated).toBeTruthy();
   });
 
   it("RUN_UPDATED stores run and clears loading/error", () => {
@@ -147,6 +175,7 @@ describe("gatewayReducer", () => {
     expect(state.run.runs.get("run-1")).toBe(run);
     expect(state.run.loading).toBe(false);
     expect(state.run.error).toBeNull();
+    expect(state.run.lastUpdated).toBeTruthy();
   });
 
   it("TERMINAL_FRAMES_RECEIVED stores frames and clears loading/error", () => {
@@ -160,6 +189,7 @@ describe("gatewayReducer", () => {
     expect(state.terminal.cursor.get("run-1")).toBe(1);
     expect(state.terminal.loading).toBe(false);
     expect(state.terminal.error).toBeNull();
+    expect(state.terminal.lastUpdated).toBeTruthy();
   });
 
   it("TERMINAL_FRAMES_RECEIVED deduplicates frames by sequence", () => {
@@ -232,6 +262,7 @@ describe("gatewayReducer", () => {
     expect(state.approval.pending).toHaveLength(1);
     expect(state.approval.loading).toBe(false);
     expect(state.approval.error).toBeNull();
+    expect(state.approval.lastUpdated).toBeTruthy();
   });
 
   it("APPROVAL_RECEIVED deduplicates by approval_id", () => {
@@ -262,6 +293,7 @@ describe("gatewayReducer", () => {
     expect(state.approval.resolved.get("appr-1")).toBe(approval);
     expect(state.approval.loading).toBe(false);
     expect(state.approval.error).toBeNull();
+    expect(state.approval.lastUpdated).toBeTruthy();
   });
 
   it("PLANNING_SESSION_UPDATED stores session and clears loading/error", () => {
@@ -273,14 +305,15 @@ describe("gatewayReducer", () => {
     expect(state.planning.sessions.get("sess-1")).toBe(session);
     expect(state.planning.loading).toBe(false);
     expect(state.planning.error).toBeNull();
+    expect(state.planning.lastUpdated).toBeTruthy();
   });
 
-  it("ENVELOPE_RECEIVED is a no-op placeholder", () => {
+  it("ENVELOPE_RECEIVED updates entity cache", () => {
     const state = gatewayReducer(initialState, {
       type: "ENVELOPE_RECEIVED",
       payload: makeEnvelope(),
     });
-    expect(state).toBe(initialState);
+    expect(state.cache.runs.has("run-1")).toBe(true);
   });
 
   it("ERROR sets error and resets loading on all slices", () => {
@@ -335,5 +368,336 @@ describe("gatewayReducer", () => {
     });
     expect(state.dashboard.error).toBeNull();
     expect(state.dashboard.loading).toBe(false);
+  });
+});
+
+describe("connection state", () => {
+  it("CONNECTION_STATE_CHANGED updates connection slice", () => {
+    const state = gatewayReducer(initialState, {
+      type: "CONNECTION_STATE_CHANGED",
+      state: "connecting",
+    });
+    expect(state.connection.state).toBe("connecting");
+  });
+
+  it("CONNECTION_STATE_CHANGED records connected timestamp", () => {
+    const state = gatewayReducer(initialState, {
+      type: "CONNECTION_STATE_CHANGED",
+      state: "connected",
+    });
+    expect(state.connection.lastConnectedAt).toBeTruthy();
+  });
+
+  it("CONNECTION_STATE_CHANGED records disconnected timestamp", () => {
+    let state = gatewayReducer(initialState, {
+      type: "CONNECTION_STATE_CHANGED",
+      state: "connected",
+    });
+    state = gatewayReducer(state, {
+      type: "CONNECTION_STATE_CHANGED",
+      state: "disconnected",
+    });
+    expect(state.connection.lastDisconnectedAt).toBeTruthy();
+  });
+
+  it("RECONNECT_ATTEMPTED increments counter", () => {
+    const state = gatewayReducer(initialState, {
+      type: "RECONNECT_ATTEMPTED",
+      attempts: 2,
+    });
+    expect(state.connection.reconnectAttempts).toBe(2);
+    expect(state.connection.state).toBe("reconnecting");
+  });
+
+  it("ERROR with reconnect keyword sets reconnecting state", () => {
+    const state = gatewayReducer(initialState, {
+      type: "ERROR",
+      error: "reconnect failed",
+    });
+    expect(state.connection.state).toBe("reconnecting");
+  });
+
+  it("ERROR without reconnect keyword sets failed state", () => {
+    const state = gatewayReducer(initialState, {
+      type: "ERROR",
+      error: "something broke",
+    });
+    expect(state.connection.state).toBe("failed");
+  });
+});
+
+describe("run events and liveness", () => {
+  it("RUN_EVENTS_RECEIVED updates liveness state", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      runId: "run-1",
+      events: [makeRunEvent(1), makeRunEvent(2)],
+    });
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness).toBeTruthy();
+    expect(liveness?.eventCount).toBe(2);
+    expect(liveness?.lastEventAt).toBeTruthy();
+    expect(liveness?.gapSeconds).toBe(0);
+  });
+
+  it("STREAM_HEALTH_CHECK computes liveness from elapsed time", () => {
+    const baseTime = 1_700_000_000_000; // Fixed timestamp for deterministic tests.
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+    // Force lastEventAt to a known time.
+    const liveness = state.run.liveness.get("run-1");
+    if (liveness) {
+      liveness.lastEventAt = new Date(baseTime).toISOString();
+    }
+
+    // Check health 10 seconds later -> still quiet.
+    state = gatewayReducer(state, {
+      type: "STREAM_HEALTH_CHECK",
+      runId: "run-1",
+      nowMs: baseTime + 10_000,
+    });
+    let updatedLiveness = state.run.liveness.get("run-1");
+    expect(updatedLiveness?.phaseState).toBe("quiet");
+
+    // Check health 45 seconds later -> degraded.
+    state = gatewayReducer(state, {
+      type: "STREAM_HEALTH_CHECK",
+      runId: "run-1",
+      nowMs: baseTime + 45_000,
+    });
+    updatedLiveness = state.run.liveness.get("run-1");
+    expect(updatedLiveness?.phaseState).toBe("degraded");
+
+    // Check health 90 seconds later -> stalled.
+    state = gatewayReducer(state, {
+      type: "STREAM_HEALTH_CHECK",
+      runId: "run-1",
+      nowMs: baseTime + 90_000,
+    });
+    updatedLiveness = state.run.liveness.get("run-1");
+    expect(updatedLiveness?.phaseState).toBe("stalled");
+
+    // Check health 150 seconds later -> detached.
+    state = gatewayReducer(state, {
+      type: "STREAM_HEALTH_CHECK",
+      runId: "run-1",
+      nowMs: baseTime + 150_000,
+    });
+    updatedLiveness = state.run.liveness.get("run-1");
+    expect(updatedLiveness?.phaseState).toBe("detached");
+  });
+
+  it("STREAM_STALE_DETECTED sets degraded state, not failed", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      runId: "run-1",
+    });
+
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness?.phaseState).toBe("degraded");
+    expect(liveness?.isStreamStale).toBe(true);
+    expect(liveness?.streamHealth).toBe("stale");
+    // IMPORTANT: stale stream should NOT collapse into failed run state.
+    expect(state.run.error).toBeNull();
+  });
+
+  it("STREAM_RECOVERED restores active state", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    state = gatewayReducer(state, {
+      type: "RUN_EVENTS_RECEIVED",
+      runId: "run-1",
+      events: [makeRunEvent(1)],
+    });
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      runId: "run-1",
+    });
+
+    state = gatewayReducer(state, {
+      type: "STREAM_RECOVERED",
+      runId: "run-1",
+    });
+
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness?.phaseState).toBe("active");
+    expect(liveness?.isStreamStale).toBe(false);
+    expect(liveness?.streamHealth).toBe("healthy");
+  });
+});
+
+describe("action receipts", () => {
+  it("ACTION_DISPATCHED adds to pending", () => {
+    const state = gatewayReducer(initialState, {
+      type: "ACTION_DISPATCHED",
+      correlationId: "corr-1",
+    });
+    expect(state.actionReceipts.pending.has("corr-1")).toBe(true);
+  });
+
+  it("ACTION_RECEIPT_RECEIVED moves from pending to receipts", () => {
+    let state = gatewayReducer(initialState, {
+      type: "ACTION_DISPATCHED",
+      correlationId: "corr-1",
+    });
+    state = gatewayReducer(state, {
+      type: "ACTION_RECEIPT_RECEIVED",
+      receipt: makeActionReceipt("corr-1"),
+    });
+    expect(state.actionReceipts.pending.has("corr-1")).toBe(false);
+    expect(state.actionReceipts.receipts.has("corr-1")).toBe(true);
+  });
+});
+
+describe("deriveRunPhaseState", () => {
+  it("retry_queued run status maps to retry_queued phase", () => {
+    expect(deriveRunPhaseState("retry_queued", undefined, false)).toBe("retry_queued");
+  });
+
+  it("released run status maps to cancelled phase", () => {
+    expect(deriveRunPhaseState("released", undefined, false)).toBe("cancelled");
+  });
+
+  it("stale stream maps to degraded phase when run is still alive", () => {
+    expect(deriveRunPhaseState("running", undefined, true)).toBe("degraded");
+  });
+
+  it("active run with fresh stream is active", () => {
+    const liveness = {
+      runId: "run-1",
+      phaseState: "active" as const,
+      lastEventAt: null,
+      lastStatusUpdateAt: null,
+      eventCount: 10,
+      gapSeconds: 1,
+      isStreamStale: false,
+      streamHealth: "healthy" as const,
+    };
+    expect(deriveRunPhaseState("running", liveness, false)).toBe("active");
+  });
+});
+
+describe("computeLivenessState", () => {
+  const baseTime = 1_700_000_000_000;
+
+  it("fresh events -> active", () => {
+    const liveness = computeLivenessState(
+      "run-1",
+      {
+        runId: "run-1",
+        phaseState: "active",
+        lastEventAt: new Date(baseTime).toISOString(),
+        lastStatusUpdateAt: null,
+        eventCount: 5,
+        gapSeconds: 0,
+        isStreamStale: false,
+        streamHealth: "healthy",
+      },
+      baseTime + 2000,
+      3,
+    );
+    expect(liveness.phaseState).toBe("active");
+    expect(liveness.eventCount).toBe(8);
+  });
+
+  it("no recent events -> quiet", () => {
+    const liveness = computeLivenessState(
+      "run-1",
+      undefined,
+      baseTime,
+      0,
+    );
+    expect(liveness.phaseState).toBe("quiet");
+  });
+});
+
+describe("entity cache", () => {
+  it("RUN_UPDATED populates entity cache", () => {
+    const state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    expect(state.cache.runs.has("run-1")).toBe(true);
+    expect(state.cache.runs.get("run-1")?.version).toBe(1);
+  });
+
+  it("APPROVAL_RECEIVED populates entity cache", () => {
+    const state = gatewayReducer(initialState, {
+      type: "APPROVAL_RECEIVED",
+      payload: makeApproval("appr-1"),
+    });
+    expect(state.cache.approvals.has("appr-1")).toBe(true);
+  });
+
+  it("TERMINAL_FRAMES_RECEIVED populates entity cache", () => {
+    const state = gatewayReducer(initialState, {
+      type: "TERMINAL_FRAMES_RECEIVED",
+      runId: "run-1",
+      frames: [makeFrame(1)],
+    });
+    expect(state.cache.terminals.has("run-1")).toBe(true);
+  });
+
+  it("PLANNING_SESSION_UPDATED populates entity cache", () => {
+    const state = gatewayReducer(initialState, {
+      type: "PLANNING_SESSION_UPDATED",
+      payload: makePlanningSummary(),
+    });
+    expect(state.cache.planning.has("sess-1")).toBe(true);
+  });
+});
+
+describe("stream staleness vs failed run", () => {
+  it("stale stream does not set run error", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      runId: "run-1",
+    });
+    // Stream is stale but run should not be errored out.
+    expect(state.run.error).toBeNull();
+    expect(state.terminal.streamStale.get("run-1")).toBe(true);
+  });
+
+  it("stream recovery clears staleness flag", () => {
+    let state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: makeRunDetail(),
+    });
+    state = gatewayReducer(state, {
+      type: "STREAM_STALE_DETECTED",
+      runId: "run-1",
+    });
+    state = gatewayReducer(state, {
+      type: "STREAM_RECOVERED",
+      runId: "run-1",
+    });
+    expect(state.terminal.streamStale.get("run-1")).toBe(false);
   });
 });
