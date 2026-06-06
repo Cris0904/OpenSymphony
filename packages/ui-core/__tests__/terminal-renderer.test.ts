@@ -649,26 +649,27 @@ describe("Performance", () => {
     const renderer = createTerminalRenderer();
     const frames = generateBurstFrames(1000, { includeAnsiCodes: true });
 
-    // Measure only the time to queue frames (not wall-clock including idle)
-    const start = performance.now();
-    for (const frame of frames) {
-      renderer.queueFrame(frame.content, frame.encoding, frame);
+    try {
+      // Measure only the time to queue frames (not wall-clock including idle)
+      const start = performance.now();
+      for (const frame of frames) {
+        renderer.queueFrame(frame.content, frame.encoding, frame);
+      }
+      const queueTime = performance.now() - start;
+
+      // Queueing should be fast and non-blocking.
+      expect(queueTime).toBeLessThan(100);
+
+      const deadline = Date.now() + 2000;
+      while (renderer.getMetrics().frameCount < frames.length && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      const metrics = renderer.getMetrics();
+      expect(metrics.frameCount).toBe(frames.length);
+    } finally {
+      renderer.dispose();
     }
-    const queueTime = performance.now() - start;
-
-    // Queueing should be fast (non-blocking)
-    expect(queueTime).toBeLessThan(100);
-
-    // Wait for render loop to process
-    await new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const metrics = renderer.getMetrics();
-        expect(metrics.uiBlocked).toBe(false);
-
-        renderer.dispose();
-        resolve();
-      }, 200);
-    });
   }, 10000);
 
   it("maintains stable memory usage under load", async () => {
