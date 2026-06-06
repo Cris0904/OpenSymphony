@@ -20,8 +20,12 @@ use tracing::warn;
 /// Validate that a daemon executable path is safe to run.
 ///
 /// Rejects paths that don't exist, aren't regular files, or lack execute
-/// permission on Unix systems. Also rejects world-writable and group-writable
-/// paths to prevent tampering by other local users.
+/// permission on Unix systems. Also rejects world-writable paths to prevent
+/// tampering by other local users.
+///
+/// Note: Group-writable paths are NOT rejected because in a desktop environment,
+/// the user's primary group typically contains only that user, so rejecting
+/// group-writable paths would break legitimate executables (e.g., `~/bin/`).
 ///
 /// In production deployments, this should be restricted to bundled
 /// executables within the app's resource directory.
@@ -35,7 +39,7 @@ fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
         return Err(DaemonPathError::NotAFile);
     }
 
-    // On Unix, verify execute permission and reject writable-by-others paths
+    // On Unix, verify execute permission and reject world-writable paths
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -45,11 +49,6 @@ fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
         // Reject world-writable paths (prevents tampering by any local user)
         if mode & 0o002 != 0 {
             return Err(DaemonPathError::WorldWritable);
-        }
-
-        // Reject group-writable paths (prevents tampering by group members)
-        if mode & 0o020 != 0 {
-            return Err(DaemonPathError::GroupWritable);
         }
 
         if mode & 0o111 == 0 {
@@ -68,7 +67,6 @@ enum DaemonPathError {
     NotAFile,
     NotExecutable,
     WorldWritable,
-    GroupWritable,
     AccessDenied { detail: String },
 }
 
@@ -408,7 +406,6 @@ pub async fn discover_default_gateway() -> CommandResult<DiscoveryResult> {
     let default_urls = [
         "http://127.0.0.1:8080",
         "http://localhost:8080",
-        "http://0.0.0.0:8080",
     ];
 
     for url in &default_urls {
