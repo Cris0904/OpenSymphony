@@ -15,9 +15,19 @@ import { resolve } from "node:path";
 
 const fixturesDir = resolve(__dirname, "fixtures");
 
-function loadFixture(name: string): Record<string, unknown> {
+interface RunFixture {
+  status: string;
+  error?: string;
+  release_reason?: string;
+  retry_attempt?: number;
+  finished_at?: string;
+  runtime_seconds: number;
+  input_tokens: number;
+}
+
+function loadFixture(name: string): RunFixture {
   const content = readFileSync(resolve(fixturesDir, name), "utf-8");
-  return JSON.parse(content);
+  return JSON.parse(content) as RunFixture;
 }
 
 // -- Shared utility tests --
@@ -159,15 +169,15 @@ describe("run fixture rendering assertions", () => {
   test("active long-running fixture renders expected run state", () => {
     const data = loadFixture("fixture_run_active_long_running.json");
     expect(data.status).toBe("running");
-    expect((data as any).runtime_seconds).toBeGreaterThan(3600);
-    expect((data as any).input_tokens).toBeGreaterThan(100_000);
+    expect(data.runtime_seconds).toBeGreaterThan(3600);
+    expect(data.input_tokens).toBeGreaterThan(100_000);
   });
 
   test("quiet fixture renders expected minimal activity", () => {
     const data = loadFixture("fixture_run_quiet.json");
     expect(data.status).toBe("running");
-    expect((data as any).input_tokens).toBeLessThan(20_000);
-    expect((data as any).runtime_seconds).toBeLessThan(1800);
+    expect(data.input_tokens).toBeLessThan(20_000);
+    expect(data.runtime_seconds).toBeLessThan(1800);
   });
 
   test("degraded fixture has error field", () => {
@@ -179,24 +189,25 @@ describe("run fixture rendering assertions", () => {
   test("stalled fixture indicates no progress error", () => {
     const data = loadFixture("fixture_run_stalled.json");
     expect(data.status).toBe("claimed");
-    expect(typeof (data as any).error).toBe("string");
-    expect((data as any).error.toLowerCase()).toContain("no progress");
+    expect(data.error).toBeDefined();
+    expect(typeof data.error).toBe("string");
+    expect(data.error!.toLowerCase()).toContain("no progress");
   });
 
   test("retry queued fixture distinguishes from active harness work", () => {
     const data = loadFixture("fixture_run_retry_queued.json");
     expect(data.status).toBe("retry_queued");
-    expect((data as any).release_reason).toBeDefined();
-    expect((data as any).retry_attempt).toBeGreaterThan(0);
-    expect((data as any).finished_at).toBeDefined();
+    expect(data.release_reason).toBeDefined();
+    expect(data.retry_attempt).toBeGreaterThan(0);
+    expect(data.finished_at).toBeDefined();
   });
 
   test("detached fixture shows explicit detached state", () => {
     const data = loadFixture("fixture_run_detached.json");
     expect(data.status).toBe("released");
-    expect((data as any).release_reason).toBe("cancelled");
-    expect(typeof (data as any).error).toBe("string");
-    expect((data as any).error.toLowerCase()).toContain("detached");
+    expect(data.release_reason).toBe("cancelled");
+    expect(typeof data.error).toBe("string");
+    expect(data.error!.toLowerCase()).toContain("detached");
   });
 });
 
@@ -223,13 +234,13 @@ describe("state distinction", () => {
     const stalledData = loadFixture("fixture_run_stalled.json");
     expect(degradedData.status).toBe("running");
     expect(stalledData.status).toBe("claimed");
-    expect((stalledData as any).error.toLowerCase()).toContain("no progress");
+    expect(stalledData.error!.toLowerCase()).toContain("no progress");
   });
 
   test("quiet vs active: quiet has lower token usage", () => {
     const quietData = loadFixture("fixture_run_quiet.json");
     const activeData = loadFixture("fixture_run_active_long_running.json");
-    expect((quietData as any).input_tokens).toBeLessThan((activeData as any).input_tokens);
-    expect((quietData as any).runtime_seconds).toBeLessThan((activeData as any).runtime_seconds);
+    expect(quietData.input_tokens).toBeLessThan(activeData.input_tokens);
+    expect(quietData.runtime_seconds).toBeLessThan(activeData.runtime_seconds);
   });
 });

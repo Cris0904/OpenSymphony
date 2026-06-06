@@ -196,7 +196,13 @@ const fixtureTaskGraph: TaskGraphSnapshot = {
 };
 
 // Runtime overlay: map issue nodes to their current run state.
-const runtimeOverlay: Record<string, { runId?: string; status: string; phase?: string }> = {
+interface RuntimeOverlay {
+  runId?: string;
+  status: string;
+  phase?: string;
+}
+
+const runtimeOverlay: Record<string, RuntimeOverlay> = {
   "issue-402": { runId: "run-001", status: "running", phase: "code_generation" },
   "issue-411": { status: "unclaimed" },
   "issue-414": { status: "unclaimed" },
@@ -269,7 +275,7 @@ function TreeNode({
   nodeMap: Map<string, TaskGraphNode>;
   depth: number;
   navigate: (page: Page) => void;
-  runtimeOverlay: Record<string, { runId?: string; status: string; phase?: string }>;
+  runtimeOverlay: Record<string, RuntimeOverlay>;
 }): React.ReactElement {
   const children = node.children
     .map((id) => nodeMap.get(id))

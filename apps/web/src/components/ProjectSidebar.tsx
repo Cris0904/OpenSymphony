@@ -10,6 +10,7 @@ import type { Page } from "../types/navigation";
 
 interface ProjectSidebarProps {
   navigate: (page: Page) => void;
+  currentProjectId?: string;
 }
 
 interface SidebarItem {
@@ -26,13 +27,13 @@ const sidebarData: SidebarItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    icon: "📊",
+    icon: "\ud83d\udcca",
     action: () => {},
   },
   {
     id: "projects",
     label: "Projects",
-    icon: "📁",
+    icon: "\ud83d\udcc1",
     children: [
       {
         id: "project-1",
@@ -76,18 +77,18 @@ const sidebarData: SidebarItem[] = [
   {
     id: "active-runs",
     label: "Active Runs",
-    icon: "▶️",
+    icon: "\u25b6\ufe0f",
     badge: { text: "3", color: "var(--color-success)" },
   },
   {
     id: "retry-queue",
     label: "Retry Queue",
-    icon: "🔄",
+    icon: "\ud83d\udd04",
     badge: { text: "1", color: "var(--color-attention)" },
   },
 ];
 
-export function ProjectSidebar({ navigate }: ProjectSidebarProps): React.ReactElement {
+export function ProjectSidebar({ navigate, currentProjectId = "all" }: ProjectSidebarProps): React.ReactElement {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(["projects", "milestone-1"]));
 
   const toggleExpand = (id: string) => {
@@ -120,7 +121,7 @@ export function ProjectSidebar({ navigate }: ProjectSidebarProps): React.ReactEl
           }}
           tabIndex={0}
         >
-          <span>📊</span>
+          <span>\ud83d\udcca</span>
           <span>Dashboard</span>
         </button>
       </div>
@@ -135,6 +136,7 @@ export function ProjectSidebar({ navigate }: ProjectSidebarProps): React.ReactEl
             expandedIds={expandedIds}
             onToggle={toggleExpand}
             navigate={navigate}
+            currentProjectId={currentProjectId}
           />
         ))}
       </nav>
@@ -149,12 +151,14 @@ function SidebarTreeNode({
   expandedIds,
   onToggle,
   navigate,
+  currentProjectId,
 }: {
   item: SidebarItem;
   depth: number;
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   navigate: (page: Page) => void;
+  currentProjectId: string;
 }): React.ReactElement | null {
   const isExpanded = expandedIds.has(item.id);
   const hasChildren = item.children && item.children.length > 0;
@@ -172,8 +176,8 @@ function SidebarTreeNode({
     } else if (item.id.startsWith("project-")) {
       navigate({ kind: "project", projectId: item.id });
     } else if (item.id.startsWith("issue-") || item.id.startsWith("sub-issue-")) {
-      // Extract run id from issue identifier if present.
-      navigate({ kind: "task-graph", projectId: "project-1" });
+      // Navigate to task-graph for the current project context.
+      navigate({ kind: "task-graph", projectId: currentProjectId });
     } else if (item.id.startsWith("run-")) {
       navigate({ kind: "run", runId: item.id });
     }
@@ -209,7 +213,7 @@ function SidebarTreeNode({
       >
         {hasChildren && (
           <span style={{ fontSize: "10px", color: "var(--color-fg-subtle)", width: "12px" }}>
-            {isExpanded ? "▼" : "▶"}
+            {isExpanded ? "\u25bc" : "\u25b6"}
           </span>
         )}
         {!hasChildren && <span style={{ width: "12px" }} />}
@@ -241,6 +245,7 @@ function SidebarTreeNode({
               expandedIds={expandedIds}
               onToggle={onToggle}
               navigate={navigate}
+              currentProjectId={currentProjectId}
             />
           ))}
         </div>
