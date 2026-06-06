@@ -6,7 +6,7 @@
  * dependency information.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type {
   TaskGraphNode,
   TaskGraphSnapshot,
@@ -215,6 +215,22 @@ const runtimeOverlay: Record<string, RuntimeOverlay> = {
 export function TaskGraph({ projectId, navigate }: TaskGraphProps): React.ReactElement {
   const graph = fixtureTaskGraph;
   const nodeMap = new Map(graph.nodes.map((n) => [n.node_id, n]));
+
+  // Inject pulse animation style safely (client-side only).
+  useEffect(() => {
+    if (document.querySelector('style[data-pulse]')) return;
+    const styleEl = document.createElement("style");
+    styleEl.setAttribute("data-pulse", "true");
+    styleEl.textContent = `
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}`;
+    document.head.appendChild(styleEl);
+    return () => {
+      styleEl.remove();
+    };
+  }, []);
 
   // Build hierarchical tree from flat node list.
   const rootNodes = graph.root_ids
@@ -609,17 +625,4 @@ function getStateCategoryColor(category: TaskGraphStateCategory): string {
     case "canceled":
       return "var(--color-danger)";
   }
-}
-
-// Pulse animation for running status.
-const style = document.createElement("style");
-style.textContent = `
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-`;
-if (!document.querySelector('style[data-pulse]')) {
-  style.setAttribute("data-pulse", "true");
-  document.head.appendChild(style);
 }
