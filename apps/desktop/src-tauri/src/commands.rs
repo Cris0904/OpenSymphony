@@ -229,6 +229,18 @@ pub enum ProfileKind {
     HostedGateway,
 }
 
+impl ProfileKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ProfileKind::LocalDaemon => "local_daemon",
+            ProfileKind::SupervisedLocalDaemon => "supervised_local_daemon",
+            ProfileKind::EmbeddedHost => "embedded_host",
+            ProfileKind::ExternalGateway => "external_gateway",
+            ProfileKind::HostedGateway => "hosted_gateway",
+        }
+    }
+}
+
 /// Request to create or update a connection profile.
 #[derive(Debug, Deserialize)]
 pub struct ProfileRequest {
@@ -266,11 +278,10 @@ pub async fn store_profile(_req: ProfileRequest) -> CommandResult<ProfileRespons
             .unwrap_or(0);
         format!("profile-{}", ts)
     });
-    let kind_str = serde_json::to_string(&_req.kind).unwrap_or_else(|_| "\"unknown\"".to_string());
     Ok(ProfileResponse {
         id: profile_id,
         label: _req.label,
-        kind: kind_str.trim_matches('"').to_string(),
+        kind: _req.kind.as_str().to_string(),
         gateway_url: _req.gateway_url,
         managed: matches!(_req.kind, ProfileKind::SupervisedLocalDaemon | ProfileKind::EmbeddedHost),
         daemon_path: _req.daemon_path,
