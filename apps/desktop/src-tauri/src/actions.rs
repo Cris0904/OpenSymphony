@@ -90,6 +90,14 @@ pub async fn reveal_workspace(
         return Err(DesktopError::PermissionDenied);
     }
     let p = std::path::Path::new(&req.path);
+    let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
+        message: "could not determine home directory".into(),
+    })?;
+    let base = home.join(".opensymphony").join("workspaces");
+    // Check containment BEFORE canonicalization to avoid symlink mismatch
+    if !p.starts_with(&base) {
+        return Err(DesktopError::PermissionDenied);
+    }
     // canonicalize() returns io::Error for non-existent paths naturally
     let canon = p.canonicalize().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => DesktopError::NotFound,
@@ -98,15 +106,6 @@ pub async fn reveal_workspace(
             message: format!("failed to canonicalize: {e}"),
         },
     })?;
-    let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
-        message: "could not determine home directory".into(),
-    })?;
-    // Canonicalize home itself first, then build the base path to avoid symlink mismatch
-    let canon_home = home.canonicalize().unwrap_or(home);
-    let canon_base = canon_home.join(".opensymphony").join("workspaces");
-    if !canon.starts_with(&canon_base) {
-        return Err(DesktopError::PermissionDenied);
-    }
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid workspace path".into(),
     })?;
