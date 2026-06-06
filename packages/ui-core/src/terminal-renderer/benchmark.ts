@@ -35,14 +35,12 @@ export interface BenchmarkResult {
 export interface BenchmarkConfig {
   warmupFrames: number;
   testFrames: number;
-  sampleIntervalMs: number;
   maxDurationMs: number;
 }
 
 const DEFAULT_BENCHMARK_CONFIG: BenchmarkConfig = {
   warmupFrames: 100,
   testFrames: 1000,
-  sampleIntervalMs: 100,
   maxDurationMs: 30000,
 };
 
