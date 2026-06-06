@@ -632,7 +632,9 @@ pub async fn gateway_connection_info() -> CommandResult<GatewayConnectionInfo> {
 pub async fn subscribe_events(
     _req: SubscribeEventsRequest,
     _tx: tauri::ipc::Channel<GatewayEnvelope>,
+    _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
+    _state.event_subscribers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // COE-409 will wire this to the actual gateway event stream.
     // The channel transport enables high-throughput local delivery.
     Ok(())
@@ -647,7 +649,9 @@ pub async fn subscribe_events(
 pub async fn subscribe_terminal(
     _req: SubscribeTerminalRequest,
     _tx: tauri::ipc::Channel<GatewayEnvelope>,
+    _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
+    _state.terminal_subscribers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // COE-409 will wire this to the actual gateway terminal stream.
     Ok(())
 }

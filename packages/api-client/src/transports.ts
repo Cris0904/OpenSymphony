@@ -350,11 +350,20 @@ export class WebSocketTransport implements GatewayTransport {
       this.ws.close();
     }
 
+    const WS_CONNECT_TIMEOUT_MS = 10_000;
     return new Promise((resolve, reject) => {
       const url = this.wsUrl("/api/v1/streams/events");
       this.ws = new WebSocket(url);
 
+      const timeoutId = setTimeout(() => {
+        if (this.ws?.readyState === WebSocket.CONNECTING) {
+          this.ws.close();
+          reject(new Error(`WebSocket connection timed out after ${WS_CONNECT_TIMEOUT_MS}ms`));
+        }
+      }, WS_CONNECT_TIMEOUT_MS);
+
       this.ws.onopen = () => {
+        clearTimeout(timeoutId);
         // Send auth if needed
         if (this.authToken) {
           this.ws?.send(
@@ -365,10 +374,12 @@ export class WebSocketTransport implements GatewayTransport {
       };
 
       this.ws.onerror = (error) => {
+        clearTimeout(timeoutId);
         reject(error);
       };
 
       this.ws.onclose = () => {
+        clearTimeout(timeoutId);
         this.scheduleReconnect();
       };
 

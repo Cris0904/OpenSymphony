@@ -47,8 +47,7 @@ fn terminal_frame_envelope(sequence: u64, run_id: &str) -> GatewayEnvelope {
 fn http_transport_serializes_envelope_correctly() {
     let envelope = sample_envelope(1, "events");
     let json = serde_json::to_string(&envelope).expect("serialize envelope");
-    let deserialized: GatewayEnvelope =
-        serde_json::from_str(&json).expect("deserialize envelope");
+    let deserialized: GatewayEnvelope = serde_json::from_str(&json).expect("deserialize envelope");
 
     assert_eq!(envelope, deserialized);
     assert_eq!(deserialized.cursor.sequence, 1);
@@ -70,8 +69,7 @@ fn http_sse_format_parses_envelope() {
         .strip_suffix("\n\n")
         .unwrap_or(&sse_formatted[data_prefix.len()..].trim());
 
-    let parsed: GatewayEnvelope =
-        serde_json::from_str(json_str).expect("parse SSE envelope");
+    let parsed: GatewayEnvelope = serde_json::from_str(json_str).expect("parse SSE envelope");
     assert_eq!(parsed.cursor.sequence, 42);
     assert_eq!(parsed.entity_ref.kind, EntityKind::Run);
 }
@@ -89,8 +87,7 @@ fn websocket_event_prefix_parses_envelope() {
         .strip_prefix("__event__ ")
         .expect("WS has event prefix");
 
-    let parsed: GatewayEnvelope =
-        serde_json::from_str(json_str).expect("parse WS envelope");
+    let parsed: GatewayEnvelope = serde_json::from_str(json_str).expect("parse WS envelope");
     assert_eq!(parsed.cursor.sequence, 7);
     assert_eq!(parsed.event_kind, "run.started");
 }
@@ -107,8 +104,7 @@ fn websocket_error_prefix_handles_errors() {
     let json_str = ws_formatted
         .strip_prefix("__error__ ")
         .expect("WS has error prefix");
-    let parsed: serde_json::Value =
-        serde_json::from_str(json_str).expect("parse WS error");
+    let parsed: serde_json::Value = serde_json::from_str(json_str).expect("parse WS error");
 
     assert_eq!(parsed["error_type"], "backpressure");
     assert!(parsed["recoverable"].as_bool().unwrap());
@@ -123,8 +119,7 @@ fn websocket_binary_frame_equivalence() {
 
     let parsed_from_bytes: GatewayEnvelope =
         serde_json::from_slice(&json_bytes).expect("parse bytes");
-    let parsed_from_str: GatewayEnvelope =
-        serde_json::from_str(&json_str).expect("parse string");
+    let parsed_from_str: GatewayEnvelope = serde_json::from_str(&json_str).expect("parse string");
 
     assert_eq!(parsed_from_bytes, parsed_from_str);
     assert_eq!(parsed_from_bytes.cursor.sequence, 100);
@@ -137,8 +132,7 @@ fn websocket_binary_frame_equivalence() {
 fn tauri_channel_serializes_envelope_correctly() {
     let envelope = sample_envelope(5, "terminal:run-001");
     let json = serde_json::to_string(&envelope).expect("serialize envelope");
-    let deserialized: GatewayEnvelope =
-        serde_json::from_str(&json).expect("deserialize envelope");
+    let deserialized: GatewayEnvelope = serde_json::from_str(&json).expect("deserialize envelope");
 
     assert_eq!(envelope, deserialized);
     assert_eq!(deserialized.cursor.partition, "terminal:run-001");
@@ -171,12 +165,10 @@ fn cursor_replay_is_transport_independent() {
     let cursor = envelope.cursor.clone();
 
     let http_cursor = serde_json::to_string(&cursor).expect("serialize HTTP cursor");
-    let http_parsed: StreamCursor =
-        serde_json::from_str(&http_cursor).expect("parse HTTP cursor");
+    let http_parsed: StreamCursor = serde_json::from_str(&http_cursor).expect("parse HTTP cursor");
 
     let ws_cursor = serde_json::to_vec(&cursor).expect("serialize WS cursor");
-    let ws_parsed: StreamCursor =
-        serde_json::from_slice(&ws_cursor).expect("parse WS cursor");
+    let ws_parsed: StreamCursor = serde_json::from_slice(&ws_cursor).expect("parse WS cursor");
 
     let tauri_cursor = serde_json::to_string(&cursor).expect("serialize Tauri cursor");
     let tauri_parsed: StreamCursor =
@@ -238,17 +230,17 @@ fn action_receipt_correlation_is_preserved() {
     let dispatch_json = serde_json::to_string(&dispatched).unwrap();
     let complete_json = serde_json::to_string(&completed).unwrap();
 
-    let dispatch_parsed: serde_json::Value =
-        serde_json::from_str(&dispatch_json).unwrap();
-    let complete_parsed: serde_json::Value =
-        serde_json::from_str(&complete_json).unwrap();
+    let dispatch_parsed: serde_json::Value = serde_json::from_str(&dispatch_json).unwrap();
+    let complete_parsed: serde_json::Value = serde_json::from_str(&complete_json).unwrap();
 
     assert_eq!(
         dispatch_parsed["payload"]["correlation_id"],
         complete_parsed["payload"]["correlation_id"]
     );
     assert_eq!(
-        dispatch_parsed["payload"]["correlation_id"].as_str().unwrap(),
+        dispatch_parsed["payload"]["correlation_id"]
+            .as_str()
+            .unwrap(),
         correlation_id
     );
 }
@@ -336,8 +328,7 @@ fn backpressure_recovery_is_consistent() {
     let ws_parsed: serde_json::Value = serde_json::from_str(ws_error_str).unwrap();
     assert!(ws_parsed["recoverable"].as_bool().unwrap());
 
-    let tauri_parsed: serde_json::Value =
-        serde_json::from_str(&http_error_json).unwrap();
+    let tauri_parsed: serde_json::Value = serde_json::from_str(&http_error_json).unwrap();
     assert!(tauri_parsed["recoverable"].as_bool().unwrap());
 }
 
@@ -399,8 +390,9 @@ fn local_and_loopback_produce_identical_envelopes() {
 /// Journal/replay semantics are preserved across all transports.
 #[test]
 fn journal_replay_semantics_preserved() {
-    let events: Vec<GatewayEnvelope> =
-        (1..=10).map(|i| sample_envelope(i, "replay-test")).collect();
+    let events: Vec<GatewayEnvelope> = (1..=10)
+        .map(|i| sample_envelope(i, "replay-test"))
+        .collect();
 
     let serialized: Vec<String> = events
         .iter()

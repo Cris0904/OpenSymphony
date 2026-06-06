@@ -14,6 +14,8 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .manage(commands::SubscriptionState::default())
+        .manage(commands::GatewayConnection::default())
         .setup(|app| {
             if let Some(_window) = app.get_webview_window("main") {
                 // Window exists; future setup hooks can attach here.
@@ -28,6 +30,8 @@ fn main() {
             commands::set_setting,
             commands::daemon_status,
             // COE-410: Gateway local stream transport commands
+            commands::attach_gateway,
+            commands::gateway_health,
             commands::gateway_capabilities,
             commands::gateway_connection_info,
             commands::subscribe_events,

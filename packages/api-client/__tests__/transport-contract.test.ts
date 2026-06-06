@@ -151,63 +151,9 @@ function createTestEnvelope(seq: number, runId: string): GatewayEnvelope {
 
 // ─── Mock Gateway Server ───────────────────────────────────────────────────
 
-/**
- * Minimal mock gateway that responds to the same endpoint contract
- * as the real opensymphony-gateway server. Used to test all transports
- * against a consistent backend.
- */
-class MockGatewayServer {
-  private listeners: Set<(envelope: GatewayEnvelope) => void> = new Set();
-  private envelopes: GatewayEnvelope[] = [];
-
-  pushEnvelope(envelope: GatewayEnvelope): void {
-    this.envelopes.push(envelope);
-    this.listeners.forEach((cb) => cb(envelope));
-  }
-
-  getCapabilities(): GatewayCapabilities {
-    return FIXTURE_CAPABILITIES;
-  }
-
-  getSnapshot(): DashboardSnapshot {
-    return FIXTURE_SNAPSHOT;
-  }
-
-  getRunDetail(runId: string): RunDetail {
-    return { ...FIXTURE_RUN_DETAIL, run_id: runId };
-  }
-
-  getTerminalSnapshot(runId: string, terminalId: string): TerminalSnapshot {
-    return {
-      ...FIXTURE_TERMINAL_SNAPSHOT,
-      run_id: runId,
-      terminal_session_id: terminalId,
-    };
-  }
-
-  getTaskGraph(projectId: string): TaskGraphSnapshot {
-    return { ...FIXTURE_TASK_GRAPH, project_id: projectId };
-  }
-
-  subscribe(listener: (envelope: GatewayEnvelope) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  getEnvelopes(): GatewayEnvelope[] {
-    return [...this.envelopes];
-  }
-}
-
 // ─── Transport Equivalence Tests ───────────────────────────────────────────
 
 describe("Transport Contract Equivalence", () => {
-  let mockServer: MockGatewayServer;
-
-  beforeEach(() => {
-    mockServer = new MockGatewayServer();
-  });
-
   /**
    * Verify all transports produce identical capability responses.
    * Contract: Every transport must return the same GatewayCapabilities shape.
