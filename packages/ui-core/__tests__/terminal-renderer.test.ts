@@ -584,8 +584,8 @@ describe("Performance", () => {
         const metrics = renderer.getMetrics();
         const duration = performance.now() - start;
 
-        // Should process within 500ms for 1000 frames
-        expect(duration).toBeLessThan(500);
+        // Relative check: should process faster than 0.5ms per frame on average
+        expect(duration / frames.length).toBeLessThan(0.5);
         expect(metrics.uiBlocked).toBe(false);
 
         renderer.dispose();

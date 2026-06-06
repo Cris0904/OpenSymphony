@@ -45,30 +45,42 @@ export function createScrollbackBuffer(capacity = 1000): ScrollbackBuffer {
 /**
  * Append decoded frames to the scrollback buffer.
  * Prunes old frames if capacity is exceeded while maintaining stable scrollback.
+ * Uses efficient push/shift pattern instead of spread for better performance.
  */
 export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): ScrollbackBuffer {
   if (frames.length === 0) return buffer;
 
   const newTotal = buffer.totalFrames + frames.length;
 
-  // Append to full history (capped to 10x capacity to prevent unbounded growth)
+  // Efficiently append to full history (capped to prevent unbounded growth)
   const maxHistory = buffer.capacity * 10;
-  const newAllFrames = [...buffer.allFrames, ...frames];
+  // Clone to avoid mutating input, but use push for efficiency
+  const newAllFrames = buffer.allFrames.slice();
+  for (const frame of frames) {
+    newAllFrames.push(frame);
+  }
   let historyOffset = 0;
   if (newAllFrames.length > maxHistory) {
-    historyOffset = newAllFrames.length - maxHistory;
-    newAllFrames.splice(0, historyOffset);
+    const excess = newAllFrames.length - maxHistory;
+    historyOffset = excess;
+    newAllFrames.splice(0, excess);
   }
 
-  // Update visible frames
-  let newVisible = [...buffer.visibleFrames, ...frames];
+  // Update visible frames efficiently
+  let newVisible = buffer.visibleFrames.slice();
   let newOffset = buffer.offset;
 
   // Prune if we exceed capacity
-  if (newVisible.length > buffer.capacity) {
-    const excess = newVisible.length - buffer.capacity;
+  if (newVisible.length + frames.length > buffer.capacity) {
+    const excess = newVisible.length + frames.length - buffer.capacity;
     newOffset += excess;
+    // Remove only what's needed from visible, keep the rest
     newVisible = newVisible.slice(excess);
+  }
+
+  // Append new frames to visible
+  for (const frame of frames) {
+    newVisible.push(frame);
   }
 
   return {
@@ -84,6 +96,7 @@ export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): 
 /**
  * Scroll to a specific frame index (relative to totalFrames).
  * Returns the new buffer state with updated offset and visible frames.
+ * If the target frame has been pruned, snaps to the earliest available frame.
  */
 export function scrollTo(buffer: ScrollbackBuffer, targetIndex: number): ScrollbackBuffer {
   const clampedTarget = Math.max(0, Math.min(targetIndex, buffer.totalFrames - 1));
@@ -91,9 +104,11 @@ export function scrollTo(buffer: ScrollbackBuffer, targetIndex: number): Scrollb
   // Map targetIndex to position in allFrames (accounting for history pruning)
   const historyStartIndex = Math.max(0, buffer.totalFrames - buffer.allFrames.length);
   if (clampedTarget < historyStartIndex) {
-    // Target frame has been pruned from history
+    // Target frame has been pruned from history - snap to earliest available
     return {
       ...buffer,
+      offset: historyStartIndex,
+      visibleFrames: buffer.allFrames.slice(0, buffer.capacity),
       atBottom: false,
     };
   }
