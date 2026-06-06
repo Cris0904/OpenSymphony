@@ -149,6 +149,23 @@ function createTestEnvelope(seq: number, runId: string): GatewayEnvelope {
   };
 }
 
+function createTerminalEnvelope(seq: number, runId: string): GatewayEnvelope {
+  return {
+    schema_version: schemaVersionV1(),
+    cursor: streamCursor(seq, `terminal:${runId}`),
+    entity_ref: entityRefTerminal("term-1"),
+    event_kind: "terminal_frame",
+    payload: { frame_sequence: seq, content: "output" },
+    emitted_at: "2025-01-15T10:00:00Z",
+  };
+}
+
+async function flushAsyncWork(iterations = 2): Promise<void> {
+  for (let i = 0; i < iterations; i++) {
+    await Promise.resolve();
+  }
+}
+
 // ─── Mock Gateway Server ───────────────────────────────────────────────────
 
 // ─── Transport Equivalence Tests ───────────────────────────────────────────
@@ -383,6 +400,74 @@ describe("TauriChannelTransport", () => {
     await expect(transport.health()).resolves.toEqual(FIXTURE_CAPABILITIES);
     expect(invoke).toHaveBeenCalledWith("gateway_capabilities", {});
   });
+
+  it("forwards event cursors and unsubscribes on close", async () => {
+    const channels: Array<{ close: jest.Mock; emit: (envelope: GatewayEnvelope) => void }> = [];
+    const invoke = jest.fn().mockResolvedValue(undefined);
+    globalWithTauri.__TAURI__ = {
+      invoke,
+      core: {
+        Channel: jest.fn((onMessage: (envelope: GatewayEnvelope) => void) => {
+          const channel = {
+            onmessage: onMessage,
+            close: jest.fn(),
+            emit: onMessage,
+          };
+          channels.push(channel);
+          return channel;
+        }),
+      },
+    };
+
+    const transport = new TauriChannelTransport({ baseUri: "tauri://local" });
+    const iterator = transport.events({ sequence: 42, partition: "events" })[Symbol.asyncIterator]();
+    const pendingNext = iterator.next();
+    await flushAsyncWork();
+
+    expect(invoke).toHaveBeenCalledWith("subscribe_events", {
+      tx: channels[0],
+      cursor: 42,
+    });
+
+    await transport.close();
+    await expect(pendingNext).resolves.toMatchObject({ done: true });
+    expect(invoke).toHaveBeenCalledWith("unsubscribe_events", {});
+    expect(channels[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("unsubscribes terminal channels exactly once on close", async () => {
+    const channels: Array<{ close: jest.Mock; emit: (envelope: GatewayEnvelope) => void }> = [];
+    const invoke = jest.fn().mockResolvedValue(undefined);
+    globalWithTauri.__TAURI__ = {
+      invoke,
+      core: {
+        Channel: jest.fn((onMessage: (envelope: GatewayEnvelope) => void) => {
+          const channel = {
+            onmessage: onMessage,
+            close: jest.fn(),
+            emit: onMessage,
+          };
+          channels.push(channel);
+          return channel;
+        }),
+      },
+    };
+
+    const transport = new TauriChannelTransport({ baseUri: "tauri://local" });
+    const iterator = transport.terminalFrames("run-1")[Symbol.asyncIterator]();
+    const pendingNext = iterator.next();
+    await flushAsyncWork();
+
+    expect(invoke).toHaveBeenCalledWith("subscribe_terminal", {
+      run_id: "run-1",
+      tx: channels[0],
+    });
+
+    await transport.close();
+    await expect(pendingNext).resolves.toMatchObject({ done: true });
+    expect(invoke).toHaveBeenCalledWith("unsubscribe_terminal", { run_id: "run-1" });
+    expect(channels[0].close).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ─── HTTP Transport Tests ──────────────────────────────────────────────────
@@ -423,6 +508,56 @@ describe("HttpGatewayTransport", () => {
 // ─── WebSocket Transport Tests ─────────────────────────────────────────────
 
 describe("WebSocketTransport", () => {
+  const globalWithWebSocket = globalThis as Record<string, unknown>;
+  const originalWebSocket = globalWithWebSocket.WebSocket;
+
+  class FakeWebSocket {
+    static readonly CONNECTING = 0;
+    static readonly OPEN = 1;
+    static readonly CLOSING = 2;
+    static readonly CLOSED = 3;
+    static instances: FakeWebSocket[] = [];
+
+    readyState = FakeWebSocket.CONNECTING;
+    onopen: (() => void) | null = null;
+    onclose: ((event: { code: number; reason: string }) => void) | null = null;
+    onerror: ((event: Error) => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    sent: string[] = [];
+
+    constructor(readonly url: string) {
+      FakeWebSocket.instances.push(this);
+    }
+
+    send(data: string): void {
+      this.sent.push(data);
+    }
+
+    open(): void {
+      this.readyState = FakeWebSocket.OPEN;
+      this.onopen?.();
+    }
+
+    emit(data: string): void {
+      this.onmessage?.({ data });
+    }
+
+    close(): void {
+      this.readyState = FakeWebSocket.CLOSED;
+      this.onclose?.({ code: 1000, reason: "" });
+    }
+  }
+
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    globalWithWebSocket.WebSocket = FakeWebSocket;
+  });
+
+  afterEach(() => {
+    globalWithWebSocket.WebSocket = originalWebSocket;
+    jest.useRealTimers();
+  });
+
   it("normalizes baseUri by removing trailing slash", () => {
     const transport = new WebSocketTransport({
       baseUri: "http://localhost:8080/",
@@ -452,6 +587,87 @@ describe("WebSocketTransport", () => {
     expect(typeof transport.events).toBe("function");
     expect(typeof transport.terminalFrames).toBe("function");
     expect(typeof transport.close).toBe("function");
+  });
+
+  it("shares one connection attempt across concurrent stream subscribers", async () => {
+    const transport = new WebSocketTransport({
+      baseUri: "http://localhost:8080",
+    });
+    const events = transport.events()[Symbol.asyncIterator]();
+    const terminal = transport.terminalFrames("run-1")[Symbol.asyncIterator]();
+
+    const eventNext = events.next();
+    const terminalNext = terminal.next();
+    await flushAsyncWork();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    FakeWebSocket.instances[0].open();
+    await flushAsyncWork();
+
+    await transport.close();
+    await expect(eventNext).resolves.toMatchObject({ done: true });
+    await expect(terminalNext).resolves.toMatchObject({ done: true });
+  });
+
+  it("dispatches terminal frames to multiple subscribers for the same run", async () => {
+    const transport = new WebSocketTransport({
+      baseUri: "http://localhost:8080",
+    });
+    const first = transport.terminalFrames("run-1")[Symbol.asyncIterator]();
+    const second = transport.terminalFrames("run-1")[Symbol.asyncIterator]();
+
+    const firstNext = first.next();
+    const secondNext = second.next();
+    await flushAsyncWork();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    FakeWebSocket.instances[0].open();
+    await flushAsyncWork(10);
+    expect(
+      (transport as unknown as {
+        terminalSubscribers: Map<string, Set<(envelope: GatewayEnvelope) => void>>;
+      }).terminalSubscribers.get("run-1")?.size,
+    ).toBe(2);
+
+    const envelope = createTerminalEnvelope(1, "run-1");
+    FakeWebSocket.instances[0].emit(`__event__ ${JSON.stringify(envelope)}`);
+
+    await expect(firstNext).resolves.toMatchObject({
+      done: false,
+      value: {
+        cursor: { sequence: 1, partition: "terminal:run-1" },
+        entity_ref: { kind: "terminal_session", id: "term-1" },
+        event_kind: "terminal_frame",
+        payload: { frame_sequence: 1, content: "output" },
+      },
+    });
+    await expect(secondNext).resolves.toMatchObject({
+      done: false,
+      value: {
+        cursor: { sequence: 1, partition: "terminal:run-1" },
+        entity_ref: { kind: "terminal_session", id: "term-1" },
+        event_kind: "terminal_frame",
+        payload: { frame_sequence: 1, content: "output" },
+      },
+    });
+    await transport.close();
+  });
+
+  it("marks reconnect pending after an established socket closes", async () => {
+    jest.useFakeTimers();
+    const transport = new WebSocketTransport({
+      baseUri: "http://localhost:8080",
+    });
+    const events = transport.events()[Symbol.asyncIterator]();
+    const pendingNext = events.next();
+    await flushAsyncWork();
+    FakeWebSocket.instances[0].open();
+    await flushAsyncWork();
+
+    FakeWebSocket.instances[0].close();
+
+    expect((transport as unknown as { isReconnecting: boolean }).isReconnecting).toBe(true);
+    await transport.close();
+    await expect(pendingNext).resolves.toMatchObject({ done: true });
   });
 });
 

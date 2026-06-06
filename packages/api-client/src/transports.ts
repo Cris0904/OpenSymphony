@@ -385,6 +385,7 @@ export class WebSocketTransport implements GatewayTransport {
   private maxReconnectDelayMs = 30000;
   private isReconnecting = false;
   private isClosed = false;
+  private connecting?: Promise<void>;
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
@@ -464,10 +465,16 @@ export class WebSocketTransport implements GatewayTransport {
   }
 
   private async ensureConnected(): Promise<void> {
+    if (this.isClosed) {
+      return;
+    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return;
     }
-    await this.connectWebSocket();
+    this.connecting ??= this.connectWebSocket().finally(() => {
+      this.connecting = undefined;
+    });
+    await this.connecting;
   }
 
   private async connectWebSocket(): Promise<void> {
@@ -481,49 +488,79 @@ export class WebSocketTransport implements GatewayTransport {
     const WS_CONNECT_TIMEOUT_MS = 10_000;
     return new Promise((resolve, reject) => {
       const url = this.wsUrl("/api/v1/streams/events");
-      this.ws = new WebSocket(url);
+      const ws = new WebSocket(url);
+      this.ws = ws;
+      let hasOpened = false;
 
       const timeoutId = setTimeout(() => {
-        if (this.ws?.readyState === WebSocket.CONNECTING) {
-          this.ws.close();
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
           reject(new Error(`WebSocket connection timed out after ${WS_CONNECT_TIMEOUT_MS}ms`));
         }
       }, WS_CONNECT_TIMEOUT_MS);
 
-      this.ws.onopen = () => {
+      ws.onopen = () => {
         clearTimeout(timeoutId);
+        hasOpened = true;
         this.reconnectDelayMs = 1000; // Reset reconnect delay after successful connection
         // Send auth if needed
         if (this.authToken) {
-          this.ws?.send(
-            JSON.stringify({ type: "auth", token: this.authToken }),
-          );
+          ws.send(JSON.stringify({ type: "auth", token: this.authToken }));
         }
         resolve();
       };
 
-      this.ws.onerror = (error) => {
+      ws.onerror = (error) => {
         clearTimeout(timeoutId);
         // Only reject if we haven't resolved yet
-        if (this.ws?.readyState !== WebSocket.OPEN) {
+        if (!hasOpened) {
           reject(error instanceof Error ? error : new Error('WebSocket connection error'));
         }
       };
 
-      this.ws.onclose = (event) => {
+      ws.onclose = (event) => {
         clearTimeout(timeoutId);
-        // If connection closes during handshake, reject the promise
-        if (this.ws?.readyState !== WebSocket.OPEN) {
+        if (this.ws === ws) {
+          this.ws = undefined;
+        }
+        if (this.isClosed) {
+          return;
+        }
+        if (!hasOpened) {
           reject(new Error(`WebSocket connection closed during handshake (code: ${event.code}, reason: ${event.reason || 'none'})`));
         } else {
           this.scheduleReconnect();
         }
       };
 
-      this.ws.onmessage = (event) => {
+      ws.onmessage = (event) => {
         this.handleMessage(event.data);
       };
     });
+  }
+
+  private dispatch(envelope: GatewayEnvelope): void {
+    this.eventSubscribers.forEach((cb) => cb(envelope));
+    if (envelope.entity_ref.kind !== "terminal_session") {
+      return;
+    }
+
+    const match = envelope.cursor.partition.match(/^[^:]+:(.+)$/);
+    const runId = match?.[1] ?? envelope.cursor.partition;
+    if (runId) {
+      this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
+    }
+  }
+
+  private terminalSubscriberSet(
+    runId: string,
+  ): Set<(envelope: GatewayEnvelope) => void> {
+    let subscribers = this.terminalSubscribers.get(runId);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.terminalSubscribers.set(runId, subscribers);
+    }
+    return subscribers;
   }
 
   private handleMessage(data: string): void {
@@ -532,16 +569,7 @@ export class WebSocketTransport implements GatewayTransport {
       try {
         const payload = data.slice(10);
         const envelope = JSON.parse(payload) as GatewayEnvelope;
-        // Dispatch to all event subscribers
-        this.eventSubscribers.forEach((cb) => cb(envelope));
-        // Also dispatch to terminal subscribers matching the run ID
-        if (envelope.entity_ref.kind === "terminal_session") {
-          const match = envelope.cursor.partition.match(/^[^:]+:(.+)$/);
-          const runId = match?.[1] ?? envelope.cursor.partition;
-          if (runId) {
-            this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
-          }
-        }
+        this.dispatch(envelope);
       } catch {
         // Skip malformed messages
       }
@@ -560,16 +588,7 @@ export class WebSocketTransport implements GatewayTransport {
       // Try parsing as direct JSON envelope (legacy format)
       try {
         const envelope = JSON.parse(data) as GatewayEnvelope;
-        // Dispatch to all event subscribers
-        this.eventSubscribers.forEach((cb) => cb(envelope));
-        // Also dispatch to terminal subscribers matching the run ID
-        if (envelope.entity_ref.kind === "terminal_session") {
-          const match = envelope.cursor.partition.match(/^[^:]+:(.+)$/);
-          const runId = match?.[1] ?? envelope.cursor.partition;
-          if (runId) {
-            this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
-          }
-        }
+        this.dispatch(envelope);
       } catch {
         // Skip unknown message formats
       }
@@ -577,7 +596,7 @@ export class WebSocketTransport implements GatewayTransport {
   }
 
   private scheduleReconnect(): void {
-    if (this.isReconnecting) return;
+    if (this.isClosed || this.isReconnecting) return;
     this.isReconnecting = true;
 
     const delay = Math.min(
@@ -588,7 +607,10 @@ export class WebSocketTransport implements GatewayTransport {
 
     setTimeout(() => {
       this.isReconnecting = false;
-      this.connectWebSocket().catch(() => {
+      if (this.isClosed) {
+        return;
+      }
+      this.ensureConnected().catch(() => {
         // Reconnect will be scheduled again on close
       });
     }, delay);
@@ -661,7 +683,7 @@ export class WebSocketTransport implements GatewayTransport {
     };
     this.pendingGeneratorCancellers.add(cancelGenerator);
 
-    this.terminalSubscribers.set(runId, new Set([subscriber]));
+    this.terminalSubscriberSet(runId).add(subscriber);
 
     try {
       while (!this.isClosed) {
@@ -674,7 +696,13 @@ export class WebSocketTransport implements GatewayTransport {
         }
       }
     } finally {
-      this.terminalSubscribers.get(runId)?.delete(subscriber);
+      const subs = this.terminalSubscribers.get(runId);
+      if (subs) {
+        subs.delete(subscriber);
+        if (subs.size === 0) {
+          this.terminalSubscribers.delete(runId);
+        }
+      }
       this.pendingGeneratorCancellers.delete(cancelGenerator);
     }
   }
@@ -693,6 +721,7 @@ export class WebSocketTransport implements GatewayTransport {
       this.ws.close();
       this.ws = undefined;
     }
+    this.connecting = undefined;
     this.eventSubscribers.clear();
     this.terminalSubscribers.clear();
   }
@@ -737,10 +766,11 @@ export interface TauriRuntime {
 
 export class TauriChannelTransport implements GatewayTransport {
   readonly baseUri: string;
-  private eventChannel?: TauriChannel<GatewayEnvelope>;
-  private terminalChannels: Map<string, TauriChannel<GatewayEnvelope>> = new Map();
+  private eventChannels = new Set<TauriChannel<GatewayEnvelope>>();
+  private terminalChannels: Map<string, Set<TauriChannel<GatewayEnvelope>>> = new Map();
   private isClosed = false;
   private readonly pendingGeneratorCancellers = new Set<() => void>();
+  private readonly pendingGeneratorCleanups = new Set<() => Promise<void>>();
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
@@ -808,12 +838,6 @@ export class TauriChannelTransport implements GatewayTransport {
       },
     );
 
-    // Pass the frontend-created channel as `tx` to the Rust backend.
-    // The backend receives this as `tauri::ipc::Channel<GatewayEnvelope>`.
-    await this.invoke("subscribe_events", { tx: channel });
-
-    this.eventChannel = channel;
-
     const cancelGenerator = () => {
       if (resolveNext) {
         resolveNext({ value: {} as GatewayEnvelope, done: true });
@@ -821,6 +845,29 @@ export class TauriChannelTransport implements GatewayTransport {
       }
     };
     this.pendingGeneratorCancellers.add(cancelGenerator);
+
+    let cleanedUp = false;
+    const cleanup = async () => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      this.pendingGeneratorCancellers.delete(cancelGenerator);
+      this.pendingGeneratorCleanups.delete(cleanup);
+      this.eventChannels.delete(channel);
+      channel.close?.();
+      await this.invoke("unsubscribe_events", {}).catch(() => undefined);
+    };
+    this.pendingGeneratorCleanups.add(cleanup);
+
+    const args: Record<string, unknown> = { tx: channel };
+    if (fromCursor) {
+      args.cursor = fromCursor.sequence;
+    }
+    // Pass the frontend-created channel as `tx` to the Rust backend.
+    // The backend receives this as `tauri::ipc::Channel<GatewayEnvelope>`.
+    await this.invoke("subscribe_events", args);
+    this.eventChannels.add(channel);
 
     try {
       while (!this.isClosed) {
@@ -833,9 +880,7 @@ export class TauriChannelTransport implements GatewayTransport {
         }
       }
     } finally {
-      this.pendingGeneratorCancellers.delete(cancelGenerator);
-      channel.close?.();
-      this.eventChannel = undefined;
+      await cleanup();
     }
   }
 
@@ -855,11 +900,6 @@ export class TauriChannelTransport implements GatewayTransport {
       },
     );
 
-    // Pass the frontend-created channel as `tx` to the Rust backend.
-    await this.invoke("subscribe_terminal", { run_id: runId, tx: channel });
-
-    this.terminalChannels.set(runId, channel);
-
     const cancelGenerator = () => {
       if (resolveNext) {
         resolveNext({ value: {} as GatewayEnvelope, done: true });
@@ -867,6 +907,34 @@ export class TauriChannelTransport implements GatewayTransport {
       }
     };
     this.pendingGeneratorCancellers.add(cancelGenerator);
+
+    let cleanedUp = false;
+    const cleanup = async () => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      this.pendingGeneratorCancellers.delete(cancelGenerator);
+      this.pendingGeneratorCleanups.delete(cleanup);
+      const channels = this.terminalChannels.get(runId);
+      channels?.delete(channel);
+      if (channels?.size === 0) {
+        this.terminalChannels.delete(runId);
+      }
+      channel.close?.();
+      await this.invoke("unsubscribe_terminal", { run_id: runId }).catch(() => undefined);
+    };
+    this.pendingGeneratorCleanups.add(cleanup);
+
+    // Pass the frontend-created channel as `tx` to the Rust backend.
+    await this.invoke("subscribe_terminal", { run_id: runId, tx: channel });
+
+    const channels = this.terminalChannels.get(runId);
+    if (channels) {
+      channels.add(channel);
+    } else {
+      this.terminalChannels.set(runId, new Set([channel]));
+    }
 
     try {
       while (!this.isClosed) {
@@ -879,9 +947,7 @@ export class TauriChannelTransport implements GatewayTransport {
         }
       }
     } finally {
-      this.pendingGeneratorCancellers.delete(cancelGenerator);
-      channel.close?.();
-      this.terminalChannels.delete(runId);
+      await cleanup();
     }
   }
 
@@ -892,13 +958,12 @@ export class TauriChannelTransport implements GatewayTransport {
     for (const cancel of this.pendingGeneratorCancellers) {
       cancel();
     }
-    this.pendingGeneratorCancellers.clear();
 
-    this.eventChannel?.close?.();
-    for (const channel of this.terminalChannels.values()) {
-      channel.close?.();
-    }
-    this.eventChannel = undefined;
+    const cleanups = Array.from(this.pendingGeneratorCleanups);
+    await Promise.allSettled(cleanups.map((cleanup) => cleanup()));
+    this.pendingGeneratorCancellers.clear();
+    this.pendingGeneratorCleanups.clear();
+    this.eventChannels.clear();
     this.terminalChannels.clear();
   }
 }

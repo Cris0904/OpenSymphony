@@ -11,7 +11,6 @@ mod actions;
 pub mod commands;
 pub mod daemon;
 mod keychain;
-#[path = "../../../../crates/opensymphony-gateway-schema/src/lib.rs"]
 pub mod opensymphony_gateway_schema;
 mod settings;
 pub mod types;
