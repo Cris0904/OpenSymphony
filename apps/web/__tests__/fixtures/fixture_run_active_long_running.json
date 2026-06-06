@@ -1,0 +1,18 @@
+{
+  "schema_version": { "major": 1, "minor": 0, "patch": 0 },
+  "run_id": "fixture-active-long-running",
+  "issue_id": "test-issue-001",
+  "issue_identifier": "COE-TEST-001",
+  "worker_id": "worker-test-01",
+  "status": "running",
+  "claimed_at": "2025-06-05T10:00:00Z",
+  "started_at": "2025-06-05T10:01:00Z",
+  "turn_count": 25,
+  "max_turns": 50,
+  "input_tokens": 120000,
+  "output_tokens": 85000,
+  "cache_read_tokens": 40000,
+  "runtime_seconds": 7200,
+  "conversation_id": "conv-test-001",
+  "workspace_path": "/workspace/COE-TEST-001"
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": { "major": 1, "minor": 0, "patch": 0 },
+  "run_id": "fixture-detached",
+  "issue_id": "test-issue-006",
+  "issue_identifier": "COE-TEST-006",
+  "worker_id": "worker-test-06",
+  "status": "released",
+  "claimed_at": "2025-06-05T06:00:00Z",
+  "started_at": "2025-06-05T06:01:00Z",
+  "finished_at": "2025-06-05T06:30:00Z",
+  "release_reason": "cancelled",
+  "turn_count": 2,
+  "max_turns": 30,
+  "input_tokens": 3000,
+  "output_tokens": 1000,
+  "cache_read_tokens": 500,
+  "runtime_seconds": 1800,
+  "conversation_id": "conv-test-006",
+  "workspace_path": "/workspace/COE-TEST-006",
+  "error": "Client detached unexpectedly"
+}

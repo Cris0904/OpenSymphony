@@ -1,0 +1,22 @@
+{
+  "schema_version": { "major": 1, "minor": 0, "patch": 0 },
+  "run_id": "fixture-retry-queued",
+  "issue_id": "test-issue-005",
+  "issue_identifier": "COE-TEST-005",
+  "worker_id": "worker-test-05",
+  "status": "retry_queued",
+  "claimed_at": "2025-06-05T09:00:00Z",
+  "started_at": "2025-06-05T09:01:00Z",
+  "finished_at": "2025-06-05T10:00:00Z",
+  "release_reason": "tracker_inactive",
+  "turn_count": 8,
+  "max_turns": 30,
+  "retry_attempt": 2,
+  "input_tokens": 30000,
+  "output_tokens": 15000,
+  "cache_read_tokens": 8000,
+  "runtime_seconds": 3600,
+  "conversation_id": "conv-test-005",
+  "workspace_path": "/workspace/COE-TEST-005",
+  "error": "Harness session became unresponsive"
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": { "major": 1, "minor": 0, "patch": 0 },
+  "run_id": "fixture-stalled",
+  "issue_id": "test-issue-004",
+  "issue_identifier": "COE-TEST-004",
+  "worker_id": "worker-test-04",
+  "status": "claimed",
+  "claimed_at": "2025-06-05T08:00:00Z",
+  "started_at": "2025-06-05T08:01:00Z",
+  "turn_count": 3,
+  "max_turns": 30,
+  "input_tokens": 5000,
+  "output_tokens": 2000,
+  "cache_read_tokens": 1000,
+  "runtime_seconds": 36000,
+  "conversation_id": "conv-test-004",
+  "workspace_path": "/workspace/COE-TEST-004",
+  "error": "No progress detected for 10 minutes"
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": { "major": 1, "minor": 0, "patch": 0 },
+  "run_id": "fixture-degraded",
+  "issue_id": "test-issue-003",
+  "issue_identifier": "COE-TEST-003",
+  "worker_id": "worker-test-03",
+  "status": "running",
+  "claimed_at": "2025-06-05T12:00:00Z",
+  "started_at": "2025-06-05T12:05:00Z",
+  "turn_count": 18,
+  "max_turns": 30,
+  "input_tokens": 90000,
+  "output_tokens": 45000,
+  "cache_read_tokens": 30000,
+  "runtime_seconds": 5400,
+  "conversation_id": "conv-test-003",
+  "workspace_path": "/workspace/COE-TEST-003",
+  "error": "Intermittent stream connectivity, retrying..."
+}
