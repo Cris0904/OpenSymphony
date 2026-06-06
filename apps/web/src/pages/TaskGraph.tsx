@@ -6,18 +6,18 @@
  * dependency information.
  */
 
+import { useState, useCallback } from "react";
 import type {
   TaskGraphNode,
   TaskGraphSnapshot,
   TaskGraphNodeKind,
   TaskGraphStateCategory,
 } from "@opensymphony/gateway-schema";
-
-type Page =
-  | { kind: "dashboard" }
-  | { kind: "project"; projectId: string }
-  | { kind: "task-graph"; projectId: string }
-  | { kind: "run"; runId: string };
+import type { Page } from "../types/navigation";
+import {
+  RUN_STATUS_COLORS,
+  STATE_CATEGORY_COLORS,
+} from "../lib/ui-utils";
 
 interface TaskGraphProps {
   projectId: string;
@@ -257,7 +257,7 @@ export function TaskGraph({ projectId, navigate }: TaskGraphProps): React.ReactE
   );
 }
 
-/** Recursive tree node renderer. */
+/** Recursive tree node renderer with expand/collapse. */
 function TreeNode({
   node,
   nodeMap,
@@ -274,10 +274,12 @@ function TreeNode({
   const children = node.children
     .map((id) => nodeMap.get(id))
     .filter((n): n is TaskGraphNode => n !== undefined);
+  const [expanded, setExpanded] = useState(depth < 2); // auto-expand top 2 levels
 
   const overlay = runtimeOverlay[node.node_id];
-  const stateCategoryColor = getStateCategoryColor(node.state_category);
   const kindIcon = getKindIcon(node.kind);
+
+  const handleToggle = useCallback(() => setExpanded((prev) => !prev), []);
 
   return (
     <div>
@@ -292,9 +294,24 @@ function TreeNode({
           borderLeft: depth > 0 ? "2px solid var(--color-border-muted)" : "none",
         }}
       >
-        {/* Expand/collapse indicator (simplified: always show children) */}
+        {/* Expand/collapse indicator */}
         {children.length > 0 ? (
-          <span style={{ fontSize: "10px", color: "var(--color-fg-subtle)", width: "12px" }}>▼</span>
+          <button
+            onClick={handleToggle}
+            style={{
+              fontSize: "10px",
+              color: "var(--color-fg-subtle)",
+              width: "12px",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+            }}
+            aria-label={expanded ? "Collapse children" : "Expand children"}
+            tabIndex={0}
+          >
+            {expanded ? "▼" : "▶"}
+          </button>
         ) : (
           <span style={{ width: "12px" }} />
         )}
@@ -378,8 +395,8 @@ function TreeNode({
         )}
       </div>
 
-      {/* Children */}
-      {children.map((child) => (
+      {/* Children (conditionally rendered based on expanded state) */}
+      {expanded && children.map((child) => (
         <TreeNode
           key={child.node_id}
           node={child}
@@ -401,14 +418,7 @@ function StateBadge({
   category: TaskGraphStateCategory;
   state: string;
 }): React.ReactElement {
-  const colors: Record<TaskGraphStateCategory, { bg: string; fg: string }> = {
-    backlog: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-    todo: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
-    in_progress: { bg: "rgba(88, 166, 255, 0.15)", fg: "var(--color-accent)" },
-    done: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
-    canceled: { bg: "rgba(248, 81, 73, 0.15)", fg: "var(--color-danger)" },
-  };
-  const { bg, fg } = colors[category];
+  const { bg, fg } = STATE_CATEGORY_COLORS[category];
 
   return (
     <span
@@ -436,14 +446,7 @@ function RuntimeBadge({
   status: string;
   phase?: string;
 }): React.ReactElement {
-  const colors: Record<string, { bg: string; fg: string }> = {
-    running: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
-    retry_queued: { bg: "rgba(210, 153, 34, 0.15)", fg: "var(--color-attention)" },
-    released: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
-    claimed: { bg: "rgba(88, 166, 255, 0.15)", fg: "var(--color-accent)" },
-    unclaimed: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-  };
-  const { bg, fg } = colors[status] ?? colors.unclaimed;
+  const { bg, fg } = RUN_STATUS_COLORS[status] ?? RUN_STATUS_COLORS.unclaimed;
 
   return (
     <span

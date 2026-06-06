@@ -11,12 +11,13 @@ import type {
   SnapshotEventSummary,
   ProjectSummary,
 } from "@opensymphony/gateway-schema";
-
-type Page =
-  | { kind: "dashboard" }
-  | { kind: "project"; projectId: string }
-  | { kind: "task-graph"; projectId: string }
-  | { kind: "run"; runId: string };
+import type { Page } from "../types/navigation";
+import {
+  formatTimeAgo,
+  formatTokens,
+  formatCost,
+  RUN_STATUS_COLORS,
+} from "../lib/ui-utils";
 
 interface DashboardProps {
   navigate: (page: Page) => void;
@@ -370,14 +371,7 @@ function RunList({ navigate }: { navigate: (p: Page) => void }): React.ReactElem
 
 /** Run status badge component. */
 function RunStatusBadge({ status }: { status: string }): React.ReactElement {
-  const colors: Record<string, { bg: string; fg: string }> = {
-    running: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
-    retry_queued: { bg: "rgba(210, 153, 34, 0.15)", fg: "var(--color-attention)" },
-    released: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
-    claimed: { bg: "rgba(88, 166, 255, 0.15)", fg: "var(--color-accent)" },
-    unclaimed: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-  };
-  const { bg, fg } = colors[status] ?? colors.unclaimed;
+  const { bg, fg } = RUN_STATUS_COLORS[status] ?? RUN_STATUS_COLORS.unclaimed;
 
   return (
     <span
@@ -448,30 +442,4 @@ function EventRow({
       </span>
     </div>
   );
-}
-
-/** Format token count for display. */
-function formatTokens(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
-  return count.toString();
-}
-
-/** Format cost from micros to dollars. */
-function formatCost(micros: number): string {
-  const dollars = micros / 1_000_000;
-  if (dollars >= 1) return `$${dollars.toFixed(2)}`;
-  if (dollars >= 0.01) return `$${dollars.toFixed(3)}`;
-  return `${(dollars * 100).toFixed(1)}¢`;
-}
-
-/** Format relative time. */
-function formatTimeAgo(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
 }

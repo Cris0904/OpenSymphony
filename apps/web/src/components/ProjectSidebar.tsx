@@ -6,12 +6,7 @@
  */
 
 import { useState } from "react";
-
-type Page =
-  | { kind: "dashboard" }
-  | { kind: "project"; projectId: string }
-  | { kind: "task-graph"; projectId: string }
-  | { kind: "run"; runId: string };
+import type { Page } from "../types/navigation";
 
 interface ProjectSidebarProps {
   navigate: (page: Page) => void;

@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from "react";
 import type { GatewayHealth } from "@opensymphony/gateway-schema";
+import { formatTimeAgo } from "../lib/ui-utils";
 
 type ConnectionState = "connected" | "reconnecting" | "disconnected" | "stale";
 
@@ -117,14 +118,4 @@ export function StatusBar(): React.ReactElement {
       )}
     </footer>
   );
-}
-
-function formatTimeAgo(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
 }

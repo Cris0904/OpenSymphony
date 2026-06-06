@@ -14,38 +14,8 @@ import { Dashboard } from "../pages/Dashboard";
 import { TaskGraph } from "../pages/TaskGraph";
 import { RunDetail } from "../pages/RunDetail";
 import { useFocusManager } from "../hooks/useFocusManager";
-
-type Page =
-  | { kind: "dashboard" }
-  | { kind: "project"; projectId: string }
-  | { kind: "task-graph"; projectId: string }
-  | { kind: "run"; runId: string };
-
-function routeToPage(hash: string): Page | null {
-  if (!hash || hash === "#/dashboard" || hash === "#/" || hash === "#") {
-    return { kind: "dashboard" };
-  }
-  const match = hash.match(/^#\/project\/([^/]+)$/);
-  if (match) return { kind: "project", projectId: match[1] };
-  const graphMatch = hash.match(/^#\/project\/([^/]+)\/graph$/);
-  if (graphMatch) return { kind: "task-graph", projectId: graphMatch[1] };
-  const runMatch = hash.match(/^#\/run\/([^/]+)$/);
-  if (runMatch) return { kind: "run", runId: runMatch[1] };
-  return null;
-}
-
-function pageToRoute(page: Page): string {
-  switch (page.kind) {
-    case "dashboard":
-      return "#/dashboard";
-    case "project":
-      return `#/project/${page.projectId}`;
-    case "task-graph":
-      return `#/project/${page.projectId}/graph`;
-    case "run":
-      return `#/run/${page.runId}`;
-  }
-}
+import type { Page } from "../types/navigation";
+import { routeToPage, pageToRoute } from "../types/navigation";
 
 function renderPage(page: Page, navigate: (page: Page) => void): React.ReactNode {
   switch (page.kind) {
@@ -103,10 +73,19 @@ export function AppShell(): React.ReactElement {
         e.preventDefault();
         setSidebarOpen((prev) => !prev);
       }
+      // Cmd/Ctrl+Alt+Arrow navigates focus zones.
+      if ((e.metaKey || e.ctrlKey) && e.altKey && e.key === "ArrowDown") {
+        e.preventDefault();
+        focusNext();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.altKey && e.key === "ArrowUp") {
+        e.preventDefault();
+        focusPrev();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [paletteOpen]);
+  }, [paletteOpen, focusNext, focusPrev]);
 
   // Sidebar resize handlers.
   const startResize = useCallback((e: React.MouseEvent) => {

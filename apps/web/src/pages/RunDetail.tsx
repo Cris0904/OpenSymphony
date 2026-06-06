@@ -8,12 +8,14 @@
  */
 
 import type { RunDetail as RunDetailType, RunStatus, ReleaseReason } from "@opensymphony/gateway-schema";
-
-type Page =
-  | { kind: "dashboard" }
-  | { kind: "project"; projectId: string }
-  | { kind: "task-graph"; projectId: string }
-  | { kind: "run"; runId: string };
+import type { Page } from "../types/navigation";
+import {
+  formatTimeAgo,
+  formatDuration,
+  formatDateTime,
+  RUN_STATUS_COLORS,
+  LIVENESS_COLORS,
+} from "../lib/ui-utils";
 
 interface RunDetailProps {
   runId: string;
@@ -416,14 +418,7 @@ export function RunDetail({ runId, navigate }: RunDetailProps): React.ReactEleme
 
 /** Run status badge. */
 function RunStatusBadge({ status }: { status: RunStatus }): React.ReactElement {
-  const colors: Record<RunStatus, { bg: string; fg: string }> = {
-    running: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
-    retry_queued: { bg: "rgba(210, 153, 34, 0.15)", fg: "var(--color-attention)" },
-    released: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
-    claimed: { bg: "rgba(88, 166, 255, 0.15)", fg: "var(--color-accent)" },
-    unclaimed: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-  };
-  const { bg, fg } = colors[status];
+  const { bg, fg } = RUN_STATUS_COLORS[status];
 
   return (
     <span
@@ -448,14 +443,7 @@ function LivenessBadge({
 }: {
   liveness: "active" | "quiet" | "degraded" | "stalled" | "detached";
 }): React.ReactElement {
-  const colors: Record<string, { bg: string; fg: string }> = {
-    active: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
-    quiet: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
-    degraded: { bg: "rgba(210, 153, 34, 0.15)", fg: "var(--color-attention)" },
-    stalled: { bg: "rgba(248, 81, 73, 0.15)", fg: "var(--color-danger)" },
-    detached: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-  };
-  const { bg, fg } = colors[liveness] ?? colors.quiet;
+  const { bg, fg } = LIVENESS_COLORS[liveness] ?? LIVENESS_COLORS.quiet;
 
   return (
     <span
@@ -621,37 +609,4 @@ function ActionButton({
       {label}
     </button>
   );
-}
-
-/** Format duration from seconds. */
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${secs}s`;
-  return `${secs}s`;
-}
-
-/** Format date/time for display. */
-function formatDateTime(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-/** Format relative time. */
-function formatTimeAgo(isoString: string): string {
-  const diff = Date.now() - new Date(isoString).getTime();
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
 }
