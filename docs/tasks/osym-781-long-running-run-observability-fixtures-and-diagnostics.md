@@ -10,7 +10,7 @@ Make long-running OpenHands work inspectable through fixtures, client state, run
 
 The following types were added to both Rust (`opensymphony-gateway-schema`) and TypeScript (`packages/gateway-schema`):
 
-- `RunPhase` — Operational phase observed by the client: `active`, `quiet`, `degraded`, `stalled`, `retry_queued`, `cancelled`, `detached`.
+- `RunPhase` — Operational phase observed by the client: `active`, `quiet`, `degraded`, `stalled`, `retry_queued`, `cancelled`, `detached`, `completed`.
 - `RunStreamLiveness` — Stream-level liveness classification: `healthy`, `stale`, `dead`.
 - `RunProgress` — Compact progress event for replay.
 - `RunLivenessEnvelope` — Snapshot of current run liveness surface (phase, stream, latest progress).
@@ -27,7 +27,7 @@ The following types were added to both Rust (`opensymphony-gateway-schema`) and 
 
 ### Fixture Tests
 
-- `run_phase_roundtrips` — Verifies all 7 phases serialize/deserialize correctly.
+- `run_phase_roundtrips` — Verifies all 8 phases (including `completed`) serialize/deserialize correctly.
 - `run_stream_liveness_roundtrips` — Verifies all 3 stream statuses.
 - `run_progress_roundtrips` — Verifies progress event serialization.
 - `run_liveness_envelope_roundtrips` — Verifies liveness envelope.
@@ -81,6 +81,7 @@ All 49 tests pass.
 | retry_queued | any | true | false | false | false |
 | cancelled | any | true | false | false | false |
 | detached | dead | true | false | true | false |
+| completed | dead | true | false | true | false |
 
 ## Test Plan
 
