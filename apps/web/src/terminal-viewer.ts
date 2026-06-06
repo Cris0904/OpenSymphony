@@ -24,7 +24,6 @@ export interface TerminalViewerConfig {
 export interface TerminalViewerOptions {
   container: HTMLElement;
   config?: Partial<TerminalViewerConfig>;
-  maxVisibleLines?: number;
 }
 
 /**
@@ -59,7 +58,7 @@ export class TerminalViewer {
       fontSize: options.config?.fontSize ?? 14,
       lineHeight: options.config?.lineHeight ?? 1.4,
       wrapLines: options.config?.wrapLines ?? true,
-      maxVisibleFrames: options.maxVisibleLines ?? options.config?.maxVisibleFrames ?? 200,
+      maxVisibleFrames: options.config?.maxVisibleFrames ?? 200,
     };
 
     // Build UI structure
