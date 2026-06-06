@@ -30,6 +30,8 @@ jobs:
           node-version: 20
       - name: install
         run: npm install
+      - name: build-schema
+        run: npm run build --workspace=@opensymphony/gateway-schema
       - name: typecheck
         run: npm run type-check
       - name: jest
