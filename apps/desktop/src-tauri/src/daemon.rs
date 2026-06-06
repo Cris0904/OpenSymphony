@@ -44,16 +44,21 @@ pub enum DaemonState {
     /// Daemon is shutting down.
     Stopping,
     /// Daemon has crashed or failed to start.
-    #[serde(serialize_with = "serialize_failed_state")]
     Failed(String),
 }
 
-/// Serialize the Failed variant as a snake_case string for consistency.
-fn serialize_failed_state<S>(error: &str, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&format!("failed: {}", error))
+impl DaemonState {
+    /// Return a simple snake_case string representation for API responses.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DaemonState::Stopped => "stopped",
+            DaemonState::Starting => "starting",
+            DaemonState::Running => "running",
+            DaemonState::Unhealthy => "unhealthy",
+            DaemonState::Stopping => "stopping",
+            DaemonState::Failed(_) => "failed",
+        }
+    }
 }
 
 /// Result of a daemon startup attempt.

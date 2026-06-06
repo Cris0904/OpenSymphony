@@ -505,12 +505,10 @@ pub async fn stop_daemon(state: State<'_, DesktopState>) -> CommandResult<serde_
 pub async fn daemon_status(state: State<'_, DesktopState>) -> CommandResult<ProcessStatus> {
     let handle_guard = state.daemon_handle.lock().await;
     if let Some(ref handle) = *handle_guard {
-        // Use serde_json serialization for consistent snake_case format
-        let state_str = serde_json::to_string(handle.state()).unwrap_or_else(|_| "unknown".to_string());
         Ok(ProcessStatus {
             pid: handle.pid(),
             running: handle.is_running(),
-            state: state_str.trim_matches('"').to_string(),
+            state: handle.state().as_str().to_string(),
             supervised: state.daemon_supervised.load(Ordering::SeqCst),
         })
     } else {
