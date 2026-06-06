@@ -256,13 +256,19 @@ pub struct ProfileResponse {
 /// Store a connection profile.
 #[command]
 pub async fn store_profile(_req: ProfileRequest) -> CommandResult<ProfileResponse> {
-    // Stub implementation - real persistence will be added in COE-409
-    // with proper UUID generation to prevent ID collisions.
-    // Current behavior: returns "new-profile" only when no ID is provided,
-    // which is acceptable for this alpha-stage stub.
+    // Stub implementation - real persistence will be added in COE-409.
+    // Generate a timestamp-based unique ID to prevent collisions when
+    // multiple profiles are stored without explicit IDs.
+    let profile_id = _req.id.unwrap_or_else(|| {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("profile-{}", ts)
+    });
     let kind_str = serde_json::to_string(&_req.kind).unwrap_or_else(|_| "\"unknown\"".to_string());
     Ok(ProfileResponse {
-        id: _req.id.unwrap_or_else(|| "new-profile".to_string()),
+        id: profile_id,
         label: _req.label,
         kind: kind_str.trim_matches('"').to_string(),
         gateway_url: _req.gateway_url,
@@ -472,7 +478,7 @@ pub async fn stop_daemon(state: State<'_, DesktopState>) -> CommandResult<serde_
 
     let mut handle_guard = state.daemon_handle.lock().await;
     if let Some(ref mut handle) = *handle_guard {
-        match handle.stop() {
+        match handle.stop().await {
             Ok(()) => {
                 state.daemon_supervised.store(false, Ordering::SeqCst);
                 *handle_guard = None;

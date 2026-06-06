@@ -258,7 +258,8 @@ impl DaemonHandle {
     ///
     /// Only stops if this handle owns the process. Sends SIGTERM first,
     /// waits up to 5 seconds for exit, then escalates to SIGKILL if needed.
-    pub fn stop(&mut self) -> Result<(), DaemonError> {
+    /// Uses async sleep to avoid blocking the tokio worker thread.
+    pub async fn stop(&mut self) -> Result<(), DaemonError> {
         if !self.owns_process {
             warn!("attempted to stop daemon that we don't own");
             return Ok(());
@@ -282,8 +283,7 @@ impl DaemonHandle {
                     .output();
             }
 
-            // Non-blocking wait: poll for exit with a short timeout to avoid
-            // blocking the tokio runtime indefinitely.
+            // Async wait loop: poll for exit without blocking the tokio worker thread.
             // If the process doesn't exit within 5 seconds, escalate to SIGKILL.
             let deadline = Instant::now() + Duration::from_secs(5);
             let mut exited = false;
@@ -296,9 +296,9 @@ impl DaemonHandle {
                             break;
                         }
                         Ok(None) => {
-                            // Process still running, use spawn_blocking to avoid
-                            // blocking the tokio worker thread
-                            std::thread::sleep(Duration::from_millis(100));
+                            // Process still running; use async sleep so we
+                            // don't block the tokio worker thread.
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                         }
                         Err(e) => {
                             warn!(pid = ?self.pid, error = %e, "error checking daemon status");
@@ -436,7 +436,7 @@ mod tests {
         assert!(!result.success || result.pid.is_some());
 
         // Clean up
-        let _ = handle.stop();
+        let _ = handle.stop().await;
     }
 
     #[test]

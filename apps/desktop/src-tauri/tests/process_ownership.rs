@@ -81,8 +81,8 @@ while true; do sleep 1; done
         assert!(handle.pid().is_none());
     }
 
-    #[test]
-    fn test_unsupervised_daemon_not_stopped_by_app() {
+    #[tokio::test]
+    async fn test_unsupervised_daemon_not_stopped_by_app() {
         // Verify that the app does not attempt to stop processes it doesn't own
         use opensymphony_desktop::daemon::{DaemonConfig, DaemonHandle};
         let config = DaemonConfig {
@@ -95,7 +95,7 @@ while true; do sleep 1; done
         };
         let mut handle = DaemonHandle::new(config);
         // Calling stop on an unstarted handle should succeed without error
-        assert!(handle.stop().is_ok());
+        assert!(handle.stop().await.is_ok());
     }
 
     #[tokio::test]
