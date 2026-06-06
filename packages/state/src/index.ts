@@ -12,6 +12,8 @@ import type {
   TaskGraphNode,
   TaskGraphSnapshot,
   RunDetail,
+  RunPhase,
+  RunStreamLiveness,
   TerminalFrame,
   ApprovalRequest,
   PlanningSessionSummary,
@@ -38,11 +40,22 @@ export interface RunSlice {
   error: string | null;
 }
 
+/** Liveness tracking for a single run. */
+export interface RunLivenessState {
+  phase: RunPhase;
+  stream: RunStreamLiveness;
+  lastProgressAt?: string | null;
+  stallDeadlineAt?: string | null;
+  reconnectAttempts: number;
+}
+
 export interface TerminalSlice {
   frames: Map<string, TerminalFrame[]>;
   cursor: Map<string, number>;
   loading: boolean;
   error: string | null;
+  /** Per-run liveness tracking state. */
+  liveness: Map<string, RunLivenessState>;
 }
 
 export interface ApprovalSlice {
@@ -73,7 +86,7 @@ export const initialState: GatewayState = {
   dashboard: { snapshot: null, loading: false, error: null },
   taskGraph: { nodes: new Map(), rootIds: [], loading: false, error: null },
   run: { runs: new Map(), loading: false, error: null },
-  terminal: { frames: new Map(), cursor: new Map(), loading: false, error: null },
+  terminal: { frames: new Map(), cursor: new Map(), loading: false, error: null, liveness: new Map() },
   approval: { pending: [], resolved: new Map(), loading: false, error: null },
   planning: { sessions: new Map(), loading: false, error: null },
 };
@@ -90,7 +103,10 @@ export type GatewayAction =
   | { type: "PLANNING_SESSION_UPDATED"; payload: PlanningSessionSummary }
   | { type: "ENVELOPE_RECEIVED"; payload: GatewayEnvelope }
   | { type: "ERROR"; error: string }
-  | { type: "LOADING"; loading: boolean };
+  | { type: "LOADING"; loading: boolean }
+  | { type: "LIVENESS_UPDATE"; runId: string; phase: RunPhase; stream: RunStreamLiveness; progressAt?: string | null }
+  | { type: "LIVENESS_STALL"; runId: string; deadlineAt: string }
+  | { type: "LIVENESS_RECONNECT"; runId: string };
 
 // -- Reducer --
 
@@ -214,7 +230,72 @@ export function gatewayReducer(
       };
     }
 
+    case "LIVENESS_UPDATE": {
+      const liveness = new Map(state.terminal.liveness);
+      liveness.set(action.runId, {
+        phase: action.phase,
+        stream: action.stream,
+        lastProgressAt: action.progressAt ?? liveness.get(action.runId)?.lastProgressAt ?? null,
+        stallDeadlineAt: liveness.get(action.runId)?.stallDeadlineAt ?? null,
+        reconnectAttempts: liveness.get(action.runId)?.reconnectAttempts ?? 0,
+      });
+      return {
+        ...state,
+        terminal: { ...state.terminal, liveness, loading: false, error: null },
+      };
+    }
+
+    case "LIVENESS_STALL": {
+      const stallLiveness = new Map(state.terminal.liveness);
+      const existing = stallLiveness.get(action.runId);
+      stallLiveness.set(action.runId, {
+        phase: "stalled",
+        stream: existing?.stream ?? "stale",
+        lastProgressAt: existing?.lastProgressAt ?? null,
+        stallDeadlineAt: action.deadlineAt,
+        reconnectAttempts: existing?.reconnectAttempts ?? 0,
+      });
+      return {
+        ...state,
+        terminal: { ...state.terminal, liveness: stallLiveness, loading: false, error: null },
+      };
+    }
+
+    case "LIVENESS_RECONNECT": {
+      const reconnectLiveness = new Map(state.terminal.liveness);
+      const reconnectExisting = reconnectLiveness.get(action.runId);
+      reconnectLiveness.set(action.runId, {
+        phase: reconnectExisting?.phase ?? "active",
+        stream: "stale",
+        lastProgressAt: reconnectExisting?.lastProgressAt ?? null,
+        stallDeadlineAt: reconnectExisting?.stallDeadlineAt ?? null,
+        reconnectAttempts: (reconnectExisting?.reconnectAttempts ?? 0) + 1,
+      });
+      return {
+        ...state,
+        terminal: { ...state.terminal, liveness: reconnectLiveness, loading: false, error: null },
+      };
+    }
+
     default:
       return state;
   }
+}
+
+/** Compute safe action set for a run based on its phase and liveness. */
+export function computeSafeActions(
+  phase: RunPhase,
+  stream: RunStreamLiveness,
+  hasActiveSession: boolean,
+): { retry: boolean; cancel: boolean; rehydrate: boolean; detach: boolean } {
+  const isTerminal = ["cancelled", "detached"].includes(phase);
+  const isStalledOrRetryQueued = ["stalled", "retry_queued"].includes(phase);
+  const isQuietOrDegraded = ["quiet", "degraded"].includes(phase);
+
+  return {
+    retry: isTerminal || isStalledOrRetryQueued,
+    cancel: hasActiveSession && !isTerminal,
+    rehydrate: isQuietOrDegraded || stream === "stale",
+    detach: hasActiveSession && !isTerminal && stream === "dead",
+  };
 }
