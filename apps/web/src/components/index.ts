@@ -8,3 +8,4 @@ export { AppShell } from "./AppShell";
 export { ProjectSidebar } from "./ProjectSidebar";
 export { StatusBar } from "./StatusBar";
 export { CommandPalette } from "./CommandPalette";
+export { RunStatusBadge } from "./RunStatusBadge";

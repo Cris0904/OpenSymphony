@@ -12,12 +12,11 @@ import type {
   ProjectSummary,
 } from "@opensymphony/gateway-schema";
 import type { Page } from "../types/navigation";
-import type { RunStatus } from "@opensymphony/gateway-schema";
+import { RunStatusBadge } from "../components/RunStatusBadge";
 import {
   formatTimeAgo,
   formatTokens,
   formatCost,
-  RUN_STATUS_COLORS,
 } from "../lib/ui-utils";
 
 interface DashboardProps {
@@ -367,30 +366,6 @@ function RunList({ navigate }: { navigate: (p: Page) => void }): React.ReactElem
         </button>
       ))}
     </div>
-  );
-}
-
-/** Run status badge component. */
-function RunStatusBadge({ status }: { status: RunStatus }): React.ReactElement {
-  const { bg, fg } = RUN_STATUS_COLORS[status] ?? RUN_STATUS_COLORS.unclaimed;
-
-  return (
-    <span
-      style={{
-        fontSize: "11px",
-        fontWeight: 500,
-        padding: "2px 8px",
-        borderRadius: "10px",
-        background: bg,
-        color: fg,
-        textTransform: "capitalize",
-        whiteSpace: "nowrap",
-        minWidth: "70px",
-        textAlign: "center",
-      }}
-    >
-      {status.replace("_", " ")}
-    </span>
   );
 }
 

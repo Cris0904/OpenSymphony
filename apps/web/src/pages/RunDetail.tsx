@@ -9,11 +9,11 @@
 
 import type { RunDetail as RunDetailType, RunStatus, ReleaseReason } from "@opensymphony/gateway-schema";
 import type { Page } from "../types/navigation";
+import { RunStatusBadge } from "../components/RunStatusBadge";
 import {
   formatTimeAgo,
   formatDuration,
   formatDateTime,
-  RUN_STATUS_COLORS,
   LIVENESS_COLORS,
 } from "../lib/ui-utils";
 
@@ -413,27 +413,6 @@ export function RunDetail({ runId, navigate }: RunDetailProps): React.ReactEleme
         </div>
       </section>
     </div>
-  );
-}
-
-/** Run status badge. */
-function RunStatusBadge({ status }: { status: RunStatus }): React.ReactElement {
-  const { bg, fg } = RUN_STATUS_COLORS[status];
-
-  return (
-    <span
-      style={{
-        fontSize: "11px",
-        fontWeight: 500,
-        padding: "2px 8px",
-        borderRadius: "10px",
-        background: bg,
-        color: fg,
-        textTransform: "capitalize",
-      }}
-    >
-      {status.replace("_", " ")}
-    </span>
   );
 }
 
