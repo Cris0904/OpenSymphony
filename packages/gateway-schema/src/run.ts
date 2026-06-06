@@ -23,7 +23,8 @@ export type RunPhase =
   | "stalled"
   | "retry_queued"
   | "cancelled"
-  | "detached";
+  | "detached"
+  | "completed";
 
 /** Stream-level liveness classification. */
 export type RunStreamLiveness = "healthy" | "stale" | "dead";

@@ -1088,6 +1088,7 @@ fn run_phase_roundtrips() {
         RunPhase::RetryQueued,
         RunPhase::Cancelled,
         RunPhase::Detached,
+        RunPhase::Completed,
     ];
     for phase in phases {
         let json = must_serialize(&phase);

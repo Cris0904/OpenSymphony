@@ -93,6 +93,7 @@ pub enum RunPhase {
     RetryQueued,
     Cancelled,
     Detached,
+    Completed,
 }
 
 /// Stream-level liveness classification.

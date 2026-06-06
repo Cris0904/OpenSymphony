@@ -19,6 +19,8 @@ import type {
   ActionReceipt,
   RunEvent,
   SafeActions,
+  RunPhase,
+  RunStreamLiveness,
 } from "@opensymphony/gateway-schema";
 
 /** Deterministic timestamp used by all test actions. */
@@ -937,18 +939,8 @@ describe("computeSafeActions", () => {
     expect(actions).toEqual<SafeActions>({ retry: true, cancel: false, rehydrate: false, detach: false });
   });
 
-  it("allows retry and rehydrate for completed, dead runs", () => {
-    const actions = computeSafeActions("completed", "dead");
-    expect(actions).toEqual<SafeActions>({ retry: true, cancel: false, rehydrate: true, detach: false });
-  });
-
-  it("allows no actions for completed, healthy runs", () => {
-    const actions = computeSafeActions("completed", "healthy");
-    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
-  });
-
-  it("allows cancel and rehydrate for degraded, degraded runs", () => {
-    const actions = computeSafeActions("degraded", "degraded");
+  it("allows cancel and rehydrate for degraded, stale runs", () => {
+    const actions = computeSafeActions("degraded", "stale");
     expect(actions).toEqual<SafeActions>({ retry: false, cancel: true, rehydrate: true, detach: false });
   });
 
@@ -967,13 +959,23 @@ describe("computeSafeActions", () => {
     expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
   });
 
+  it("allows no actions for quiet, dead runs", () => {
+    const actions = computeSafeActions("quiet", "dead");
+    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
+  });
+
+  it("allows retry for stalled, healthy runs", () => {
+    const actions = computeSafeActions("stalled", "healthy");
+    expect(actions).toEqual<SafeActions>({ retry: true, cancel: true, rehydrate: false, detach: false });
+  });
+
   it("returns safe defaults for unknown phase states", () => {
-    const actions = computeSafeActions("unknown" as RunPhaseState, "healthy");
+    const actions = computeSafeActions("unknown" as RunPhase, "healthy");
     expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
   });
 
   it("returns safe defaults for unknown stream health", () => {
-    const actions = computeSafeActions("active", "unknown" as "healthy");
+    const actions = computeSafeActions("active", "unknown" as RunStreamLiveness);
     expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
   });
 });
