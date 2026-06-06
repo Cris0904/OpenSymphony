@@ -8,14 +8,18 @@ mod types;
 mod settings;
 mod keychain;
 mod actions;
+mod daemon;
 
 fn main() {
+    let desktop_state = commands::DesktopState::new();
+
     if let Err(e) = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(desktop_state)
         .setup(|app| {
             if let Some(_window) = app.get_webview_window("main") {
                 // Window exists; future setup hooks can attach here.
@@ -37,6 +41,13 @@ fn main() {
             actions::open_linear_link,
             actions::notify,
             commands::daemon_status,
+            commands::store_profile,
+            commands::list_profiles,
+            commands::set_active_profile,
+            commands::probe_gateway,
+            commands::discover_default_gateway,
+            commands::start_daemon,
+            commands::stop_daemon,
         ])
         .run(tauri::generate_context!())
     {
