@@ -1967,6 +1967,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "opensymphony-gateway-schema"
+version = "1.7.3"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tokio-tungstenite",
+ "uuid",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
