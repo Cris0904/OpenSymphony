@@ -254,9 +254,11 @@ export class WebSocketTransport implements GatewayTransport {
   private ws?: WebSocket;
   private eventSubscribers: Set<(envelope: GatewayEnvelope) => void> = new Set();
   private terminalSubscribers: Map<string, Set<(envelope: GatewayEnvelope) => void>> = new Map();
+  private pendingGeneratorCancellers: Set<() => void> = new Set();
   private reconnectDelayMs = 1000;
   private maxReconnectDelayMs = 30000;
   private isReconnecting = false;
+  private isClosed = false;
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
@@ -395,7 +397,15 @@ export class WebSocketTransport implements GatewayTransport {
       try {
         const payload = data.slice(10);
         const envelope = JSON.parse(payload) as GatewayEnvelope;
+        // Dispatch to all event subscribers
         this.eventSubscribers.forEach((cb) => cb(envelope));
+        // Also dispatch to terminal subscribers matching the run ID
+        if (envelope.entity_ref.kind === "terminal_session") {
+          const runId = envelope.cursor.partition.split(":").pop();
+          if (runId) {
+            this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
+          }
+        }
       } catch {
         // Skip malformed messages
       }
@@ -414,7 +424,15 @@ export class WebSocketTransport implements GatewayTransport {
       // Try parsing as direct JSON envelope (legacy format)
       try {
         const envelope = JSON.parse(data) as GatewayEnvelope;
+        // Dispatch to all event subscribers
         this.eventSubscribers.forEach((cb) => cb(envelope));
+        // Also dispatch to terminal subscribers matching the run ID
+        if (envelope.entity_ref.kind === "terminal_session") {
+          const runId = envelope.cursor.partition.split(":").pop();
+          if (runId) {
+            this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
+          }
+        }
       } catch {
         // Skip unknown message formats
       }
@@ -454,10 +472,19 @@ export class WebSocketTransport implements GatewayTransport {
       }
     };
 
+    // Track this generator's resolve function for cleanup on close
+    const cancelGenerator = () => {
+      if (resolveNext) {
+        resolveNext({ value: {} as GatewayEnvelope, done: true });
+        resolveNext = null;
+      }
+    };
+    this.pendingGeneratorCancellers.add(cancelGenerator);
+
     this.eventSubscribers.add(subscriber);
 
     try {
-      while (true) {
+      while (!this.isClosed) {
         if (queue.length > 0) {
           yield queue.shift()!;
         } else {
@@ -468,6 +495,7 @@ export class WebSocketTransport implements GatewayTransport {
       }
     } finally {
       this.eventSubscribers.delete(subscriber);
+      this.pendingGeneratorCancellers.delete(cancelGenerator);
     }
   }
 
@@ -487,10 +515,19 @@ export class WebSocketTransport implements GatewayTransport {
       }
     };
 
+    // Track this generator's resolve function for cleanup on close
+    const cancelGenerator = () => {
+      if (resolveNext) {
+        resolveNext({ value: {} as GatewayEnvelope, done: true });
+        resolveNext = null;
+      }
+    };
+    this.pendingGeneratorCancellers.add(cancelGenerator);
+
     this.terminalSubscribers.set(runId, new Set([subscriber]));
 
     try {
-      while (true) {
+      while (!this.isClosed) {
         if (queue.length > 0) {
           yield queue.shift()!;
         } else {
@@ -501,10 +538,19 @@ export class WebSocketTransport implements GatewayTransport {
       }
     } finally {
       this.terminalSubscribers.get(runId)?.delete(subscriber);
+      this.pendingGeneratorCancellers.delete(cancelGenerator);
     }
   }
 
   async close(): Promise<void> {
+    this.isClosed = true;
+    
+    // Resolve all pending generator promises to prevent memory leaks and hangs
+    for (const cancel of this.pendingGeneratorCancellers) {
+      cancel();
+    }
+    this.pendingGeneratorCancellers.clear();
+    
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();

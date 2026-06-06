@@ -226,7 +226,7 @@ pub struct AttachGatewayResponse {
 /// Attach to a local or remote gateway instance.
 #[command]
 pub async fn attach_gateway(
-    _state: tauri::State<'_, GatewayConnection>,
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     req: AttachGatewayRequest,
 ) -> CommandResult<AttachGatewayResponse> {
     // Validate URL using proper parser
@@ -247,6 +247,13 @@ pub async fn attach_gateway(
     } else {
         "websocket"
     };
+
+    // Mutate connection state to record the attachment
+    if let Ok(mut conn) = state.write() {
+        conn.base_url = req.base_url.clone();
+        conn.auth_token = req.auth_token.clone();
+        conn.connected = true;
+    }
 
     Ok(AttachGatewayResponse {
         connected: true,
@@ -278,7 +285,7 @@ pub struct ProfileFeatureCapability {
 /// Query gateway capabilities.
 #[command]
 pub async fn gateway_health(
-    _state: tauri::State<'_, GatewayConnection>,
+    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
 ) -> CommandResult<GatewayCapabilitiesResponse> {
     // Stub: return default capabilities for local mode
     Ok(GatewayCapabilitiesResponse {
@@ -314,7 +321,7 @@ pub async fn gateway_health(
 /// Get dashboard snapshot from gateway.
 #[command]
 pub async fn dashboard_snapshot(
-    _state: tauri::State<'_, GatewayConnection>,
+    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
 ) -> CommandResult<serde_json::Value> {
     // Stub: will be wired to actual gateway in COE-404
     Ok(serde_json::json!({
@@ -328,7 +335,7 @@ pub async fn dashboard_snapshot(
 /// Get task graph for a project.
 #[command]
 pub async fn task_graph(
-    _state: tauri::State<'_, GatewayConnection>,
+    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     project_id: String,
 ) -> CommandResult<serde_json::Value> {
     Ok(serde_json::json!({
@@ -342,7 +349,7 @@ pub async fn task_graph(
 /// Get run details.
 #[command]
 pub async fn run_detail(
-    _state: tauri::State<'_, GatewayConnection>,
+    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     run_id: String,
 ) -> CommandResult<serde_json::Value> {
     Ok(serde_json::json!({
@@ -356,7 +363,7 @@ pub async fn run_detail(
 /// Get run events with cursor support.
 #[command]
 pub async fn run_events(
-    _state: tauri::State<'_, GatewayConnection>,
+    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     run_id: String,
     cursor: Option<u64>,
     page_size: Option<u64>,
@@ -374,7 +381,7 @@ pub async fn run_events(
 /// Get terminal snapshot.
 #[command]
 pub async fn terminal_snapshot(
-    _state: tauri::State<'_, GatewayConnection>,
+    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     run_id: String,
     terminal_id: String,
 ) -> CommandResult<serde_json::Value> {
@@ -658,7 +665,7 @@ pub async fn subscribe_terminal(
 
 /// Active subscriptions tracked for cleanup.
 /// COE-409 will wire this to actual gateway subscription management.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct SubscriptionState {
     pub event_subscribers: std::sync::atomic::AtomicUsize,
     pub terminal_subscribers: std::sync::atomic::AtomicUsize,
@@ -671,7 +678,7 @@ pub async fn unsubscribe_events(
     _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
     let prev = _state.event_subscribers.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    tracing::debug!("unsubscribe_events: {} remaining subscribers", prev.saturating_sub(1));
+    eprintln!("unsubscribe_events: {} remaining subscribers", prev.saturating_sub(1));
     Ok(())
 }
 
@@ -682,7 +689,7 @@ pub async fn unsubscribe_terminal(
     _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
     let prev = _state.terminal_subscribers.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    tracing::debug!("unsubscribe_terminal({}): {} remaining subscribers", _run_id, prev.saturating_sub(1));
+    eprintln!("unsubscribe_terminal({}): {} remaining subscribers", _run_id, prev.saturating_sub(1));
     Ok(())
 }
 
