@@ -354,6 +354,10 @@ impl DaemonHandle {
     }
 
     /// Internal helper to kill just the process without updating state fields.
+    ///
+    /// Sends SIGKILL and does a blocking wait() to reap the zombie, ensuring
+    /// the PID becomes fully invalid. This is used by Drop where blocking is
+    /// acceptable since we're already in a synchronous cleanup context.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -367,7 +371,7 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Block to reap the zombie so the PID becomes truly invalid
+            // Reap the zombie synchronously
             let _ = child.wait();
         }
     }
@@ -388,9 +392,9 @@ impl DaemonHandle {
             }
             let _ = child.kill();
         }
-        // Reap the zombie process by waiting for it to exit
+        // Non-blocking reap: try_wait() returns immediately even if process hasn't exited yet
         if let Some(ref mut child) = self.child {
-            let _ = child.wait();
+            let _ = child.try_wait();
         }
         self.child = None;
         self.pid = None;
