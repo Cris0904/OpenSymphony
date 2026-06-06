@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tauri::command;
 use tauri_plugin_opener::OpenerExt;
 
@@ -48,25 +49,19 @@ pub async fn open_repository_folder(
     app: tauri::AppHandle,
     req: OpenRepositoryFolderRequest,
 ) -> CommandResult<OpenRepositoryFolderResponse> {
-    let p = std::path::Path::new(&req.path);
-    // Canonicalize FIRST to resolve symlinks before safety check (prevent TOCTOU bypass)
-    // canonicalize() returns io::Error for non-existent paths naturally
-    let canon = p.canonicalize().map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => DesktopError::NotFound,
-        std::io::ErrorKind::PermissionDenied => DesktopError::PermissionDenied,
-        _ => DesktopError::Internal {
-            message: format!("failed to canonicalize: {e}"),
-        },
-    })?;
+    let p = Path::new(&req.path);
+    let canon = canonicalize_action_path(p)?;
     if !is_safe_workspace_path(&canon) {
         return Err(DesktopError::PermissionDenied);
     }
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid file path".into(),
     })?;
-    app.opener().open_url(url.as_str(), None::<&str>).map_err(|e| DesktopError::Internal {
-        message: format!("failed to open folder: {e}"),
-    })?;
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|e| DesktopError::Internal {
+            message: format!("failed to open folder: {e}"),
+        })?;
     Ok(OpenRepositoryFolderResponse { opened: true })
 }
 
@@ -89,67 +84,61 @@ pub async fn reveal_workspace(
     if req.safety_token != "opensymphony-workspace" {
         return Err(DesktopError::PermissionDenied);
     }
-    let p = std::path::Path::new(&req.path);
+    let p = Path::new(&req.path);
 
-    // Canonicalize home_dir first to resolve any symlinks in the home path
-    let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
-        message: "could not determine home directory".into(),
-    })?;
-    let canon_home = home.canonicalize().map_err(|e| DesktopError::Internal {
-        message: format!("failed to canonicalize home directory: {e}"),
-    })?;
-    let canon_base = canon_home.join(".opensymphony").join("workspaces");
-
-    // Canonicalize the input path and check containment against the resolved base
-    let canon = p.canonicalize().map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => DesktopError::NotFound,
-        std::io::ErrorKind::PermissionDenied => DesktopError::PermissionDenied,
-        _ => DesktopError::Internal {
-            message: format!("failed to canonicalize: {e}"),
-        },
-    })?;
-    if !canon.starts_with(&canon_base) {
+    let canon = canonicalize_action_path(p)?;
+    let canon_base = canonical_workspace_base()?;
+    if !path_is_under_existing_base(&canon, &canon_base) {
         return Err(DesktopError::PermissionDenied);
     }
 
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid workspace path".into(),
     })?;
-    app.opener().open_url(url.as_str(), None::<&str>).map_err(|e| DesktopError::Internal {
-        message: format!("failed to reveal workspace: {e}"),
-    })?;
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|e| DesktopError::Internal {
+            message: format!("failed to reveal workspace: {e}"),
+        })?;
     Ok(RevealWorkspaceResponse { revealed: true })
 }
 
-fn is_safe_workspace_path(path: &std::path::Path) -> bool {
-    // Whitelist-based security check: default to false for unknown paths.
-    // Only allow paths under ~/.opensymphony/workspaces/ after full canonicalization.
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
-    
-    // Canonicalize home first to resolve any symlinks in the home path itself
-    let Ok(canon_home) = home.canonicalize() else {
-        return false;
-    };
-    
-    // Build the canonical base path
-    let canon_base = canon_home.join(".opensymphony").join("workspaces");
-    // Ensure the base directory exists for containment checks
-    if !canon_base.exists() {
-        return false;
+fn canonicalize_action_path(path: &Path) -> Result<PathBuf, DesktopError> {
+    path.canonicalize().map_err(desktop_error_from_canonicalize)
+}
+
+fn desktop_error_from_canonicalize(error: std::io::Error) -> DesktopError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => DesktopError::NotFound,
+        std::io::ErrorKind::PermissionDenied => DesktopError::PermissionDenied,
+        _ => DesktopError::Internal {
+            message: format!("failed to canonicalize: {error}"),
+        },
     }
-    let Ok(canon_base) = canon_base.canonicalize() else {
+}
+
+fn canonical_workspace_base() -> Result<PathBuf, DesktopError> {
+    let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
+        message: "could not determine home directory".into(),
+    })?;
+    let canon_home = home.canonicalize().map_err(|e| DesktopError::Internal {
+        message: format!("failed to canonicalize home directory: {e}"),
+    })?;
+    canonicalize_action_path(&canon_home.join(".opensymphony").join("workspaces"))
+}
+
+fn is_safe_workspace_path(path: &Path) -> bool {
+    let Ok(canon_base) = canonical_workspace_base() else {
         return false;
     };
-    
-    // Try to canonicalize the input path - if it doesn't exist or can't be resolved, reject it
+    path_is_under_existing_base(path, &canon_base)
+}
+
+fn path_is_under_existing_base(path: &Path, canon_base: &Path) -> bool {
     let Ok(canon_path) = path.canonicalize() else {
         return false;
     };
-    
-    // Check strict containment under the canonical base
-    canon_path.starts_with(&canon_base)
+    canon_path.starts_with(canon_base)
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,9 +157,11 @@ pub async fn copy_to_clipboard(
     req: CopyToClipboardRequest,
 ) -> CommandResult<CopyToClipboardResponse> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    app.clipboard().write_text(&req.text).map_err(|e| DesktopError::Internal {
-        message: format!("failed to copy: {e}"),
-    })?;
+    app.clipboard()
+        .write_text(&req.text)
+        .map_err(|e| DesktopError::Internal {
+            message: format!("failed to copy: {e}"),
+        })?;
     Ok(CopyToClipboardResponse { copied: true })
 }
 
@@ -179,19 +170,25 @@ pub struct OpenLinearLinkRequest {
     pub issue_id: String,
 }
 
-// Configurable Linear workspace base URL (override at build time if needed)
+// Centralized Linear workspace base URL for deployment-specific builds.
 const LINEAR_WORKSPACE_BASE: &str = "https://linear.app/trilogy-ai-coe";
+
+fn linear_issue_url(issue_id: &str) -> String {
+    let encoded_id = urlencoding::encode(issue_id);
+    format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded_id)
+}
 
 #[command]
 pub async fn open_linear_link(
     app: tauri::AppHandle,
     req: OpenLinearLinkRequest,
 ) -> CommandResult<()> {
-    let encoded_id = urlencoding::encode(&req.issue_id);
-    let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded_id);
-    app.opener().open_url(&url, None::<&str>).map_err(|e| DesktopError::Internal {
-        message: format!("failed to open link: {e}"),
-    })
+    let url = linear_issue_url(&req.issue_id);
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| DesktopError::Internal {
+            message: format!("failed to open link: {e}"),
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,10 +203,7 @@ pub struct NotifyResponse {
 }
 
 #[command]
-pub async fn notify(
-    app: tauri::AppHandle,
-    req: NotifyRequest,
-) -> CommandResult<NotifyResponse> {
+pub async fn notify(app: tauri::AppHandle, req: NotifyRequest) -> CommandResult<NotifyResponse> {
     use tauri_plugin_notification::NotificationExt;
     app.notification()
         .builder()
@@ -227,43 +221,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_copy_request() {
-        let r = CopyToClipboardRequest { text: "test".into() };
-        assert_eq!(r.text, "test");
-    }
-
-    #[test]
-    fn test_linear_link_request() {
-        let r = OpenLinearLinkRequest { issue_id: "COE-409".into() };
-        assert_eq!(r.issue_id, "COE-409");
-    }
-
-    #[test]
     fn test_linear_url_constant() {
         assert!(LINEAR_WORKSPACE_BASE.starts_with("https://linear.app/"));
-        let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, "COE-123");
-        assert_eq!(url, "https://linear.app/trilogy-ai-coe/issue/COE-123");
+        let url = linear_issue_url("COE-123");
+        assert_eq!(url, format!("{}/issue/COE-123", LINEAR_WORKSPACE_BASE));
     }
 
     #[test]
-    fn test_safety_workspace_path_allows_home() {
-        // Create a temporary test workspace directory to test with real paths
-        let home = dirs::home_dir().expect("home dir available");
-        let test_workspace = home.join(".opensymphony").join("workspaces").join("test-safe-path");
-        
-        // Create the directory if it doesn't exist
-        std::fs::create_dir_all(&test_workspace).ok();
-        
-        let result = is_safe_workspace_path(&test_workspace);
-        
-        // Clean up
-        std::fs::remove_dir(&test_workspace).ok();
-        
-        assert!(result, "Existing workspace path under ~/.opensymphony/workspaces should be allowed");
+    fn test_workspace_path_allows_nested_existing_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("workspaces");
+        let nested = base.join("issue").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let canon_base = base.canonicalize().unwrap();
+
+        assert!(
+            path_is_under_existing_base(&nested, &canon_base),
+            "existing paths under the workspace base should be allowed"
+        );
     }
 
     #[test]
-    fn test_safety_workspace_path_blocks_system() {
+    fn test_is_safe_workspace_path_blocks_paths_outside_whitelist() {
         let path = std::path::Path::new("/System/Volumes/Data");
         assert!(!is_safe_workspace_path(path));
         let path = std::path::Path::new("/usr/bin/something");
@@ -275,17 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_request_structure() {
-        let req = NotifyRequest {
-            title: "Test".into(),
-            body: "Body".into(),
-        };
-        assert_eq!(req.title, "Test");
-        assert_eq!(req.body, "Body");
-    }
-
-    #[test]
-    fn test_is_safe_workspace_path_blocks_tricky_system_paths() {
+    fn test_is_safe_workspace_path_blocks_workspace_like_paths_outside_whitelist() {
         let blocked = vec![
             "/System/Volumes/Data/.opensymphony/workspaces/escape",
             "/usr/local/.opensymphony/workspaces/escape",
@@ -295,66 +264,66 @@ mod tests {
         for path_str in blocked {
             assert!(
                 !is_safe_workspace_path(std::path::Path::new(path_str)),
-                "Path {path_str} should be blocked by system prefix check"
+                "Path {path_str} should be blocked"
             );
         }
     }
 
     #[test]
-    fn test_canonicalize_nonexistent_path_error_kind() {
+    fn test_canonicalize_not_found_maps_to_desktop_error() {
         let path = std::path::Path::new("/definitely/does/not/exist/12345");
-        let result = path.canonicalize();
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        let result = canonicalize_action_path(path);
+        assert!(matches!(result, Err(DesktopError::NotFound)));
     }
 
     #[test]
-    fn test_is_safe_workspace_path_allows_opensymphony_subdirs() {
-        // Create actual test workspace directories to test with real paths
-        let home = dirs::home_dir().expect("home dir available");
-        let base = home.join(".opensymphony").join("workspaces");
-        
-        // Create base directory if it doesn't exist
-        std::fs::create_dir_all(&base).ok();
-        
+    fn test_canonicalize_permission_denied_maps_to_desktop_error() {
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(
+            desktop_error_from_canonicalize(error),
+            DesktopError::PermissionDenied
+        ));
+    }
+
+    #[test]
+    fn test_path_under_existing_base_allows_opensymphony_subdirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("workspaces");
         let valid = vec![
             base.join("test-subdir-1"),
             base.join("test-subdir-2").join("nested"),
             base.join("test-subdir-3"),
         ];
-        
-        // Create the test directories
+
         for path in &valid {
-            std::fs::create_dir_all(path).ok();
+            std::fs::create_dir_all(path).unwrap();
         }
-        
+        let canon_base = base.canonicalize().unwrap();
+
         for path in &valid {
             assert!(
-                is_safe_workspace_path(path),
-                "Path {:?} should be allowed", path
+                path_is_under_existing_base(path, &canon_base),
+                "Path {:?} should be allowed",
+                path
             );
-        }
-        
-        // Clean up
-        for path in valid.iter().rev() {
-            std::fs::remove_dir(path).ok();
         }
     }
 
     #[test]
-    fn test_is_safe_workspace_path_blocks_path_traversal_attempts() {
-        // Paths that try to escape via .. or mimic .opensymphony elsewhere should be blocked
-        let home = dirs::home_dir().expect("home dir available");
-        let blocked = vec![
-            home.join(".opensymphony").join("..").join("..").join("etc").join("passwd"),
-            std::path::PathBuf::from("/var/.opensymphony/workspaces/test"),
-            std::path::PathBuf::from("/tmp/.opensymphony/workspaces/test"),
-            home.join(".opensymphony").join("workspaces").join("..").join("..").join("etc").join("shadow"),
-        ];
+    fn test_path_under_existing_base_blocks_path_traversal_attempts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("workspaces");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let canon_base = base.canonicalize().unwrap();
+        let blocked = vec![base.join("..").join("outside")];
+
         for path in blocked {
             assert!(
-                !is_safe_workspace_path(&path),
-                "Path {:?} should be blocked", path
+                !path_is_under_existing_base(&path, &canon_base),
+                "Path {:?} should be blocked",
+                path
             );
         }
     }
@@ -367,57 +336,37 @@ mod tests {
         assert_eq!(req.body, "B");
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_symlink_inside_workspace_is_rejected() {
-        // Create a symlink inside ~/.opensymphony/workspaces that points outside
-        // and verify is_safe_workspace_path rejects it (canonicalize resolves the target).
-        let home = dirs::home_dir().expect("home dir available");
-        let workspace_base = home.join(".opensymphony").join("workspaces");
-        std::fs::create_dir_all(&workspace_base).ok();
+        use std::os::unix::fs::symlink;
 
-        let real_dir = workspace_base.join("test-symlink-escape");
-        std::fs::create_dir_all(&real_dir).ok();
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace_base = tmp.path().join("workspaces");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&workspace_base).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let canon_base = workspace_base.canonicalize().unwrap();
 
-        let symlink_path = real_dir.join("escape");
-        // Point the symlink to /tmp (outside the workspace base)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::symlink;
-            let _ = symlink("/tmp", &symlink_path);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::symlink_dir;
-            let _ = symlink_dir(r"C:\Windows", &symlink_path);
-        }
+        let symlink_path = workspace_base.join("escape");
+        symlink(&outside, &symlink_path).unwrap();
 
-        if symlink_path.exists() {
-            assert!(
-                !is_safe_workspace_path(&symlink_path),
-                "Symlink inside workspace pointing outside should be rejected after canonicalization"
-            );
-        }
-        // Clean up
-        let _ = std::fs::remove_file(&symlink_path);
-        let _ = std::fs::remove_dir(&real_dir);
+        assert!(
+            !path_is_under_existing_base(&symlink_path, &canon_base),
+            "symlinks inside the workspace base pointing outside should be rejected after canonicalization"
+        );
     }
 
     #[test]
     fn test_open_linear_link_request_url_encoding() {
-        // Verify URL encoding handles special characters in issue IDs
-        let req = OpenLinearLinkRequest {
-            issue_id: "COE-409".into(),
-        };
-        let encoded = urlencoding::encode(&req.issue_id);
-        let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded);
-        assert_eq!(url, "https://linear.app/trilogy-ai-coe/issue/COE-409");
-        
-        // Test with special characters that need encoding
-        let req_special = OpenLinearLinkRequest {
-            issue_id: "COE-409/test".into(),
-        };
-        let encoded_special = urlencoding::encode(&req_special.issue_id);
-        assert!(encoded_special.to_string().contains("%2F"), "Slash should be URL-encoded");
+        let url = linear_issue_url("COE-409");
+        assert_eq!(url, format!("{}/issue/COE-409", LINEAR_WORKSPACE_BASE));
+
+        let special_url = linear_issue_url("COE-409/test");
+        assert_eq!(
+            special_url,
+            format!("{}/issue/COE-409%2Ftest", LINEAR_WORKSPACE_BASE)
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────────
