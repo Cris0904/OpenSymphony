@@ -115,6 +115,12 @@ export function AppShell(): React.ReactElement {
 
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    // Guard against re-entry: if resize is already active, clean up old listeners first.
+    if (resizing.current) {
+      const handlers = resizeHandlers.current;
+      if (handlers.onMouseMove) window.removeEventListener("mousemove", handlers.onMouseMove);
+      if (handlers.onMouseUp) window.removeEventListener("mouseup", handlers.onMouseUp);
+    }
     resizing.current = true;
     const startX = e.clientX;
     const startWidth = sidebarWidth;

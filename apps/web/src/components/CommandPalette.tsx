@@ -22,6 +22,29 @@ interface Command {
   action: () => void;
   category: string;
   requiresProject?: boolean;
+  isCurrent?: boolean;
+}
+
+/** Determine whether a command targets the current page. */
+function isCurrentPage(
+  commandId: string,
+  currentPage: Page,
+  currentProjectId?: string,
+): boolean {
+  switch (commandId) {
+    case "dashboard":
+      return currentPage.kind === "dashboard";
+    case "projects":
+      return currentPage.kind === "project" && currentPage.projectId === currentProjectId;
+    case "task-graph":
+      return currentPage.kind === "task-graph" && currentPage.projectId === currentProjectId;
+    case "active-runs":
+    case "retry-queue":
+    case "toggle-theme":
+      return false;
+    default:
+      return false;
+  }
 }
 
 const ALL_COMMANDS: Command[] = [
@@ -72,6 +95,7 @@ const ALL_COMMANDS: Command[] = [
 export function CommandPalette({
   onClose,
   navigate,
+  currentPage,
   currentProjectId,
 }: CommandPaletteProps): React.ReactElement {
   const [query, setQuery] = useState("");
@@ -96,6 +120,7 @@ export function CommandPalette({
     () =>
       ALL_COMMANDS.map((cmd) => ({
         ...cmd,
+        isCurrent: isCurrentPage(cmd.id, currentPage, currentProjectId),
         action: () => {
           switch (cmd.id) {
             case "dashboard":
@@ -120,7 +145,7 @@ export function CommandPalette({
           onClose();
         },
       })),
-    [currentProjectId, navigate, onClose],
+    [currentProjectId, currentPage, navigate, onClose],
   );
 
   // Filter commands by query and project availability.
