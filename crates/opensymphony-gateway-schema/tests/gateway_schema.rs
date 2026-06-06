@@ -13,8 +13,8 @@ use opensymphony::opensymphony_gateway_schema::{
     },
     run::{
         HarnessSchedulerDisagreement, ReleaseReason, RunDetail, RunEvent, RunEventPage,
-        RunLifecycleState, RunLivenessEnvelope, RunPhase, RunProgress, RunStatus, RunStreamLiveness,
-        SafeActions,
+        RunLifecycleState, RunLivenessEnvelope, RunPhase, RunProgress, RunStatus,
+        RunStreamLiveness, SafeActions,
     },
     snapshot::{
         DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectSummary, SnapshotEventKind,
