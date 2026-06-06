@@ -919,9 +919,9 @@ describe("computeSafeActions", () => {
     expect(actions).toEqual<SafeActions>({ retry: false, cancel: true, rehydrate: true, detach: false });
   });
 
-  it("allows no actions for active, dead runs", () => {
+  it("allows detach only for active, dead runs", () => {
     const actions = computeSafeActions("active", "dead");
-    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
+    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: true });
   });
 
   it("allows retry, cancel, rehydrate for stalled, stale runs", () => {
@@ -954,14 +954,14 @@ describe("computeSafeActions", () => {
     expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: true, detach: false });
   });
 
-  it("allows no actions for detached, dead runs", () => {
+  it("allows retry and rehydrate for detached, dead runs", () => {
     const actions = computeSafeActions("detached", "dead");
-    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
+    expect(actions).toEqual<SafeActions>({ retry: true, cancel: false, rehydrate: true, detach: false });
   });
 
-  it("allows no actions for quiet, dead runs", () => {
+  it("allows detach only for quiet, dead runs", () => {
     const actions = computeSafeActions("quiet", "dead");
-    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: false });
+    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: false, detach: true });
   });
 
   it("allows retry for stalled, healthy runs", () => {

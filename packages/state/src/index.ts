@@ -274,7 +274,7 @@ export function computeLivenessState(
   const gapSeconds = lastEventMs > 0 ? (nowMs - lastEventMs) / 1000 : 0;
 
   let phaseState: RunPhaseState;
-  let streamHealth: "healthy" | "degraded" | "stale";
+  let streamHealth: "healthy" | "stale" | "dead";
 
   if (eventsSinceLastCheck > 0 && gapSeconds < LIVENESS_THRESHOLDS.activeIntervalMs / 1000) {
     phaseState = "active";
@@ -284,13 +284,13 @@ export function computeLivenessState(
     streamHealth = "healthy";
   } else if (gapSeconds < LIVENESS_THRESHOLDS.degradedThresholdMs / 1000) {
     phaseState = "degraded";
-    streamHealth = "degraded";
+    streamHealth = "stale";
   } else if (gapSeconds < LIVENESS_THRESHOLDS.stalledThresholdMs / 1000) {
     phaseState = "stalled";
     streamHealth = "stale";
   } else {
     phaseState = "detached";
-    streamHealth = "stale";
+    streamHealth = "dead";
   }
 
   // When events arrive, update lastEventAt to the current time so the returned
@@ -321,24 +321,24 @@ export function computeLivenessState(
  * |--------------|---------|-------|--------|-----------|--------|
  * | active       | healthy | false | true   | false     | false  |
  * | active       | stale   | false | true   | true      | false  |
- * | active       | dead    | false | false  | false     | false  |
+ * | active       | dead    | false | false  | false     | true   |
  * | quiet        | healthy | false | true   | false     | false  |
  * | quiet        | stale   | false | true   | true      | false  |
- * | quiet        | dead    | false | false  | false     | false  |
+ * | quiet        | dead    | false | false  | false     | true   |
  * | degraded     | healthy | false | true   | false     | false  |
  * | degraded     | stale   | false | true   | true      | false  |
- * | degraded     | dead    | false | false  | false     | false  |
+ * | degraded     | dead    | false | false  | false     | true   |
  * | stalled      | healthy | true  | true   | false     | false  |
  * | stalled      | stale   | true  | true   | true      | false  |
- * | stalled      | dead    | false | false  | false     | false  |
+ * | stalled      | dead    | false | false  | false     | true   |
  * | retry_queued | *       | true  | false  | false     | false  |
  * | cancelled    | *       | true  | false  | false     | false  |
  * | detached     | healthy | false | false  | false     | false  |
  * | detached     | stale   | false | false  | true      | false  |
- * | detached     | dead    | false | false  | false     | false  |
- *
- * Note: "completed" is a RunLifecycleState, not a RunPhase. Completed runs
- * should be handled separately based on their release_reason and stream state.
+ * | detached     | dead    | true  | false  | true      | false  |
+ * | completed    | healthy | false | false  | false     | false  |
+ * | completed    | stale   | false | false  | false     | false  |
+ * | completed    | dead    | true  | false  | true      | false  |
  */
 export function computeSafeActions(
   phase: RunPhase,
@@ -349,22 +349,22 @@ export function computeSafeActions(
     active: {
       healthy: { retry: false, cancel: true, rehydrate: false, detach: false },
       stale: { retry: false, cancel: true, rehydrate: true, detach: false },
-      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: true },
     },
     quiet: {
       healthy: { retry: false, cancel: true, rehydrate: false, detach: false },
       stale: { retry: false, cancel: true, rehydrate: true, detach: false },
-      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: true },
     },
     degraded: {
       healthy: { retry: false, cancel: true, rehydrate: false, detach: false },
       stale: { retry: false, cancel: true, rehydrate: true, detach: false },
-      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: true },
     },
     stalled: {
       healthy: { retry: true, cancel: true, rehydrate: false, detach: false },
       stale: { retry: true, cancel: true, rehydrate: true, detach: false },
-      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: true },
     },
     retry_queued: {
       healthy: { retry: true, cancel: false, rehydrate: false, detach: false },
@@ -379,7 +379,12 @@ export function computeSafeActions(
     detached: {
       healthy: { retry: false, cancel: false, rehydrate: false, detach: false },
       stale: { retry: false, cancel: false, rehydrate: true, detach: false },
-      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: true, cancel: false, rehydrate: true, detach: false },
+    },
+    completed: {
+      healthy: { retry: false, cancel: false, rehydrate: false, detach: false },
+      stale: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: true, cancel: false, rehydrate: true, detach: false },
     },
   };
 
