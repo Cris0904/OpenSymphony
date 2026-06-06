@@ -3,12 +3,12 @@
 use std::process;
 use tauri::Manager;
 
-mod commands;
-mod types;
-mod settings;
-mod keychain;
 mod actions;
+mod commands;
 mod daemon;
+mod keychain;
+mod settings;
+mod types;
 
 fn main() {
     let desktop_state = commands::DesktopState::new();
