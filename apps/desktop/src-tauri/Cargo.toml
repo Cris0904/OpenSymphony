@@ -22,6 +22,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+opensymphony-gateway-schema = { path = "../../../crates/opensymphony-gateway-schema" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "2"

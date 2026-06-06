@@ -15,7 +15,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(commands::SubscriptionState::default())
-        .manage(std::sync::RwLock::new(commands::GatewayConnection::default()))
+        .manage(std::sync::RwLock::new(
+            commands::GatewayConnection::default(),
+        ))
         .setup(|app| {
             if let Some(_window) = app.get_webview_window("main") {
                 // Window exists; future setup hooks can attach here.

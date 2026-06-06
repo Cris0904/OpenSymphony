@@ -18,6 +18,7 @@ workspace = true
 [workspace]
 members = ["."]
 resolver = "2"
+exclude = ["crates/opensymphony-gateway-schema"]
 
 [dependencies]
 async-stream.workspace = true

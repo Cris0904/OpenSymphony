@@ -241,7 +241,8 @@ pub async fn attach_gateway(
     }
 
     // Determine profile based on URL
-    let is_loopback = parsed.host_str() == Some("127.0.0.1") || parsed.host_str() == Some("localhost");
+    let is_loopback =
+        parsed.host_str() == Some("127.0.0.1") || parsed.host_str() == Some("localhost");
     let profile = if is_loopback {
         "loopback_http"
     } else {
@@ -643,7 +644,9 @@ pub async fn subscribe_events(
     _tx: tauri::ipc::Channel<GatewayEnvelope>,
     _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
-    _state.event_subscribers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    _state
+        .event_subscribers
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // COE-409 will wire this to the actual gateway event stream.
     // The channel transport enables high-throughput local delivery.
     Ok(())
@@ -660,7 +663,9 @@ pub async fn subscribe_terminal(
     _tx: tauri::ipc::Channel<GatewayEnvelope>,
     _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
-    _state.terminal_subscribers.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    _state
+        .terminal_subscribers
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // COE-409 will wire this to the actual gateway terminal stream.
     Ok(())
 }
@@ -676,11 +681,14 @@ pub struct SubscriptionState {
 /// Unsubscribe from the gateway event stream.
 /// Clean up the channel and release resources.
 #[command]
-pub async fn unsubscribe_events(
-    _state: tauri::State<'_, SubscriptionState>,
-) -> CommandResult<()> {
-    let prev = _state.event_subscribers.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    eprintln!("unsubscribe_events: {} remaining subscribers", prev.saturating_sub(1));
+pub async fn unsubscribe_events(_state: tauri::State<'_, SubscriptionState>) -> CommandResult<()> {
+    let prev = _state
+        .event_subscribers
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "unsubscribe_events: {} remaining subscribers",
+        prev.saturating_sub(1)
+    );
     Ok(())
 }
 
@@ -690,8 +698,13 @@ pub async fn unsubscribe_terminal(
     _run_id: String,
     _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
-    let prev = _state.terminal_subscribers.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    eprintln!("unsubscribe_terminal({}): {} remaining subscribers", _run_id, prev.saturating_sub(1));
+    let prev = _state
+        .terminal_subscribers
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "unsubscribe_terminal({}): {} remaining subscribers",
+        _run_id,
+        prev.saturating_sub(1)
+    );
     Ok(())
 }
-
