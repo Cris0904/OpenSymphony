@@ -617,7 +617,7 @@ export class WebSocketTransport implements GatewayTransport {
   }
 
   async *events(fromCursor?: { sequence: number; partition: string }): AsyncIterable<GatewayEnvelope> {
-    await this.ensureConnected();
+    await this.ensureConnected(fromCursor);
 
     // Create a promise-based queue for this subscriber
     const queue: GatewayEnvelope[] = [];

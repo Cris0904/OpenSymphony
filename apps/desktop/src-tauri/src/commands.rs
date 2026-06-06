@@ -549,61 +549,12 @@ pub async fn attach_gateway(
     })
 }
 
-/// Gateway capabilities response (mirrors gateway-schema).
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GatewayCapabilitiesResponse {
-    pub schema_version: String,
-    pub auth_modes: Vec<String>,
-    pub transports: Vec<ProfileTransportCapability>,
-    pub features: Vec<ProfileFeatureCapability>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProfileTransportCapability {
-    pub transport: String,
-    pub supported: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProfileFeatureCapability {
-    pub feature: String,
-    pub enabled: bool,
-}
-
 /// Query gateway capabilities.
+/// Returns the canonical gateway schema capabilities so the frontend can
+/// select the best available transport profile without duplicating type logic.
 #[command]
-pub async fn gateway_health(
-    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
-) -> CommandResult<GatewayCapabilitiesResponse> {
-    // Stub: return default capabilities for local mode
-    Ok(GatewayCapabilitiesResponse {
-        schema_version: "v1".to_string(),
-        auth_modes: vec!["none".to_string()],
-        transports: vec![
-            ProfileTransportCapability {
-                transport: "loopback_http".to_string(),
-                supported: true,
-            },
-            ProfileTransportCapability {
-                transport: "loopback_websocket".to_string(),
-                supported: true,
-            },
-            ProfileTransportCapability {
-                transport: "tauri_channel".to_string(),
-                supported: true,
-            },
-        ],
-        features: vec![
-            ProfileFeatureCapability {
-                feature: "event_journal".to_string(),
-                enabled: true,
-            },
-            ProfileFeatureCapability {
-                feature: "cursor_replay".to_string(),
-                enabled: true,
-            },
-        ],
-    })
+pub async fn gateway_health() -> CommandResult<GatewayCapabilities> {
+    gateway_capabilities().await
 }
 
 /// Get dashboard snapshot from gateway.
