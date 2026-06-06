@@ -12,6 +12,7 @@ import type {
   ProjectSummary,
 } from "@opensymphony/gateway-schema";
 import type { Page } from "../types/navigation";
+import type { RunStatus } from "@opensymphony/gateway-schema";
 import {
   formatTimeAgo,
   formatTokens,
@@ -370,7 +371,7 @@ function RunList({ navigate }: { navigate: (p: Page) => void }): React.ReactElem
 }
 
 /** Run status badge component. */
-function RunStatusBadge({ status }: { status: string }): React.ReactElement {
+function RunStatusBadge({ status }: { status: RunStatus }): React.ReactElement {
   const { bg, fg } = RUN_STATUS_COLORS[status] ?? RUN_STATUS_COLORS.unclaimed;
 
   return (

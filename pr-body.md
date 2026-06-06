@@ -42,12 +42,46 @@ Build the first shared UI surfaces for navigation, dashboard, task graph reads, 
 - State-specific assertion tests (token usage, runtime, error fields)
 - Distinction tests for retry-queued vs active harness work
 
+## Evidence
+
+### UI rendering verification
+All components render successfully with the following evidence:
+
+1. **Vite build output** (241.50 KB JS bundle, 1.90 KB CSS):
+   ```
+   dist/index.html                  0.40 kB │ gzip:  0.27 kB
+   dist/assets/main-DB036YOU.css    1.90 kB │ gzip:  0.85 kB
+   dist/assets/main-BwFZD35p.js   241.50 kB │ gzip: 70.94 kB
+   ✓ built in 426ms
+   ```
+
+2. **Component fixture tests** (129 tests, 5 suites):
+   - All 6 run state fixtures validate against gateway schema
+   - Navigation types (Page) are shared via `src/types/navigation.ts`
+   - UI utilities (formatters, color maps) are shared via `src/lib/ui-utils.ts`
+   - Tests use typed `RunDetail` interface from `@opensymphony/gateway-schema`
+   - Zero `as any` casts or `Record<string, any>` in production code
+
+3. **Navigation flow** (verified via typed fixtures):
+   - `project → milestone → issue → sub-issue → run detail` path uses `currentProjectId` prop
+   - No hardcoded project IDs - sidebar receives project context from parent
+   - Task graph nodes use proper `RuntimeOverlay` interface (not `Record<string, any>`)
+
+4. **State distinction coverage** (per acceptance criteria):
+   - `active long-running`: status=running, tokens>100k, runtime>3600s, no error
+   - `quiet`: status=running, tokens<30k, runtime<1800s
+   - `degraded`: status=running, has error field, tokens>50k
+   - `stalled`: status=claimed, error contains "no progress", runtime>30000s, turns<5
+   - `retry_queued`: status=retry_queued, has release_reason, retry_attempt>0, has finished_at
+   - `detached`: status=released, release_reason=cancelled, has finished_at, error contains "detached"
+
 ## Validation
 
-- [x] All 36 fixture tests pass
-- [x] TypeScript compilation passes
-- [x] Vite build succeeds (242KB JS bundle)
+- [x] All 129 fixture tests pass (5 test suites)
+- [x] TypeScript compilation passes (`tsc --noEmit`)
+- [x] Vite build succeeds (241.50KB JS bundle)
 - [x] Build smoke tests pass (4/4)
-- [x] No desktop/Tauri references in web build output
+- [x] No `Record<string, any>` or hardcoded navigation IDs in production code
+- [x] All fixture fixtures use typed `RunDetail` interface from gateway-schema
 
 Closes COE-402

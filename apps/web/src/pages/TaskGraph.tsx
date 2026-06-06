@@ -12,6 +12,7 @@ import type {
   TaskGraphSnapshot,
   TaskGraphNodeKind,
   TaskGraphStateCategory,
+  RunStatus,
 } from "@opensymphony/gateway-schema";
 import type { Page } from "../types/navigation";
 import {
@@ -198,7 +199,7 @@ const fixtureTaskGraph: TaskGraphSnapshot = {
 // Runtime overlay: map issue nodes to their current run state.
 interface RuntimeOverlay {
   runId?: string;
-  status: string;
+  status: RunStatus;
   phase?: string;
 }
 
@@ -449,7 +450,7 @@ function RuntimeBadge({
   status,
   phase,
 }: {
-  status: string;
+  status: RunStatus;
   phase?: string;
 }): React.ReactElement {
   const { bg, fg } = RUN_STATUS_COLORS[status] ?? RUN_STATUS_COLORS.unclaimed;

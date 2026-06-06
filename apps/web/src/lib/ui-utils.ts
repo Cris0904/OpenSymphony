@@ -62,29 +62,35 @@ export function formatCost(micros: number): string {
 
 type BadgeColors = { bg: string; fg: string };
 
+/** Known liveness states for run monitoring. */
+export type LivenessState = "active" | "quiet" | "degraded" | "stalled" | "detached";
+
 /** Color mapping for run status badges (shared across all components). */
-export const RUN_STATUS_COLORS: Record<RunStatus | string, BadgeColors> = {
+export const RUN_STATUS_COLORS: Record<RunStatus, BadgeColors> = {
   running: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
   retry_queued: { bg: "rgba(210, 153, 34, 0.15)", fg: "var(--color-attention)" },
   released: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
   claimed: { bg: "rgba(88, 166, 255, 0.15)", fg: "var(--color-accent)" },
   unclaimed: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-};
+} as const satisfies Record<RunStatus, BadgeColors>;
 
 /** Color mapping for liveness badges (shared across all components). */
-export const LIVENESS_COLORS: Record<string, BadgeColors> = {
+export const LIVENESS_COLORS: Record<LivenessState, BadgeColors> = {
   active: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
   quiet: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
   degraded: { bg: "rgba(210, 153, 34, 0.15)", fg: "var(--color-attention)" },
   stalled: { bg: "rgba(248, 81, 73, 0.15)", fg: "var(--color-danger)" },
   detached: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
-};
+} as const satisfies Record<LivenessState, BadgeColors>;
 
-/** Color mapping for state category badges. */
-export const STATE_CATEGORY_COLORS: Record<string, BadgeColors> = {
+/** Color mapping for state category badges (from gateway TaskGraphStateCategory). */
+export const STATE_CATEGORY_COLORS: Record<
+  "done" | "in_progress" | "todo" | "backlog" | "canceled",
+  BadgeColors
+> = {
   done: { bg: "rgba(63, 185, 80, 0.15)", fg: "var(--color-success)" },
   in_progress: { bg: "rgba(88, 166, 255, 0.15)", fg: "var(--color-accent)" },
   todo: { bg: "rgba(139, 148, 158, 0.15)", fg: "var(--color-fg-muted)" },
   backlog: { bg: "rgba(110, 118, 129, 0.15)", fg: "var(--color-fg-subtle)" },
   canceled: { bg: "rgba(248, 81, 73, 0.15)", fg: "var(--color-danger)" },
-};
+} as const;
