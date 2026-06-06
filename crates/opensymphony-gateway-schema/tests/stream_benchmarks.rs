@@ -8,9 +8,7 @@ use tokio::{
 };
 
 use opensymphony_gateway_schema::envelope::GatewayEnvelope;
-use opensymphony_gateway_schema::terminal::{
-    TerminalEncoding, TerminalFrame, TerminalFrameKind,
-};
+use opensymphony_gateway_schema::terminal::{TerminalEncoding, TerminalFrame, TerminalFrameKind};
 use opensymphony_gateway_schema::transport::TransportProfile;
 use opensymphony_gateway_schema::version::SchemaVersion;
 
