@@ -176,14 +176,25 @@ export class TerminalViewer {
     `;
     this.container.appendChild(this.scrollContainer);
 
-    // Event listeners
-    this.searchButton.addEventListener("click", () => this.performSearch());
-    this.searchInput.addEventListener("keypress", (e) => {
+    // Bound handlers for cleanup in dispose()
+    this._onSearch = () => this.performSearch();
+    this._onSearchKeypress = (e: KeyboardEvent) => {
       if (e.key === "Enter") this.performSearch();
-    });
-    this.copyButton.addEventListener("click", () => this.copyToClipboard());
-    this.jumpButton.addEventListener("click", () => this.jumpToLatest());
+    };
+    this._onCopy = () => this.copyToClipboard();
+    this._onJump = () => this.jumpToLatest();
+
+    this.searchButton.addEventListener("click", this._onSearch);
+    this.searchInput.addEventListener("keypress", this._onSearchKeypress);
+    this.copyButton.addEventListener("click", this._onCopy);
+    this.jumpButton.addEventListener("click", this._onJump);
   }
+
+  /** Bound handlers for removeEventListener in dispose() */
+  private _onSearch!: () => void;
+  private _onSearchKeypress!: (e: KeyboardEvent) => void;
+  private _onCopy!: () => void;
+  private _onJump!: () => void;
 
   /**
    * Attach to the renderer and listen for updates.
@@ -275,6 +286,8 @@ export class TerminalViewer {
       const centeredStart = focusOffset - Math.floor(this.config.maxVisibleFrames / 2);
       start = Math.max(0, Math.min(centeredStart, buffer.visibleFrames.length - this.config.maxVisibleFrames));
     }
+    // Reset after consuming to avoid stale focus on subsequent rebuilds
+    this.pendingFocusFrameIndex = undefined;
 
     return {
       frames: buffer.visibleFrames.slice(start, start + this.config.maxVisibleFrames),
@@ -491,9 +504,14 @@ export class TerminalViewer {
   }
 
   /**
-   * Dispose of the viewer.
+   * Dispose of the viewer and remove event listeners.
    */
   dispose(): void {
+    this.searchButton.removeEventListener("click", this._onSearch);
+    this.searchInput.removeEventListener("keypress", this._onSearchKeypress);
+    this.copyButton.removeEventListener("click", this._onCopy);
+    this.jumpButton.removeEventListener("click", this._onJump);
+
     this.container.innerHTML = "";
     this.lineElements = [];
   }

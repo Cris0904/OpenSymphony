@@ -124,15 +124,19 @@ if (root) {
   document.getElementById("btn-benchmark")?.addEventListener("click", async () => {
     const output = document.getElementById("benchmark-output")!;
     output.textContent = "Running benchmarks... This may take a moment.\n";
-    
-    const results = await runAllBenchmarks({ warmupFrames: 50, testFrames: 500 });
-    
-    let report = "";
-    for (const result of results) {
-      report += formatBenchmarkReport(result) + "\n\n";
+
+    try {
+      const results = await runAllBenchmarks({ warmupFrames: 50, testFrames: 500 });
+
+      let report = "";
+      for (const result of results) {
+        report += formatBenchmarkReport(result) + "\n\n";
+      }
+
+      output.textContent = report;
+    } catch (err) {
+      output.textContent = `Benchmark error: ${err instanceof Error ? err.message : String(err)}`;
     }
-    
-    output.textContent = report;
   });
 
   document.getElementById("btn-clear")?.addEventListener("click", () => {
