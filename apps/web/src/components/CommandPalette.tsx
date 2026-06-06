@@ -5,7 +5,7 @@
  * with quick navigation and action commands.
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { Page } from "../types/navigation";
 
 interface CommandPaletteProps {
@@ -23,6 +23,51 @@ interface Command {
   category: string;
   requiresProject?: boolean;
 }
+
+const ALL_COMMANDS: Command[] = [
+  {
+    id: "dashboard",
+    label: "Go to Dashboard",
+    shortcut: "G D",
+    action: () => {},
+    category: "Navigation",
+  },
+  {
+    id: "projects",
+    label: "View Projects",
+    shortcut: "G P",
+    action: () => {},
+    category: "Navigation",
+    requiresProject: true,
+  },
+  {
+    id: "task-graph",
+    label: "View Task Graph",
+    shortcut: "G T",
+    action: () => {},
+    category: "Navigation",
+    requiresProject: true,
+  },
+  {
+    id: "active-runs",
+    label: "Show Active Runs",
+    action: () => {},
+    category: "Views",
+  },
+  {
+    id: "retry-queue",
+    label: "Show Retry Queue",
+    action: () => {},
+    category: "Views",
+  },
+  {
+    id: "toggle-theme",
+    label: "Toggle Theme",
+    shortcut: "⌘ T",
+    action: () => {},
+    category: "Settings",
+  },
+];
 
 export function CommandPalette({
   onClose,
@@ -46,59 +91,37 @@ export function CommandPalette({
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  // Define available commands.
-  const commands: Command[] = [
-    {
-      id: "dashboard",
-      label: "Go to Dashboard",
-      shortcut: "G D",
-      action: () => { navigate({ kind: "dashboard" }); onClose(); },
-      category: "Navigation",
-    },
-    {
-      id: "projects",
-      label: "View Projects",
-      shortcut: "G P",
-      action: () => {
-        if (!currentProjectId) return;
-        navigate({ kind: "project", projectId: currentProjectId });
-        onClose();
-      },
-      category: "Navigation",
-      requiresProject: true,
-    },
-    {
-      id: "task-graph",
-      label: "View Task Graph",
-      shortcut: "G T",
-      action: () => {
-        if (!currentProjectId) return;
-        navigate({ kind: "task-graph", projectId: currentProjectId });
-        onClose();
-      },
-      category: "Navigation",
-      requiresProject: true,
-    },
-    {
-      id: "active-runs",
-      label: "Show Active Runs",
-      action: () => { /* TODO: filter to active runs */ onClose(); },
-      category: "Views",
-    },
-    {
-      id: "retry-queue",
-      label: "Show Retry Queue",
-      action: () => { /* TODO: show retry queue */ onClose(); },
-      category: "Views",
-    },
-    {
-      id: "toggle-theme",
-      label: "Toggle Theme",
-      shortcut: "⌘ T",
-      action: () => { /* TODO: theme toggle */ onClose(); },
-      category: "Settings",
-    },
-  ];
+  // Build commands with proper closures, memoized to avoid reallocation.
+  const commands = useMemo<Command[]>(
+    () =>
+      ALL_COMMANDS.map((cmd) => ({
+        ...cmd,
+        action: () => {
+          switch (cmd.id) {
+            case "dashboard":
+              navigate({ kind: "dashboard" });
+              break;
+            case "projects":
+              if (currentProjectId) navigate({ kind: "project", projectId: currentProjectId });
+              break;
+            case "task-graph":
+              if (currentProjectId) navigate({ kind: "task-graph", projectId: currentProjectId });
+              break;
+            case "active-runs":
+              // TODO: filter to active runs
+              break;
+            case "retry-queue":
+              // TODO: show retry queue
+              break;
+            case "toggle-theme":
+              // TODO: theme toggle
+              break;
+          }
+          onClose();
+        },
+      })),
+    [currentProjectId, navigate, onClose],
+  );
 
   // Filter commands by query and project availability.
   const filtered = commands.filter(

@@ -349,7 +349,7 @@ describe("CommandPalette component rendering", () => {
       />
     );
     const input = screen.getByPlaceholderText("Type a command...");
-    (input as HTMLInputElement).value = "Dashboard";
+    fireEvent.change(input, { target: { value: "Dashboard" } });
     expect(screen.getByText("Go to Dashboard")).toBeTruthy();
   });
 

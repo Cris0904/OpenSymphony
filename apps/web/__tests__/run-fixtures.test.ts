@@ -1,10 +1,9 @@
 /**
- * Component rendering tests for the AppShell, Dashboard, TaskGraph, and RunDetail.
+ * Fixture loading and shared utility tests for the AppShell, Dashboard, TaskGraph, and RunDetail.
  *
  * Tests verify that fixture data matches expected schemas, shared utilities
  * produce correct output, and navigation routing works as expected.
- * Full React component rendering tests are deferred until @testing-library/react
- * is added to the workspace dependencies.
+ * React component rendering tests are in component-render.test.tsx.
  */
 
 import { describe, test, expect } from "@jest/globals";

@@ -189,9 +189,8 @@ function SidebarTreeNode({
       if (resolvedProjectId) {
         navigate({ kind: "task-graph", projectId: resolvedProjectId });
       }
-    } else if (item.id.startsWith("run-")) {
-      navigate({ kind: "run", runId: item.id });
     }
+    // Run navigation is reserved for future COE-414 run detail views.
   };
 
   return (
