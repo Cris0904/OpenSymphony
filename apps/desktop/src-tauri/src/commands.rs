@@ -249,11 +249,13 @@ pub async fn attach_gateway(
     };
 
     // Mutate connection state to record the attachment
-    if let Ok(mut conn) = state.write() {
-        conn.base_url = req.base_url.clone();
-        conn.auth_token = req.auth_token.clone();
-        conn.connected = true;
-    }
+    let mut conn = state.write().map_err(|e| DesktopError::GatewayError {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
+    conn.base_url = req.base_url.clone();
+    conn.auth_token = req.auth_token.clone();
+    conn.connected = true;
+    drop(conn);
 
     Ok(AttachGatewayResponse {
         connected: true,

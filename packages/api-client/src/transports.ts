@@ -48,6 +48,45 @@ export interface GatewayTransportConfig {
 }
 
 /**
+ * Parse a complete SSE event block into a GatewayEnvelope.
+ * Handles multi-line `data:` fields properly by concatenating them.
+ */
+function parseSSEEvent(eventBlock: string): GatewayEnvelope | null {
+  const lines = eventBlock.split("\n");
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      dataLines.push(line.slice(6));
+    } else if (line.startsWith("data:")) {
+      // Handle `data:` with no space
+      dataLines.push(line.slice(5));
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  // Join multi-line data fields
+  const data = dataLines.join("\n");
+  return parseSSEData(data);
+}
+
+/**
+ * Parse the concatenated SSE data field into a GatewayEnvelope.
+ */
+function parseSSEData(data: string): GatewayEnvelope | null {
+  const trimmed = data.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed) as GatewayEnvelope;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * HTTP-based transport adapter for the OpenSymphony Gateway.
  *
  * Uses fetch() for REST endpoints and EventSource for SSE streams.
@@ -56,11 +95,12 @@ export interface GatewayTransportConfig {
 export class HttpGatewayTransport implements GatewayTransport {
   readonly baseUri: string;
   private readonly authToken?: string;
-  private abortController?: AbortController;
+  private abortController: AbortController;
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
     this.authToken = config.authToken;
+    this.abortController = new AbortController();
   }
 
   private headers(): Record<string, string> {
@@ -146,7 +186,7 @@ export class HttpGatewayTransport implements GatewayTransport {
         ...this.headers(),
         Accept: "text/event-stream",
       },
-      signal: this.abortController?.signal,
+      signal: this.abortController.signal,
     });
 
     if (!response.ok || !response.body) {
@@ -158,26 +198,29 @@ export class HttpGatewayTransport implements GatewayTransport {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let currentData = "";
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // Flush remaining data
+          if (currentData.trim()) {
+            yield parseSSEData(currentData);
+          }
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        // SSE events are separated by double newlines
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6).trim();
-            if (data) {
-              try {
-                yield JSON.parse(data) as GatewayEnvelope;
-              } catch {
-                // Skip malformed envelopes
-              }
-            }
+        for (const event of events) {
+          if (!event.trim()) continue;
+          const parsed = parseSSEEvent(event);
+          if (parsed) {
+            yield parsed;
           }
         }
       }
@@ -196,7 +239,7 @@ export class HttpGatewayTransport implements GatewayTransport {
         ...this.headers(),
         Accept: "text/event-stream",
       },
-      signal: this.abortController?.signal,
+      signal: this.abortController.signal,
     });
 
     if (!response.ok || !response.body) {
@@ -208,26 +251,29 @@ export class HttpGatewayTransport implements GatewayTransport {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let currentData = "";
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // Flush remaining data
+          if (currentData.trim()) {
+            yield parseSSEData(currentData);
+          }
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        // SSE events are separated by double newlines
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6).trim();
-            if (data) {
-              try {
-                yield JSON.parse(data) as GatewayEnvelope;
-              } catch {
-                // Skip malformed frames
-              }
-            }
+        for (const event of events) {
+          if (!event.trim()) continue;
+          const parsed = parseSSEEvent(event);
+          if (parsed) {
+            yield parsed;
           }
         }
       }
@@ -237,8 +283,7 @@ export class HttpGatewayTransport implements GatewayTransport {
   }
 
   async close(): Promise<void> {
-    this.abortController?.abort();
-    this.abortController = undefined;
+    this.abortController.abort();
   }
 }
 
@@ -366,6 +411,7 @@ export class WebSocketTransport implements GatewayTransport {
 
       this.ws.onopen = () => {
         clearTimeout(timeoutId);
+        this.reconnectDelayMs = 1000; // Reset reconnect delay after successful connection
         // Send auth if needed
         if (this.authToken) {
           this.ws?.send(
@@ -377,12 +423,20 @@ export class WebSocketTransport implements GatewayTransport {
 
       this.ws.onerror = (error) => {
         clearTimeout(timeoutId);
-        reject(error);
+        // Only reject if we haven't resolved yet
+        if (this.ws?.readyState !== WebSocket.OPEN) {
+          reject(error instanceof Error ? error : new Error('WebSocket connection error'));
+        }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
         clearTimeout(timeoutId);
-        this.scheduleReconnect();
+        // If connection closes during handshake, reject the promise
+        if (this.ws?.readyState !== WebSocket.OPEN) {
+          reject(new Error(`WebSocket connection closed during handshake (code: ${event.code}, reason: ${event.reason || 'none'})`));
+        } else {
+          this.scheduleReconnect();
+        }
       };
 
       this.ws.onmessage = (event) => {
