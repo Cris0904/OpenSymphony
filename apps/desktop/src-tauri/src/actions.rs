@@ -198,15 +198,6 @@ pub async fn open_linear_link(
 pub struct NotifyRequest {
     pub title: String,
     pub body: String,
-    pub level: Option<NotifyLevel>,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub enum NotifyLevel {
-    Info,
-    Warning,
-    Error,
 }
 
 #[derive(Debug, Serialize)]
@@ -234,18 +225,6 @@ pub async fn notify(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_notify_level_deserialization() {
-        let i: NotifyLevel = serde_json::from_str(r#""info""#).unwrap();
-        assert!(matches!(i, NotifyLevel::Info));
-        let w: NotifyLevel = serde_json::from_str(r#""warning""#).unwrap();
-        assert!(matches!(w, NotifyLevel::Warning));
-        let e: NotifyLevel = serde_json::from_str(r#""error""#).unwrap();
-        assert!(matches!(e, NotifyLevel::Error));
-        // Invalid level should fail
-        assert!(serde_json::from_str::<NotifyLevel>(r#""critical""#).is_err());
-    }
 
     #[test]
     fn test_copy_request() {
@@ -300,10 +279,9 @@ mod tests {
         let req = NotifyRequest {
             title: "Test".into(),
             body: "Body".into(),
-            level: Some(NotifyLevel::Info),
         };
         assert_eq!(req.title, "Test");
-        assert!(matches!(req.level, Some(NotifyLevel::Info)));
+        assert_eq!(req.body, "Body");
     }
 
     #[test]
@@ -382,17 +360,46 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_all_levels_deserialize() {
-        // Verify all valid notification levels work
-        for level in &["info", "warning", "error"] {
-            let json = format!(r#"{{"title":"T","body":"B","level":"{}"}}"#, level);
-            let result: Result<NotifyRequest, _> = serde_json::from_str(&json);
-            assert!(result.is_ok(), "Level '{}' should deserialize", level);
-        }
-        // Missing level should still work (defaults to None)
+    fn test_notify_request_deserialize() {
         let json = r#"{"title":"T","body":"B"}"#;
         let req: NotifyRequest = serde_json::from_str(json).unwrap();
-        assert!(req.level.is_none());
+        assert_eq!(req.title, "T");
+        assert_eq!(req.body, "B");
+    }
+
+    #[test]
+    fn test_symlink_inside_workspace_is_rejected() {
+        // Create a symlink inside ~/.opensymphony/workspaces that points outside
+        // and verify is_safe_workspace_path rejects it (canonicalize resolves the target).
+        let home = dirs::home_dir().expect("home dir available");
+        let workspace_base = home.join(".opensymphony").join("workspaces");
+        std::fs::create_dir_all(&workspace_base).ok();
+
+        let real_dir = workspace_base.join("test-symlink-escape");
+        std::fs::create_dir_all(&real_dir).ok();
+
+        let symlink_path = real_dir.join("escape");
+        // Point the symlink to /tmp (outside the workspace base)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let _ = symlink("/tmp", &symlink_path);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::symlink_dir;
+            let _ = symlink_dir(r"C:\Windows", &symlink_path);
+        }
+
+        if symlink_path.exists() {
+            assert!(
+                !is_safe_workspace_path(&symlink_path),
+                "Symlink inside workspace pointing outside should be rejected after canonicalization"
+            );
+        }
+        // Clean up
+        let _ = std::fs::remove_file(&symlink_path);
+        let _ = std::fs::remove_dir(&real_dir);
     }
 
     #[test]
