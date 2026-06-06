@@ -1,57 +1,5 @@
 //! OpenSymphony Tauri desktop entry point.
 
-use std::process;
-use tauri::Manager;
-
-mod actions;
-mod commands;
-mod daemon;
-mod keychain;
-mod settings;
-mod types;
-
 fn main() {
-    let desktop_state = commands::DesktopState::new();
-
-    if let Err(e) = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .manage(desktop_state)
-        .setup(|app| {
-            if let Some(_window) = app.get_webview_window("main") {
-                // Window exists; future setup hooks can attach here.
-            }
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            settings::get_setting,
-            settings::set_setting,
-            keychain::get_credential,
-            keychain::set_credential,
-            keychain::delete_credential,
-            keychain::credential_status,
-            actions::open_file,
-            actions::open_folder,
-            actions::open_repository_folder,
-            actions::reveal_workspace,
-            actions::copy_to_clipboard,
-            actions::open_linear_link,
-            actions::notify,
-            commands::daemon_status,
-            commands::store_profile,
-            commands::list_profiles,
-            commands::set_active_profile,
-            commands::probe_gateway,
-            commands::discover_default_gateway,
-            commands::start_daemon,
-            commands::stop_daemon,
-        ])
-        .run(tauri::generate_context!())
-    {
-        eprintln!("Tauri runtime error: {e}");
-        process::exit(1);
-    }
+    opensymphony_desktop::run();
 }
