@@ -100,7 +100,9 @@ pub async fn reveal_workspace(
         message: "could not determine home directory".into(),
     })?;
     let base = home.join(".opensymphony").join("workspaces");
-    if !canon.starts_with(&base) {
+    // Canonicalize base to handle symlinks in home directory path
+    let canon_base = base.canonicalize().unwrap_or(base);
+    if !canon.starts_with(&canon_base) {
         return Err(DesktopError::PermissionDenied);
     }
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
@@ -115,7 +117,9 @@ pub async fn reveal_workspace(
 fn is_safe_workspace_path(path: &std::path::Path) -> bool {
     if let Some(home) = dirs::home_dir() {
         let os_base = home.join(".opensymphony");
-        if path.starts_with(&os_base) {
+        // Canonicalize base to handle symlinks in home directory path
+        let canon_base = os_base.canonicalize().unwrap_or(os_base);
+        if path.starts_with(&canon_base) {
             return true;
         }
     }
@@ -163,7 +167,8 @@ pub async fn open_linear_link(
     app: tauri::AppHandle,
     req: OpenLinearLinkRequest,
 ) -> CommandResult<()> {
-    let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, req.issue_id);
+    let encoded_id = urlencoding::encode(&req.issue_id);
+    let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded_id);
     app.opener().open_url(&url, None::<&str>).map_err(|e| DesktopError::Internal {
         message: format!("failed to open link: {e}"),
     })
