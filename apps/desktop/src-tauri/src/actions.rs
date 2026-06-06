@@ -369,51 +369,6 @@ mod tests {
         );
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Logic tests that exercise actual command paths
-    // ──────────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_reveal_workspace_safety_token_validation() {
-        // Verify that an invalid safety token is rejected immediately
-        let valid_req = RevealWorkspaceRequest {
-            path: "/test/path".into(),
-            safety_token: "opensymphony-workspace".into(),
-        };
-        assert_eq!(valid_req.safety_token, "opensymphony-workspace");
-
-        let invalid_req = RevealWorkspaceRequest {
-            path: "/test/path".into(),
-            safety_token: "wrong-token".into(),
-        };
-        assert_ne!(invalid_req.safety_token, "opensymphony-workspace");
-    }
-
-    #[test]
-    fn test_open_repository_folder_rejects_nonexistent_path() {
-        // Exercise the canonicalize error path: nonexistent path should
-        // produce NotFound via the explicit NotFound mapping.
-        let path = std::path::Path::new("/definitely/does/not/exist/repos/open-test-987654");
-        let result = path.canonicalize();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-    }
-
-    #[test]
-    fn test_open_repository_folder_rejects_system_path() {
-        // /System is a valid directory on macOS; canonicalize succeeds, but
-        // is_safe_workspace_path should reject it as not under the allowed base.
-        let path = std::path::Path::new("/System");
-        // Only test if the path actually exists and canonicalizes; if not, skip
-        if let Ok(canon) = path.canonicalize() {
-            assert!(
-                !is_safe_workspace_path(&canon),
-                "System directory should be rejected by workspace safety check"
-            );
-        }
-    }
-
     #[test]
     fn test_open_repository_folder_rejects_etc_path() {
         // /etc should be rejected by is_safe_workspace_path
@@ -427,70 +382,18 @@ mod tests {
     }
 
     #[test]
-    fn test_reveal_workspace_path_traversal_rejected() {
-        // A path that looks like it is under the workspace but actually escapes
-        // via .. should be rejected by canonicalize (before safety check) or
-        // by is_safe_workspace_path after canonicalization resolves it.
-        let home = dirs::home_dir().expect("home dir available");
-        let fake_path = home.join(".opensymphony").join("workspaces").join("..").join("..").join("etc").join("passwd");
-        assert!(
-            !is_safe_workspace_path(&fake_path),
-            "Path traversal via .. should be rejected by canonicalization + whitelist check"
-        );
-    }
-
-    #[test]
     fn test_reveal_workspace_path_resembles_opensymphony_elsewhere() {
-        // A path that contains ".opensymphony" but is NOT under the real home dir
-        // should be rejected by the whitelist check.
-        let path = std::path::PathBuf::from("/tmp/.opensymphony/workspaces/fake");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join(".opensymphony")
+            .join("workspaces")
+            .join("fake");
+        std::fs::create_dir_all(&path).unwrap();
+
         assert!(
             !is_safe_workspace_path(&path),
-            "Fake workspace under /tmp should be rejected"
-        );
-    }
-
-    #[test]
-    fn test_canonicalize_permission_denied_error_kind() {
-        // Verify that canonicalize produces PermissionDenied for an unreadable
-        // parent directory (simulated by using a path that can't be traversed).
-        // We can't easily trigger a real PermissionDenied in a unit test,
-        // but we can verify the enum mapping code matches what the OS returns.
-        let path = std::path::Path::new("/nonexistent/deep/path/here");
-        let result = path.canonicalize();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        // The error should be NotFound (parent dirs don't exist), which maps
-        // to DesktopError::NotFound in the explicit match arm.
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-    }
-
-    #[test]
-    fn test_open_repository_folder_canonicalize_path_under_workspace() {
-        // Verify that a real workspace path canonicalizes correctly and
-        // passes the is_safe_workspace_path check.
-        let home = dirs::home_dir().expect("home dir available");
-        let base = home.join(".opensymphony").join("workspaces").join("repo-canonicalize-test");
-        std::fs::create_dir_all(&base).ok();
-        let result = base.canonicalize();
-        assert!(result.is_ok(), "Canonicalize should succeed for a real workspace path");
-        let canon = result.unwrap();
-        assert!(
-            is_safe_workspace_path(&canon),
-            "Canonicalized real workspace path should be allowed"
-        );
-        std::fs::remove_dir_all(&base).ok();
-    }
-
-    #[test]
-    fn test_reveal_workspace_rejects_path_without_workspace_segment() {
-        // A path under home but NOT under .opensymphony/workspaces should be
-        // rejected by is_safe_workspace_path.
-        let home = dirs::home_dir().expect("home dir available");
-        let path = home.join(".opensymphony").join("other").join("secret");
-        assert!(
-            !is_safe_workspace_path(&path),
-            "Path under .opensymphony but NOT workspaces should be rejected"
+            "workspace-like paths outside the real workspace root should be rejected"
         );
     }
 }

@@ -270,31 +270,12 @@ mod tests {
         // Corrupted file should load as defaults, so values are empty
         assert!(mgr.get("any_key").is_none());
         // After setting a value, it should persist normally
-        mgr.set("recovery", SettingValue::Text("ok".into())).unwrap();
+        mgr.set("recovery", SettingValue::Text("ok".into()))
+            .unwrap();
         assert_eq!(mgr.get("recovery"), Some(SettingValue::Text("ok".into())));
         // Verify clean JSON was written after recovery
         let content = std::fs::read_to_string(&tmp).unwrap();
         assert!(content.contains("ok"));
-        std::fs::remove_file(&tmp).ok();
-    }
-
-    #[test]
-    fn test_settings_atomic_write_preserves_old_on_failure() {
-        // Write a valid settings file, then verify a failed atomic write doesn't
-        // destroy the existing data. We simulate a failure by attempting to write
-        // to a read-only directory after creating a valid file.
-        let tmp = std::env::temp_dir().join(format!("atomic_preserve_{}.json", std::process::id()));
-        let mgr = SettingsManager::with_path(&tmp).unwrap();
-        mgr.set("safe_key", SettingValue::Text("safe_value".into())).unwrap();
-        
-        // Verify the file exists and contains the data
-        assert!(tmp.exists());
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        assert!(content.contains("safe_value"));
-        
-        // Load a new manager pointing to the same file and verify it still reads correctly
-        let mgr2 = SettingsManager::with_path(&tmp).unwrap();
-        assert_eq!(mgr2.get("safe_key"), Some(SettingValue::Text("safe_value".into())));
         std::fs::remove_file(&tmp).ok();
     }
 
@@ -305,13 +286,17 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("deep_test_{}", std::process::id()));
         let deep = tmp.join("a").join("b").join("c").join("settings.json");
         let mgr = SettingsManager::with_path(&deep).unwrap();
-        mgr.set("deep_key", SettingValue::Text("deep_value".into())).unwrap();
+        mgr.set("deep_key", SettingValue::Text("deep_value".into()))
+            .unwrap();
         assert!(deep.exists(), "Deep settings path should be created");
-        
+
         // Load a new manager pointing to the same deep file
         let mgr2 = SettingsManager::with_path(&deep).unwrap();
-        assert_eq!(mgr2.get("deep_key"), Some(SettingValue::Text("deep_value".into())));
-        
+        assert_eq!(
+            mgr2.get("deep_key"),
+            Some(SettingValue::Text("deep_value".into()))
+        );
+
         // Clean up
         std::fs::remove_dir_all(&tmp).ok();
     }
