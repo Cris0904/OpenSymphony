@@ -302,7 +302,7 @@ export function computeSafeActions(
   stream: RunStreamLiveness,
 ): { retry: boolean; cancel: boolean; rehydrate: boolean; detach: boolean } {
   const retry = ["stalled", "retry_queued", "cancelled", "detached"].includes(phase);
-  const cancel = ["active", "quiet", "degraded", "stalled"].includes(phase);
+  const cancel = ["active", "quiet", "degraded", "stalled"].includes(phase) && stream !== "dead";
   const rehydrate = (
     (["active", "quiet", "degraded", "stalled"].includes(phase) && stream === "stale") ||
     (phase === "detached" && stream === "dead")
