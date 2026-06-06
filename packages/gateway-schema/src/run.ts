@@ -92,7 +92,7 @@ export interface RunDetail {
   /** Diagnostic hints surfaced when multiple subsystems disagree. */
   diagnostics?: RunDiagnostics | null;
   /** Actions the client may safely invoke in the current state. */
-  safe_actions: SafeActions;
+  safe_actions?: SafeActions | null;
 }
 
 /** Paged run events. */

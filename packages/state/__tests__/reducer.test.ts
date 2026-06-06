@@ -3,6 +3,7 @@
 import {
   gatewayReducer,
   initialState,
+  computeSafeActions,
 } from "@opensymphony/state";
 import type {
   DashboardSnapshot,
@@ -336,4 +337,77 @@ describe("gatewayReducer", () => {
     expect(state.dashboard.error).toBeNull();
     expect(state.dashboard.loading).toBe(false);
   });
+});
+
+describe("liveness reducer cases", () => {
+  it("LIVENESS_UPDATE stores liveness state in run slice", () => {
+    const state = gatewayReducer(initialState, {
+      type: "LIVENESS_UPDATE",
+      runId: "run-1",
+      phase: "active",
+      stream: "healthy",
+      progressAt: "2025-01-01T00:00:00Z",
+    });
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness).toBeDefined();
+    expect(liveness?.phase).toBe("active");
+    expect(liveness?.stream).toBe("healthy");
+    expect(liveness?.lastProgressAt).toBe("2025-01-01T00:00:00Z");
+    expect(liveness?.reconnectAttempts).toBe(0);
+  });
+
+  it("LIVENESS_STALL sets stalled phase with deadline", () => {
+    const state = gatewayReducer(initialState, {
+      type: "LIVENESS_STALL",
+      runId: "run-1",
+      deadlineAt: "2025-01-01T00:05:00Z",
+    });
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness?.phase).toBe("stalled");
+    expect(liveness?.stream).toBe("stale");
+    expect(liveness?.stallDeadlineAt).toBe("2025-01-01T00:05:00Z");
+  });
+
+  it("LIVENESS_RECONNECT increments reconnectAttempts", () => {
+    let state = gatewayReducer(initialState, {
+      type: "LIVENESS_RECONNECT",
+      runId: "run-1",
+    });
+    state = gatewayReducer(state, {
+      type: "LIVENESS_RECONNECT",
+      runId: "run-1",
+    });
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness?.reconnectAttempts).toBe(2);
+    expect(liveness?.phase).toBe("active");
+    expect(liveness?.stream).toBe("stale");
+  });
+});
+
+describe("computeSafeActions", () => {
+  const matrix: Array<{
+    phase: string;
+    stream: string;
+    expected: { retry: boolean; cancel: boolean; rehydrate: boolean; detach: boolean };
+  }> = [
+    { phase: "active", stream: "healthy", expected: { retry: false, cancel: true, rehydrate: false, detach: false } },
+    { phase: "active", stream: "stale", expected: { retry: false, cancel: true, rehydrate: true, detach: false } },
+    { phase: "active", stream: "dead", expected: { retry: false, cancel: false, rehydrate: false, detach: true } },
+    { phase: "quiet", stream: "stale", expected: { retry: false, cancel: true, rehydrate: true, detach: false } },
+    { phase: "degraded", stream: "stale", expected: { retry: false, cancel: true, rehydrate: true, detach: false } },
+    { phase: "stalled", stream: "stale", expected: { retry: true, cancel: true, rehydrate: true, detach: false } },
+    { phase: "retry_queued", stream: "healthy", expected: { retry: true, cancel: false, rehydrate: false, detach: false } },
+    { phase: "retry_queued", stream: "stale", expected: { retry: true, cancel: false, rehydrate: false, detach: false } },
+    { phase: "cancelled", stream: "healthy", expected: { retry: true, cancel: false, rehydrate: false, detach: false } },
+    { phase: "cancelled", stream: "dead", expected: { retry: true, cancel: false, rehydrate: false, detach: false } },
+    { phase: "detached", stream: "dead", expected: { retry: true, cancel: false, rehydrate: true, detach: false } },
+  ];
+
+  test.each(matrix)(
+    "phase=$phase, stream=$stream -> retry=$expected.retry cancel=$expected.cancel rehydrate=$expected.rehydrate detach=$expected.detach",
+    ({ phase, stream, expected }) => {
+      const result = computeSafeActions(phase as any, stream as any);
+      expect(result).toEqual(expected);
+    },
+  );
 });

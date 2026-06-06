@@ -40,6 +40,14 @@ export interface RunSlice {
   error: string | null;
 }
 
+export interface RunSlice {
+  runs: Map<string, RunDetail>;
+  loading: boolean;
+  error: string | null;
+  /** Per-run liveness tracking state. */
+  liveness: Map<string, RunLivenessState>;
+}
+
 /** Liveness tracking for a single run. */
 export interface RunLivenessState {
   phase: RunPhase;
@@ -54,8 +62,6 @@ export interface TerminalSlice {
   cursor: Map<string, number>;
   loading: boolean;
   error: string | null;
-  /** Per-run liveness tracking state. */
-  liveness: Map<string, RunLivenessState>;
 }
 
 export interface ApprovalSlice {
@@ -85,8 +91,8 @@ export interface GatewayState {
 export const initialState: GatewayState = {
   dashboard: { snapshot: null, loading: false, error: null },
   taskGraph: { nodes: new Map(), rootIds: [], loading: false, error: null },
-  run: { runs: new Map(), loading: false, error: null },
-  terminal: { frames: new Map(), cursor: new Map(), loading: false, error: null, liveness: new Map() },
+  run: { runs: new Map(), loading: false, error: null, liveness: new Map() },
+  terminal: { frames: new Map(), cursor: new Map(), loading: false, error: null },
   approval: { pending: [], resolved: new Map(), loading: false, error: null },
   planning: { sessions: new Map(), loading: false, error: null },
 };
@@ -231,7 +237,7 @@ export function gatewayReducer(
     }
 
     case "LIVENESS_UPDATE": {
-      const liveness = new Map(state.terminal.liveness);
+      const liveness = new Map(state.run.liveness);
       liveness.set(action.runId, {
         phase: action.phase,
         stream: action.stream,
@@ -241,12 +247,12 @@ export function gatewayReducer(
       });
       return {
         ...state,
-        terminal: { ...state.terminal, liveness, loading: false, error: null },
+        run: { ...state.run, liveness, loading: false, error: null },
       };
     }
 
     case "LIVENESS_STALL": {
-      const stallLiveness = new Map(state.terminal.liveness);
+      const stallLiveness = new Map(state.run.liveness);
       const existing = stallLiveness.get(action.runId);
       stallLiveness.set(action.runId, {
         phase: "stalled",
@@ -257,12 +263,12 @@ export function gatewayReducer(
       });
       return {
         ...state,
-        terminal: { ...state.terminal, liveness: stallLiveness, loading: false, error: null },
+        run: { ...state.run, liveness: stallLiveness, loading: false, error: null },
       };
     }
 
     case "LIVENESS_RECONNECT": {
-      const reconnectLiveness = new Map(state.terminal.liveness);
+      const reconnectLiveness = new Map(state.run.liveness);
       const reconnectExisting = reconnectLiveness.get(action.runId);
       reconnectLiveness.set(action.runId, {
         phase: reconnectExisting?.phase ?? "active",
@@ -273,7 +279,7 @@ export function gatewayReducer(
       });
       return {
         ...state,
-        terminal: { ...state.terminal, liveness: reconnectLiveness, loading: false, error: null },
+        run: { ...state.run, liveness: reconnectLiveness, loading: false, error: null },
       };
     }
 
@@ -282,20 +288,32 @@ export function gatewayReducer(
   }
 }
 
-/** Compute safe action set for a run based on its phase and liveness. */
+/** Compute safe action set for a run based on its phase and stream health.
+ *
+ * Matrix:
+ * | phase         | stream  | retry | cancel | rehydrate | detach |
+ * |---------------|---------|-------|--------|-----------|--------|
+ * | active        | healthy | false | true   | false     | false  |
+ * | active        | stale   | false | true   | true      | false  |
+ * | active        | dead    | false | false  | false     | true   |
+ * | quiet         | stale   | false | true   | true      | false  |
+ * | degraded      | stale   | false | true   | true      | false  |
+ * | stalled       | stale   | true  | true   | true      | false  |
+ * | retry_queued  | any     | true  | false  | false     | false  |
+ * | cancelled     | any     | true  | false  | false     | false  |
+ * | detached      | dead    | true  | false  | true      | false  |
+ */
 export function computeSafeActions(
   phase: RunPhase,
   stream: RunStreamLiveness,
-  hasActiveSession: boolean,
 ): { retry: boolean; cancel: boolean; rehydrate: boolean; detach: boolean } {
-  const isTerminal = ["cancelled", "detached"].includes(phase);
-  const isStalledOrRetryQueued = ["stalled", "retry_queued"].includes(phase);
-  const isQuietOrDegraded = ["quiet", "degraded"].includes(phase);
+  const retry = ["stalled", "retry_queued", "cancelled", "detached"].includes(phase);
+  const cancel = ["active", "quiet", "degraded", "stalled"].includes(phase);
+  const rehydrate = (
+    (["active", "quiet", "degraded", "stalled"].includes(phase) && stream === "stale") ||
+    (phase === "detached" && stream === "dead")
+  );
+  const detach = phase === "active" && stream === "dead";
 
-  return {
-    retry: isTerminal || isStalledOrRetryQueued,
-    cancel: hasActiveSession && !isTerminal,
-    rehydrate: isQuietOrDegraded || stream === "stale",
-    detach: hasActiveSession && !isTerminal && stream === "dead",
-  };
+  return { retry, cancel, rehydrate, detach };
 }
