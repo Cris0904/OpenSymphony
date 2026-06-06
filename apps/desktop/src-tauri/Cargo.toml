@@ -21,7 +21,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tokio = { version = "1", features = ["sync", "time", "macros"] }
 tracing = "0.1"
 
