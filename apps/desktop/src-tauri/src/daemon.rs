@@ -366,9 +366,9 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and calls `try_wait()` to reap the zombie.
-    /// Uses a short retry loop (up to 500ms) to ensure the zombie is actually
-    /// reaped, which is needed for proper process cleanup on all platforms.
+    /// Sends SIGKILL and calls `wait()` to reap the zombie.
+    /// `wait()` returns immediately after SIGKILL (which is uncatchable),
+    /// so this is effectively non-blocking while still ensuring zombie reaping.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -384,28 +384,9 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Reap the zombie with a short non-blocking retry loop.
-            // try_wait() returns immediately; the loop ensures we catch
-            // the window between SIGKILL delivery and OS process table update.
-            let deadline = std::time::Instant::now() + Duration::from_millis(500);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,     // Process exited and was reaped
-                    Ok(None) => {             // Process still running
-                        if std::time::Instant::now() >= deadline {
-                            warn!(
-                                "try_wait() timed out after 500ms, zombie may linger briefly",
-                            );
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to check child process status");
-                        break;
-                    }
-                }
-            }
+            // wait() after SIGKILL is effectively non-blocking since SIGKILL
+            // cannot be caught or ignored - the process exits immediately.
+            let _ = child.wait();
         }
         self.child = None;
     }
