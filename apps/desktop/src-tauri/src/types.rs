@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Shared types for desktop commands.
 
 use serde::Serialize;
@@ -8,18 +7,22 @@ use thiserror::Error;
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum DesktopError {
-    #[error("operation cancelled")]
-    Cancelled,
+    /// The requested resource does not exist.
     #[error("resource not found")]
     NotFound,
+    /// Insufficient permissions to perform the operation.
     #[error("permission denied")]
     PermissionDenied,
-    #[error("daemon unavailable")]
-    DaemonUnavailable,
+    /// Daemon executable path validation failed with a specific reason.
+    #[error("daemon path error ({kind}): {detail}")]
+    DaemonPath { kind: String, detail: String },
+    /// Generic internal error with a human-readable message.
     #[error("internal error: {message}")]
     Internal { message: String },
+    /// Keychain error with a non-leaking message.
     #[error("keychain error: {message}")]
     Keychain { message: String },
+    /// Settings persistence error with a non-leaking message.
     #[error("settings error: {message}")]
     Settings { message: String },
 }

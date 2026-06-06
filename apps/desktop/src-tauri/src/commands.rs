@@ -4,6 +4,7 @@
 //! that the capability matrix stays auditable and the attack surface is small.
 
 use crate::daemon::{DaemonConfig, DaemonHandle, StartupResult};
+use crate::types::{CommandResult, DesktopError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -87,40 +88,6 @@ impl DaemonPathError {
         }
     }
 }
-
-// ─── Error type ─────────────────────────────────────────────────────────────
-
-/// Structured error type returned by desktop native commands.
-/// Replaces opaque `String` errors so the frontend can distinguish
-/// permission denied, not found, cancelled, and internal failure.
-///
-/// Uses internally-tagged serialization so every variant produces a uniform
-/// JSON shape: `{"type":"Cancelled"}`, `{"type":"Internal","message":"..."}`.
-#[derive(Error, Debug, Serialize)]
-#[serde(tag = "type")]
-pub enum DesktopError {
-    /// The user cancelled the operation (e.g., closed a file picker).
-    #[error("operation cancelled")]
-    Cancelled,
-    /// The requested resource does not exist.
-    #[error("resource not found")]
-    NotFound,
-    /// Insufficient permissions to perform the operation.
-    #[error("permission denied")]
-    PermissionDenied,
-    /// The local daemon is not running.
-    #[error("daemon unavailable")]
-    DaemonUnavailable,
-    /// Daemon executable path validation failed with a specific reason.
-    #[error("daemon path error ({kind}): {detail}")]
-    DaemonPath { kind: String, detail: String },
-    /// Generic internal error with a human-readable message.
-    #[error("internal error: {message}")]
-    Internal { message: String },
-}
-
-/// Alias for ergonomic command return types.
-type CommandResult<T> = Result<T, DesktopError>;
 
 // ─── Shared desktop state ───────────────────────────────────────────────────
 
