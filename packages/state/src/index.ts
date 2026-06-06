@@ -288,10 +288,14 @@ export function computeLivenessState(
     streamHealth = "stale";
   }
 
+  // When events arrive, update lastEventAt to the current time so the returned
+  // liveness state is self-consistent and callers do not need to override it.
+  const resolvedLastEventAt = eventsSinceLastCheck > 0 ? msToIso(nowMs) : lastEventAt;
+
   return {
     runId,
     phaseState,
-    lastEventAt,
+    lastEventAt: resolvedLastEventAt,
     lastStatusUpdateAt: existingLiveness?.lastStatusUpdateAt ?? null,
     eventCount: (existingLiveness?.eventCount ?? 0) + eventsSinceLastCheck,
     gapSeconds,
@@ -424,7 +428,6 @@ export function gatewayReducer(
       liveness.set(action.runId, {
         ...computedLiveness,
         phaseState: computedPhase,
-        lastEventAt: msToIso(action.nowMs),
         isStreamStale: false,
         streamHealth: "healthy",
       });
