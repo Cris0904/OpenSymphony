@@ -209,12 +209,23 @@ export class TerminalRenderer {
   clear(): void {
     this.pendingFrames = [];
     this.buffer = createScrollbackBuffer(this.config.maxBufferCapacity);
+    this.metrics = {
+      fps: 0,
+      memoryBytes: 0,
+      frameCount: 0,
+      decodeTimeMs: 0,
+      renderTimeMs: 0,
+      uiBlocked: false,
+    };
     if (this.rafId) {
       const cancelRaf = typeof cancelAnimationFrame !== "undefined"
         ? (h: RafHandle) => cancelAnimationFrame(h as number)
         : clearTimeout;
       cancelRaf(this.rafId);
       this.rafId = null;
+    }
+    if (this.renderCallback) {
+      this.renderCallback([], this.buffer);
     }
   }
 

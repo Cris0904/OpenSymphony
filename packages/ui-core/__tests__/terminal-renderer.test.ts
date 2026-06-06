@@ -579,6 +579,22 @@ describe("TerminalRenderer", () => {
     });
   }, 10000);
 
+  it("notifies render subscribers when cleared", () => {
+    const renderer = createTerminalRenderer();
+    let cleared = false;
+
+    renderer.onRender((frames, buffer) => {
+      if (frames.length === 0 && buffer.totalFrames === 0) {
+        cleared = true;
+      }
+    });
+
+    renderer.clear();
+
+    expect(cleared).toBe(true);
+    renderer.dispose();
+  });
+
   it("handles dispose correctly", () => {
     const renderer = createTerminalRenderer();
     const frames = generateBurstFrames(10);

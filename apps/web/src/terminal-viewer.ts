@@ -10,12 +10,20 @@
  */
 
 import { searchText } from "@opensymphony/ui-core";
-import type { DecodedFrame, ScrollbackBuffer, TerminalRenderConfig, TextStyle, ColorStyle } from "@opensymphony/ui-core";
+import type { DecodedFrame, ScrollbackBuffer, TextStyle, ColorStyle } from "@opensymphony/ui-core";
 import type { TerminalRenderer } from "@opensymphony/ui-core";
+
+export interface TerminalViewerConfig {
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+  wrapLines: boolean;
+  maxVisibleFrames: number;
+}
 
 export interface TerminalViewerOptions {
   container: HTMLElement;
-  config?: Partial<TerminalRenderConfig>;
+  config?: Partial<TerminalViewerConfig>;
   maxVisibleLines?: number;
 }
 
@@ -29,7 +37,7 @@ export interface TerminalViewerOptions {
  */
 export class TerminalViewer {
   private container: HTMLElement;
-  private config: TerminalRenderConfig;
+  private config: TerminalViewerConfig;
   private scrollContainer!: HTMLElement;
   private toolbar!: HTMLElement;
   private searchInput!: HTMLInputElement;
@@ -51,7 +59,7 @@ export class TerminalViewer {
       fontSize: options.config?.fontSize ?? 14,
       lineHeight: options.config?.lineHeight ?? 1.4,
       wrapLines: options.config?.wrapLines ?? true,
-      maxVisibleFrames: options.config?.maxVisibleFrames ?? 200,
+      maxVisibleFrames: options.maxVisibleLines ?? options.config?.maxVisibleFrames ?? 200,
     };
 
     // Build UI structure
@@ -212,7 +220,7 @@ export class TerminalViewer {
           this.scrollContainer.removeChild(removed);
         }
       }
-    } else {
+    } else if (decodedFrames.length === 0 || this.visibleDomWasPruned(buffer)) {
       // Rebuild visible DOM from buffer (for scrollToFrame/jumpToLatest/history view)
       this.rebuildVisibleFrames(buffer);
     }
@@ -223,6 +231,17 @@ export class TerminalViewer {
     if (buffer.atBottom) {
       this.scrollToBottom();
     }
+  }
+
+  /**
+   * Detect when the currently rendered history has fallen out of retained buffer history.
+   */
+  private visibleDomWasPruned(buffer: ScrollbackBuffer): boolean {
+    const firstLine = this.lineElements[0];
+    if (!firstLine) return true;
+
+    const firstIndex = Number(firstLine.dataset.lineIndex);
+    return !Number.isFinite(firstIndex) || firstIndex < buffer.offset;
   }
 
   /**
