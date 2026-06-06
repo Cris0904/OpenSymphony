@@ -24,6 +24,7 @@ export {
   TauriChannelTransport,
   TransportFactory,
 } from "./transports.js";
+export type { TauriChannel, TauriRuntime } from "./transports.js";
 export { MockGatewayTransport } from "./mock.js";
 export {
   discoverGateway,

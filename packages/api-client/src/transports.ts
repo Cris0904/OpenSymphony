@@ -9,7 +9,9 @@ import type {
   ActionDispatch,
   ActionReceipt,
   PageCursor,
+  StreamCursor,
 } from "@opensymphony/gateway-schema";
+import { pageCursorFirst } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, GatewayTransportConfig, ActionCapableTransport } from "./index.js";
 
 /**
@@ -590,7 +592,7 @@ export class WebSocketTransport implements GatewayTransport {
     }, delay);
   }
 
-  async *events(_cursor?: number): AsyncIterable<GatewayEnvelope> {
+  async *events(fromCursor?: { sequence: number; partition: string }): AsyncIterable<GatewayEnvelope> {
     await this.ensureConnected();
 
     // Create a promise-based queue for this subscriber
@@ -795,7 +797,7 @@ export class TauriChannelTransport implements GatewayTransport {
     });
   }
 
-  async *events(_cursor?: number): AsyncIterable<GatewayEnvelope> {
+  async *events(fromCursor?: { sequence: number; partition: string }): AsyncIterable<GatewayEnvelope> {
     const queue: GatewayEnvelope[] = [];
     let resolveNext: ((value: IteratorResult<GatewayEnvelope>) => void) | null = null;
 

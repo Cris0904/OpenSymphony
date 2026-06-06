@@ -663,8 +663,11 @@ pub async fn attach_gateway(
     }
 
     // Determine profile based on URL
-    let is_loopback =
-        parsed.host_str() == Some("127.0.0.1") || parsed.host_str() == Some("localhost");
+    let host = parsed.host_str();
+    let is_loopback = host == Some("127.0.0.1")
+        || host == Some("localhost")
+        || host == Some("::1")
+        || host == Some("0.0.0.0");
     let profile = if is_loopback {
         "loopback_http"
     } else {
