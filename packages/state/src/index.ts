@@ -129,16 +129,30 @@ export function gatewayReducer(
       };
     }
 
-    case "RUN_UPDATED":
+    case "RUN_UPDATED": {
+      const updatedRuns = new Map(state.run.runs).set(action.payload.run_id, action.payload);
+      // Mirror liveness from the full RunDetail into the dedicated liveness map
+      // to keep a single, consistent read path for UI consumers.
+      const updatedLiveness = new Map(state.run.liveness);
+      if (action.payload.liveness) {
+        updatedLiveness.set(action.payload.run_id, {
+          phase: action.payload.liveness.phase,
+          stream: action.payload.liveness.stream,
+          lastProgressAt: action.payload.liveness.latest_progress?.happened_at ?? null,
+          stallDeadlineAt: null,
+          reconnectAttempts: 0,
+        });
+      }
       return {
         ...state,
         run: {
-          ...state.run,
-          runs: new Map(state.run.runs).set(action.payload.run_id, action.payload),
+          runs: updatedRuns,
+          liveness: updatedLiveness,
           loading: false,
           error: null,
         },
       };
+    }
 
     case "TERMINAL_FRAMES_RECEIVED": {
       const frames = new Map(state.terminal.frames);
@@ -250,7 +264,7 @@ export function gatewayReducer(
       const existing = stallLiveness.get(action.runId);
       stallLiveness.set(action.runId, {
         phase: "stalled",
-        stream: existing?.stream ?? "stale",
+        stream: "stale",
         lastProgressAt: existing?.lastProgressAt ?? null,
         stallDeadlineAt: action.deadlineAt,
         reconnectAttempts: existing?.reconnectAttempts ?? 0,

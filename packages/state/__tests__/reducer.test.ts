@@ -46,7 +46,7 @@ function makeTaskGraphSnapshot(): TaskGraphSnapshot {
   };
 }
 
-function makeRunDetail(): RunDetail {
+function makeRunDetail(overrides?: Partial<RunDetail>): RunDetail {
   return {
     schema_version: { major: 1, minor: 0, patch: 0 },
     run_id: "run-1",
@@ -61,6 +61,7 @@ function makeRunDetail(): RunDetail {
     output_tokens: 0,
     cache_read_tokens: 0,
     runtime_seconds: 0,
+    ...overrides,
   };
 }
 
@@ -148,6 +149,41 @@ describe("gatewayReducer", () => {
     expect(state.run.runs.get("run-1")).toBe(run);
     expect(state.run.loading).toBe(false);
     expect(state.run.error).toBeNull();
+  });
+
+  it("RUN_UPDATED mirrors liveness from RunDetail into run.liveness map", () => {
+    const run = makeRunDetail({
+      liveness: {
+        phase: "active",
+        stream: "healthy",
+        latest_progress: {
+          sequence: 1,
+          event_id: "evt-1",
+          happened_at: "2025-01-01T00:00:00Z",
+          kind: "progress",
+          summary: "Working on task",
+        },
+      },
+    });
+    const state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: run,
+    });
+    const liveness = state.run.liveness.get("run-1");
+    expect(liveness).toBeDefined();
+    expect(liveness?.phase).toBe("active");
+    expect(liveness?.stream).toBe("healthy");
+    expect(liveness?.lastProgressAt).toBe("2025-01-01T00:00:00Z");
+    expect(liveness?.reconnectAttempts).toBe(0);
+  });
+
+  it("RUN_UPDATED without liveness does not pollute run.liveness map", () => {
+    const run = makeRunDetail({ liveness: null });
+    const state = gatewayReducer(initialState, {
+      type: "RUN_UPDATED",
+      payload: run,
+    });
+    expect(state.run.liveness.has("run-1")).toBe(false);
   });
 
   it("TERMINAL_FRAMES_RECEIVED stores frames and clears loading/error", () => {
@@ -356,8 +392,16 @@ describe("liveness reducer cases", () => {
     expect(liveness?.reconnectAttempts).toBe(0);
   });
 
-  it("LIVENESS_STALL sets stalled phase with deadline", () => {
-    const state = gatewayReducer(initialState, {
+  it("LIVENESS_STALL sets stalled phase with forced stale stream", () => {
+    // Even if the run was previously healthy, a stall forces the stream to stale
+    // so that safe-action matrix produces rehydrate: true for stalled runs.
+    let state = gatewayReducer(initialState, {
+      type: "LIVENESS_UPDATE",
+      runId: "run-1",
+      phase: "active",
+      stream: "healthy",
+    });
+    state = gatewayReducer(state, {
       type: "LIVENESS_STALL",
       runId: "run-1",
       deadlineAt: "2025-01-01T00:05:00Z",
