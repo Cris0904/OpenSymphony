@@ -530,8 +530,8 @@ pub async fn stop_daemon(state: State<'_, DesktopState>) -> CommandResult<serde_
 /// Query the status of the supervised daemon.
 #[command]
 pub async fn daemon_status(state: State<'_, DesktopState>) -> CommandResult<ProcessStatus> {
-    let handle_guard = state.daemon_handle.lock().await;
-    if let Some(ref handle) = *handle_guard {
+    let mut handle_guard = state.daemon_handle.lock().await;
+    if let Some(ref mut handle) = *handle_guard {
         let is_running = handle.is_running();
         // Derive state string from actual liveness check to avoid stale
         // enum values when the daemon crashes or is killed externally.

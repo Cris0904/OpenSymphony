@@ -249,8 +249,9 @@ impl DaemonHandle {
     /// Check if the daemon is currently running.
     ///
     /// Verifies both internal state and OS-level process liveness to detect
-    /// crashes or external kills.
-    pub fn is_running(&self) -> bool {
+    /// crashes or external kills. Updates internal state if the OS process
+    /// has died but our state still says running.
+    pub fn is_running(&mut self) -> bool {
         if self.pid.is_none()
             || !matches!(
                 self.state,
@@ -259,7 +260,19 @@ impl DaemonHandle {
         {
             return false;
         }
-        self.is_process_alive()
+        if !self.is_process_alive() {
+            // OS process died but state still says running - update to reflect reality.
+            // This prevents stale-state hazards where is_running() returns false
+            // but daemon_status() still reports state as "running".
+            warn!(pid = ?self.pid, "daemon process detected dead, updating state");
+            self.state = DaemonState::Stopped;
+            self.pid = None;
+            self.child = None;
+            self.owns_process = false;
+            false
+        } else {
+            true
+        }
     }
 
     /// Check if the OS process is still alive.
@@ -366,9 +379,11 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and polls with `try_wait()` to verify the process exits.
-    /// Uses a short retry loop (max 100 ms) so it remains safe for `Drop` and
-    /// async contexts while ensuring the process is actually reaped.
+    /// Sends SIGKILL and calls `wait()` to reap the zombie. This is safe
+    /// because SIGKILL is uncatchable: the process is guaranteed to exit
+    /// within milliseconds, so `wait()` returns immediately rather than
+    /// blocking indefinitely. Use this instead of `try_wait()` when you
+    /// need to guarantee the zombie is reaped (e.g., before PID reuse).
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -384,17 +399,9 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-
-            // Poll briefly so SIGKILL propagates and the child is reaped.
-            // 100 ms max keeps this safe for Drop and async callers.
-            let deadline = Instant::now() + Duration::from_millis(100);
-            while Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(_)) => break, // Process reaped.
-                    Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-                    Err(_) => break,
-                }
-            }
+            // Block briefly to reap the zombie. This returns almost immediately
+            // because SIGKILL is uncatchable — the process cannot ignore it.
+            let _ = child.wait();
         }
         self.child = None;
     }
@@ -466,7 +473,7 @@ mod tests {
     #[test]
     fn test_daemon_handle_creation() {
         let config = test_config();
-        let handle = DaemonHandle::new(config);
+        let mut handle = DaemonHandle::new(config);
         assert_eq!(handle.state(), &DaemonState::Stopped);
         assert!(handle.pid().is_none());
         assert!(!handle.is_running());
