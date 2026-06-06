@@ -123,25 +123,33 @@ pub async fn reveal_workspace(
 
 fn is_safe_workspace_path(path: &std::path::Path) -> bool {
     // Whitelist-based security check: default to false for unknown paths.
+    // Only allow paths under ~/.opensymphony/workspaces/ after full canonicalization.
     let Some(home) = dirs::home_dir() else {
         return false;
     };
+    
+    // Canonicalize home first to resolve any symlinks in the home path itself
     let Ok(canon_home) = home.canonicalize() else {
         return false;
     };
-    let canon_base = canon_home.join(".opensymphony");
-
-    // Try to canonicalize the input path and check containment
-    if let Ok(canon_path) = path.canonicalize() {
-        return canon_path.starts_with(&canon_base);
-    }
-
-    // If canonicalization fails (path doesn't exist), check literal prefix.
-    // Reject any path with .. components that can't be resolved.
-    if path.components().any(|c| c.as_os_str() == "..") {
+    
+    // Build the canonical base path
+    let canon_base = canon_home.join(".opensymphony").join("workspaces");
+    // Ensure the base directory exists for containment checks
+    if !canon_base.exists() {
         return false;
     }
-    path.starts_with(&canon_base)
+    let Ok(canon_base) = canon_base.canonicalize() else {
+        return false;
+    };
+    
+    // Try to canonicalize the input path - if it doesn't exist or can't be resolved, reject it
+    let Ok(canon_path) = path.canonicalize() else {
+        return false;
+    };
+    
+    // Check strict containment under the canonical base
+    canon_path.starts_with(&canon_base)
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,9 +268,19 @@ mod tests {
 
     #[test]
     fn test_safety_workspace_path_allows_home() {
+        // Create a temporary test workspace directory to test with real paths
         let home = dirs::home_dir().expect("home dir available");
-        let path = home.join(".opensymphony").join("workspaces").join("test");
-        assert!(is_safe_workspace_path(&path));
+        let test_workspace = home.join(".opensymphony").join("workspaces").join("test-safe-path");
+        
+        // Create the directory if it doesn't exist
+        std::fs::create_dir_all(&test_workspace).ok();
+        
+        let result = is_safe_workspace_path(&test_workspace);
+        
+        // Clean up
+        std::fs::remove_dir(&test_workspace).ok();
+        
+        assert!(result, "Existing workspace path under ~/.opensymphony/workspaces should be allowed");
     }
 
     #[test]
@@ -314,18 +332,34 @@ mod tests {
 
     #[test]
     fn test_is_safe_workspace_path_allows_opensymphony_subdirs() {
-        // Various valid workspace paths under .opensymphony should pass
+        // Create actual test workspace directories to test with real paths
         let home = dirs::home_dir().expect("home dir available");
+        let base = home.join(".opensymphony").join("workspaces");
+        
+        // Create base directory if it doesn't exist
+        std::fs::create_dir_all(&base).ok();
+        
         let valid = vec![
-            home.join(".opensymphony").join("workspaces").join("test"),
-            home.join(".opensymphony").join("workspaces").join("deep").join("nested").join("path"),
-            home.join(".opensymphony").join("workspaces").join("test-123"),
+            base.join("test-subdir-1"),
+            base.join("test-subdir-2").join("nested"),
+            base.join("test-subdir-3"),
         ];
-        for path in valid {
+        
+        // Create the test directories
+        for path in &valid {
+            std::fs::create_dir_all(path).ok();
+        }
+        
+        for path in &valid {
             assert!(
-                is_safe_workspace_path(&path),
+                is_safe_workspace_path(path),
                 "Path {:?} should be allowed", path
             );
+        }
+        
+        // Clean up
+        for path in valid.iter().rev() {
+            std::fs::remove_dir(path).ok();
         }
     }
 
