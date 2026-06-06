@@ -50,6 +50,7 @@ export class TerminalRenderer {
   }> = [];
   private rafId: RafHandle | null = null;
   private lastRenderTime = 0;
+  private generation = 0;
   private metrics: RenderMetrics;
   private renderCallback?: (frames: DecodedFrame[], buffer: ScrollbackBuffer) => void;
 
@@ -91,6 +92,7 @@ export class TerminalRenderer {
    * Decodes pending frames and updates the scrollback buffer.
    */
   private renderLoop = (timestamp: number): void => {
+    const renderGeneration = this.generation;
     const elapsed = timestamp - this.lastRenderTime;
 
     // Only render if enough time has passed (throttle to renderIntervalMs)
@@ -110,6 +112,9 @@ export class TerminalRenderer {
     const batch = this.pendingFrames.splice(0, this.config.batchSize);
     const decoded = decodeBatch(batch);
     const decodeTime = performance.now() - decodeStart;
+    if (renderGeneration !== this.generation) {
+      return;
+    }
 
     // Update metrics
     this.metrics.decodeTimeMs = decodeTime;
@@ -142,6 +147,9 @@ export class TerminalRenderer {
     if (this.renderCallback) {
       this.renderCallback(decoded, this.buffer);
     }
+    if (renderGeneration !== this.generation) {
+      return;
+    }
 
     // Continue loop if more frames pending
     if (this.pendingFrames.length > 0) {
@@ -164,8 +172,13 @@ export class TerminalRenderer {
   /**
    * Set callback for rendering updates.
    */
-  onRender(callback: (frames: DecodedFrame[], buffer: ScrollbackBuffer) => void): void {
+  onRender(callback: (frames: DecodedFrame[], buffer: ScrollbackBuffer) => void): () => void {
     this.renderCallback = callback;
+    return () => {
+      if (this.renderCallback === callback) {
+        this.renderCallback = undefined;
+      }
+    };
   }
 
   /**
@@ -207,6 +220,7 @@ export class TerminalRenderer {
    * Clear all frames and reset state.
    */
   clear(): void {
+    this.generation += 1;
     this.pendingFrames = [];
     this.buffer = createScrollbackBuffer(this.config.maxBufferCapacity);
     this.metrics = {

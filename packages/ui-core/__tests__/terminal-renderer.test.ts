@@ -631,6 +631,29 @@ describe("TerminalRenderer", () => {
     });
   }, 10000);
 
+  it("supports unsubscribing the render callback", () => {
+    const renderer = createTerminalRenderer();
+    let renderCount = 0;
+
+    const unsubscribe = renderer.onRender(() => {
+      renderCount++;
+    });
+    unsubscribe();
+
+    const frames = generateBurstFrames(5);
+    for (const frame of frames) {
+      renderer.queueFrame(frame.content, frame.encoding, frame);
+    }
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(renderCount).toBe(0);
+        renderer.dispose();
+        resolve();
+      }, 100);
+    });
+  }, 10000);
+
   it("jumps to latest output", () => {
     const renderer = createTerminalRenderer();
     const buffer = renderer.getBuffer();

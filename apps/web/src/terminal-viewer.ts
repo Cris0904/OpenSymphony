@@ -37,13 +37,15 @@ export interface TerminalViewerOptions {
 export class TerminalViewer {
   private container: HTMLElement;
   private config: TerminalViewerConfig;
-  private scrollContainer!: HTMLElement;
-  private toolbar!: HTMLElement;
-  private searchInput!: HTMLInputElement;
-  private searchButton!: HTMLButtonElement;
-  private copyButton!: HTMLButtonElement;
-  private jumpButton!: HTMLButtonElement;
-  private statusSpan!: HTMLSpanElement;
+  private renderer: TerminalRenderer | null;
+  private scrollContainer?: HTMLElement;
+  private toolbar?: HTMLElement;
+  private searchInput?: HTMLInputElement;
+  private searchButton?: HTMLButtonElement;
+  private copyButton?: HTMLButtonElement;
+  private jumpButton?: HTMLButtonElement;
+  private statusSpan?: HTMLSpanElement;
+  private detachRender?: () => void;
   /** Live DOM elements that are children of scrollContainer. */
   private lineElements: HTMLElement[] = [];
   private searchTerm = "";
@@ -51,7 +53,8 @@ export class TerminalViewer {
   private currentSearchIndex = 0;
   private pendingFocusFrameIndex: number | undefined;
 
-  constructor(private renderer: TerminalRenderer, options: TerminalViewerOptions) {
+  constructor(renderer: TerminalRenderer, options: TerminalViewerOptions) {
+    this.renderer = renderer;
     this.container = options.container;
     this.config = {
       fontFamily: options.config?.fontFamily ?? "Menlo, Monaco, 'Courier New', monospace",
@@ -85,8 +88,8 @@ export class TerminalViewer {
     `;
 
     // Toolbar
-    this.toolbar = document.createElement("div");
-    this.toolbar.style.cssText = `
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = `
       display: flex;
       gap: 8px;
       padding: 8px;
@@ -96,10 +99,10 @@ export class TerminalViewer {
     `;
 
     // Search input
-    this.searchInput = document.createElement("input");
-    this.searchInput.type = "text";
-    this.searchInput.placeholder = "Search terminal output...";
-    this.searchInput.style.cssText = `
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = "Search terminal output...";
+    searchInput.style.cssText = `
       flex: 1;
       padding: 4px 8px;
       background: #0d1117;
@@ -110,9 +113,9 @@ export class TerminalViewer {
     `;
 
     // Search button
-    this.searchButton = document.createElement("button");
-    this.searchButton.textContent = "Search";
-    this.searchButton.style.cssText = `
+    const searchButton = document.createElement("button");
+    searchButton.textContent = "Search";
+    searchButton.style.cssText = `
       padding: 4px 12px;
       background: #21262d;
       border: 1px solid #30363d;
@@ -123,9 +126,9 @@ export class TerminalViewer {
     `;
 
     // Copy button
-    this.copyButton = document.createElement("button");
-    this.copyButton.textContent = "Copy";
-    this.copyButton.style.cssText = `
+    const copyButton = document.createElement("button");
+    copyButton.textContent = "Copy";
+    copyButton.style.cssText = `
       padding: 4px 12px;
       background: #21262d;
       border: 1px solid #30363d;
@@ -136,9 +139,9 @@ export class TerminalViewer {
     `;
 
     // Jump to latest button
-    this.jumpButton = document.createElement("button");
-    this.jumpButton.textContent = "Latest";
-    this.jumpButton.style.cssText = `
+    const jumpButton = document.createElement("button");
+    jumpButton.textContent = "Latest";
+    jumpButton.style.cssText = `
       padding: 4px 12px;
       background: #238636;
       border: 1px solid #2ea043;
@@ -149,24 +152,24 @@ export class TerminalViewer {
     `;
 
     // Status span
-    this.statusSpan = document.createElement("span");
-    this.statusSpan.style.cssText = `
+    const statusSpan = document.createElement("span");
+    statusSpan.style.cssText = `
       margin-left: auto;
       color: #8b949e;
       font-size: 12px;
     `;
 
     // Add toolbar elements
-    this.toolbar.appendChild(this.searchInput);
-    this.toolbar.appendChild(this.searchButton);
-    this.toolbar.appendChild(this.copyButton);
-    this.toolbar.appendChild(this.jumpButton);
-    this.toolbar.appendChild(this.statusSpan);
-    this.container.appendChild(this.toolbar);
+    toolbar.appendChild(searchInput);
+    toolbar.appendChild(searchButton);
+    toolbar.appendChild(copyButton);
+    toolbar.appendChild(jumpButton);
+    toolbar.appendChild(statusSpan);
+    this.container.appendChild(toolbar);
 
     // Scroll container for terminal output
-    this.scrollContainer = document.createElement("div");
-    this.scrollContainer.style.cssText = `
+    const scrollContainer = document.createElement("div");
+    scrollContainer.style.cssText = `
       flex: 1;
       overflow-y: auto;
       padding: 8px;
@@ -174,7 +177,7 @@ export class TerminalViewer {
       line-height: ${this.config.lineHeight};
       word-wrap: ${this.config.wrapLines ? "break-word" : "normal"};
     `;
-    this.container.appendChild(this.scrollContainer);
+    this.container.appendChild(scrollContainer);
 
     // Bound handlers for cleanup in dispose()
     this._onSearch = () => this.performSearch();
@@ -184,23 +187,34 @@ export class TerminalViewer {
     this._onCopy = () => this.copyToClipboard();
     this._onJump = () => this.jumpToLatest();
 
-    this.searchButton.addEventListener("click", this._onSearch);
-    this.searchInput.addEventListener("keypress", this._onSearchKeypress);
-    this.copyButton.addEventListener("click", this._onCopy);
-    this.jumpButton.addEventListener("click", this._onJump);
+    searchButton.addEventListener("click", this._onSearch);
+    searchInput.addEventListener("keypress", this._onSearchKeypress);
+    copyButton.addEventListener("click", this._onCopy);
+    jumpButton.addEventListener("click", this._onJump);
+
+    this.toolbar = toolbar;
+    this.searchInput = searchInput;
+    this.searchButton = searchButton;
+    this.copyButton = copyButton;
+    this.jumpButton = jumpButton;
+    this.statusSpan = statusSpan;
+    this.scrollContainer = scrollContainer;
   }
 
   /** Bound handlers for removeEventListener in dispose() */
-  private _onSearch!: () => void;
-  private _onSearchKeypress!: (e: KeyboardEvent) => void;
-  private _onCopy!: () => void;
-  private _onJump!: () => void;
+  private _onSearch?: () => void;
+  private _onSearchKeypress?: (e: KeyboardEvent) => void;
+  private _onCopy?: () => void;
+  private _onJump?: () => void;
 
   /**
    * Attach to the renderer and listen for updates.
    */
   private attachRenderer(): void {
-    this.renderer.onRender((decodedFrames: DecodedFrame[], buffer: ScrollbackBuffer) => {
+    const renderer = this.renderer;
+    if (!renderer) return;
+
+    this.detachRender = renderer.onRender((decodedFrames: DecodedFrame[], buffer: ScrollbackBuffer) => {
       this.renderFrames(decodedFrames, buffer);
     });
   }
@@ -212,6 +226,9 @@ export class TerminalViewer {
    * rebuilds the visible DOM from the buffer's current visibleFrames.
    */
   private renderFrames(decodedFrames: DecodedFrame[], buffer: ScrollbackBuffer): void {
+    const scrollContainer = this.scrollContainer;
+    if (!scrollContainer) return;
+
     if (decodedFrames.length > 0 && buffer.atBottom) {
       // Append only new frames
       const firstFrameIndex = buffer.totalFrames - decodedFrames.length;
@@ -219,15 +236,15 @@ export class TerminalViewer {
         const frame = decodedFrames[i];
         const lineElement = this.createLineElement(frame, firstFrameIndex + i);
         this.lineElements.push(lineElement);
-        this.scrollContainer.appendChild(lineElement);
+        scrollContainer.appendChild(lineElement);
       }
 
       // Enforce max visible lines by removing oldest from DOM
       const excess = this.lineElements.length - this.config.maxVisibleFrames;
       for (let i = 0; i < excess; i++) {
         const removed = this.lineElements.shift();
-        if (removed && removed.parentNode === this.scrollContainer) {
-          this.scrollContainer.removeChild(removed);
+        if (removed && removed.parentNode === scrollContainer) {
+          scrollContainer.removeChild(removed);
         }
       }
     } else if (decodedFrames.length === 0 || this.visibleDomWasPruned(buffer)) {
@@ -258,7 +275,10 @@ export class TerminalViewer {
    * Rebuild the DOM from the current visible frame window.
    */
   private rebuildVisibleFrames(buffer: ScrollbackBuffer): void {
-    this.scrollContainer.innerHTML = "";
+    const scrollContainer = this.scrollContainer;
+    if (!scrollContainer) return;
+
+    scrollContainer.innerHTML = "";
     this.lineElements = [];
 
     const window = this.getRenderableWindow(buffer);
@@ -266,7 +286,7 @@ export class TerminalViewer {
       const frame = window.frames[i];
       const lineElement = this.createLineElement(frame, window.offset + i);
       this.lineElements.push(lineElement);
-      this.scrollContainer.appendChild(lineElement);
+      scrollContainer.appendChild(lineElement);
     }
   }
 
@@ -274,21 +294,20 @@ export class TerminalViewer {
    * Pick the DOM-sized slice to render from the buffer window.
    */
   private getRenderableWindow(buffer: ScrollbackBuffer): { frames: DecodedFrame[]; offset: number } {
+    const focusIndex = this.pendingFocusFrameIndex;
+    this.pendingFocusFrameIndex = undefined;
+
     if (buffer.visibleFrames.length <= this.config.maxVisibleFrames) {
       return { frames: buffer.visibleFrames, offset: buffer.offset };
     }
 
     let start = buffer.atBottom ? buffer.visibleFrames.length - this.config.maxVisibleFrames : 0;
-    const focusIndex = this.pendingFocusFrameIndex;
     const windowEnd = buffer.offset + buffer.visibleFrames.length;
     if (focusIndex !== undefined && focusIndex >= buffer.offset && focusIndex < windowEnd) {
       const focusOffset = focusIndex - buffer.offset;
       const centeredStart = focusOffset - Math.floor(this.config.maxVisibleFrames / 2);
       start = Math.max(0, Math.min(centeredStart, buffer.visibleFrames.length - this.config.maxVisibleFrames));
     }
-    // Reset after consuming to avoid stale focus on subsequent rebuilds
-    this.pendingFocusFrameIndex = undefined;
-
     return {
       frames: buffer.visibleFrames.slice(start, start + this.config.maxVisibleFrames),
       offset: buffer.offset + start,
@@ -368,11 +387,15 @@ export class TerminalViewer {
    * Update status display.
    */
   private updateStatus(buffer: ScrollbackBuffer): void {
-    const metrics = this.renderer.getMetrics();
+    const renderer = this.renderer;
+    const statusSpan = this.statusSpan;
+    if (!renderer || !statusSpan) return;
+
+    const metrics = renderer.getMetrics();
     const fps = metrics.fps > 0 ? `${metrics.fps} fps` : "idle";
     const memory = this.formatMemory(metrics.memoryBytes);
 
-    this.statusSpan.textContent = `${buffer.totalFrames} frames | ${fps} | ${memory} | ${buffer.visibleFrames.length} visible`;
+    statusSpan.textContent = `${buffer.totalFrames} frames | ${fps} | ${memory} | ${buffer.visibleFrames.length} visible`;
   }
 
   /**
@@ -388,8 +411,12 @@ export class TerminalViewer {
    * Scroll to bottom of terminal output.
    */
   private scrollToBottom(): void {
+    const scrollContainer = this.scrollContainer;
+    if (!scrollContainer) return;
+
     requestAnimationFrame(() => {
-      this.scrollContainer.scrollTop = this.scrollContainer.scrollHeight;
+      if (this.scrollContainer !== scrollContainer) return;
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
     });
   }
 
@@ -398,7 +425,11 @@ export class TerminalViewer {
    * Searches the full scrollback buffer history, not just visible DOM elements.
    */
   private performSearch(): void {
-    this.searchTerm = this.searchInput.value.trim();
+    const renderer = this.renderer;
+    const searchInput = this.searchInput;
+    if (!renderer || !searchInput) return;
+
+    this.searchTerm = searchInput.value.trim();
 
     // Clear previous search highlights
     this.clearSearchHighlights();
@@ -411,7 +442,7 @@ export class TerminalViewer {
     }
 
     // Search the full scrollback buffer history via the renderer.
-    const buffer = this.renderer.getBuffer();
+    const buffer = renderer.getBuffer();
     this.searchResults = searchText(buffer, this.searchTerm, false);
 
     // Highlight first result if it's in visible range
@@ -446,7 +477,7 @@ export class TerminalViewer {
     this.pendingFocusFrameIndex = frameIndex;
 
     // Use renderer's scrollTo to bring the frame into view
-    this.renderer.scrollToFrame(frameIndex);
+    this.renderer?.scrollToFrame(frameIndex);
 
     // Apply visual highlight to the matching DOM element after render.
     requestAnimationFrame(() => this.highlightLine(frameIndex));
@@ -469,17 +500,23 @@ export class TerminalViewer {
    * Uses the full scrollback buffer to avoid losing pruned data.
    */
   private copyToClipboard(): void {
+    const renderer = this.renderer;
+    const copyButton = this.copyButton;
+    if (!renderer || !copyButton) return;
+
     // Get text from full scrollback buffer, not just visible DOM
-    const buffer = this.renderer.getBuffer();
+    const buffer = renderer.getBuffer();
     const text = buffer.allFrames
       .map((frame) => frame.text)
       .join("\n");
 
     navigator.clipboard.writeText(text).then(() => {
-      const originalText = this.copyButton.textContent;
-      this.copyButton.textContent = "Copied!";
+      const originalText = copyButton.textContent;
+      copyButton.textContent = "Copied!";
       setTimeout(() => {
-        this.copyButton.textContent = originalText;
+        if (this.copyButton === copyButton) {
+          copyButton.textContent = originalText;
+        }
       }, 1500);
     }).catch(() => {
       // Fallback for browsers that don't support clipboard API
@@ -500,20 +537,44 @@ export class TerminalViewer {
    */
   private jumpToLatest(): void {
     this.pendingFocusFrameIndex = undefined;
-    this.renderer.jumpToLatest();
+    this.renderer?.jumpToLatest();
   }
 
   /**
    * Dispose of the viewer and remove event listeners.
    */
   dispose(): void {
-    this.searchButton.removeEventListener("click", this._onSearch);
-    this.searchInput.removeEventListener("keypress", this._onSearchKeypress);
-    this.copyButton.removeEventListener("click", this._onCopy);
-    this.jumpButton.removeEventListener("click", this._onJump);
+    if (this.searchButton && this._onSearch) {
+      this.searchButton.removeEventListener("click", this._onSearch);
+    }
+    if (this.searchInput && this._onSearchKeypress) {
+      this.searchInput.removeEventListener("keypress", this._onSearchKeypress);
+    }
+    if (this.copyButton && this._onCopy) {
+      this.copyButton.removeEventListener("click", this._onCopy);
+    }
+    if (this.jumpButton && this._onJump) {
+      this.jumpButton.removeEventListener("click", this._onJump);
+    }
 
-    this.container.innerHTML = "";
+    this.detachRender?.();
+    this.detachRender = undefined;
+    this.renderer = null;
+    this.container.replaceChildren();
     this.lineElements = [];
+    this.searchResults = [];
+    this.pendingFocusFrameIndex = undefined;
+    this.toolbar = undefined;
+    this.searchInput = undefined;
+    this.searchButton = undefined;
+    this.copyButton = undefined;
+    this.jumpButton = undefined;
+    this.statusSpan = undefined;
+    this.scrollContainer = undefined;
+    this._onSearch = undefined;
+    this._onSearchKeypress = undefined;
+    this._onCopy = undefined;
+    this._onJump = undefined;
   }
 }
 
