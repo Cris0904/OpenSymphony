@@ -6,293 +6,372 @@ import type {
   TerminalSnapshot,
   TaskGraphSnapshot,
   GatewayCapabilities,
+  ActionDispatch,
+  ActionReceipt,
   PageCursor,
-  TransportProfile,
 } from "@opensymphony/gateway-schema";
-import { pageCursorFirst } from "@opensymphony/gateway-schema";
+import type { GatewayTransport, GatewayTransportConfig, ActionCapableTransport } from "./index.js";
 
 /**
- * Tauri channel interface for streaming events.
- * This abstracts the @tauri-apps/api/channel types so we don't
- * depend on the Tauri SDK directly in the client package.
- */
-interface TauriChannel<T> {
-  onmessage?: (data: T) => void;
-  close?: () => void;
-}
-
-/** Transport adapter interface for all gateway communication. */
-export interface GatewayTransport {
-  readonly baseUri: string;
-
-  health(): Promise<GatewayCapabilities>;
-  snapshot(): Promise<DashboardSnapshot>;
-  taskGraph(projectId: string): Promise<TaskGraphSnapshot>;
-  runDetail(runId: string): Promise<RunDetail>;
-  runEvents(runId: string): Promise<RunEventPage>;
-  terminalSnapshot(runId: string, terminalId: string): Promise<TerminalSnapshot>;
-
-  /** Subscribe to gateway event stream; returns an async iterable. */
-  events(): AsyncIterable<GatewayEnvelope>;
-
-  /** Subscribe to terminal frame stream for a run. */
-  terminalFrames(runId: string): AsyncIterable<GatewayEnvelope>;
-
-  close(): Promise<void>;
-}
-
-export interface GatewayTransportConfig {
-  baseUri: string;
-  authToken?: string;
-  transport?: TransportProfile;
-}
-
-/**
- * Parse a complete SSE event block into a GatewayEnvelope.
- * Handles multi-line `data:` fields properly by concatenating them.
- */
-function parseSSEEvent(eventBlock: string): GatewayEnvelope | null {
-  const lines = eventBlock.split("\n");
-  const dataLines: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith("data: ")) {
-      dataLines.push(line.slice(6));
-    } else if (line.startsWith("data:")) {
-      // Handle `data:` with no space
-      dataLines.push(line.slice(5));
-    }
-  }
-
-  if (dataLines.length === 0) {
-    return null;
-  }
-
-  // Join multi-line data fields
-  const data = dataLines.join("\n");
-  return parseSSEData(data);
-}
-
-/**
- * Parse the concatenated SSE data field into a GatewayEnvelope.
- */
-function parseSSEData(data: string): GatewayEnvelope | null {
-  const trimmed = data.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed) as GatewayEnvelope;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * HTTP-based transport adapter for the OpenSymphony Gateway.
+ * HTTP-based transport adapter using fetch().
  *
- * Uses fetch() for REST endpoints and EventSource for SSE streams.
- * Supports local loopback and remote gateway profiles.
+ * Supports REST endpoints for snapshots/reads/mutations and SSE
+ * for live event streams. Designed to be the baseline contract
+ * that all other transport adapters must satisfy.
  */
-export class HttpGatewayTransport implements GatewayTransport {
+export class HttpGatewayTransport implements GatewayTransport, ActionCapableTransport {
   readonly baseUri: string;
-  private readonly authToken?: string;
-  private abortController: AbortController;
+  private authToken?: string;
+  private closed = false;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelayMs = 1000;
+  private lastEventTimestamp: number | null = null;
+  private streamHealthy = true;
+  private readonly streamHealthTimeoutMs = 30_000;
+  private abortController: AbortController | null = null;
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
     this.authToken = config.authToken;
-    this.abortController = new AbortController();
   }
 
-  private headers(): Record<string, string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    };
-    if (this.authToken) {
-      headers["Authorization"] = `Bearer ${this.authToken}`;
-    }
-    return headers;
-  }
-
-  private async get<T>(path: string): Promise<T> {
-    const url = `${this.baseUri}${path}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: this.headers(),
-      signal: this.abortController?.signal,
-    });
-    if (!response.ok) {
-      throw new Error(
-        `HTTP ${response.status} from ${url}: ${response.statusText}`,
-      );
-    }
-    return (await response.json()) as T;
-  }
+  // -- REST reads --
 
   async health(): Promise<GatewayCapabilities> {
-    return this.get<GatewayCapabilities>("/api/v1/capabilities");
+    const response = await this.fetchJson(`${this.baseUri}/api/v1/health`);
+    return response as GatewayCapabilities;
   }
 
   async snapshot(): Promise<DashboardSnapshot> {
-    return this.get<DashboardSnapshot>("/api/v1/dashboard/snapshot");
+    const response = await this.fetchJson(`${this.baseUri}/api/v1/snapshot`);
+    return response as DashboardSnapshot;
   }
 
   async taskGraph(projectId: string): Promise<TaskGraphSnapshot> {
-    return this.get<TaskGraphSnapshot>(
-      `/api/v1/projects/${projectId}/taskgraph`,
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/projects/${encodeURIComponent(projectId)}/task-graph`,
     );
+    return response as TaskGraphSnapshot;
   }
 
   async runDetail(runId: string): Promise<RunDetail> {
-    return this.get<RunDetail>(`/api/v1/runs/${runId}`);
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}`,
+    );
+    return response as RunDetail;
   }
 
-  async runEvents(
-    runId: string,
-    cursor?: PageCursor,
-  ): Promise<RunEventPage> {
-    const pageCursor = cursor ?? pageCursorFirst(100);
+  async runEvents(runId: string, cursor?: PageCursor): Promise<RunEventPage> {
     const params = new URLSearchParams();
-    if (pageCursor.page_token) {
-      params.set("page_token", pageCursor.page_token);
-    }
-    params.set("page_size", String(pageCursor.page_size));
-    return this.get<RunEventPage>(
-      `/api/v1/runs/${runId}/events?${params.toString()}`,
+    if (cursor?.page_token) params.set("page_token", cursor.page_token);
+    params.set("page_size", String(cursor?.page_size ?? 100));
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/events?${params}`,
     );
+    return response as RunEventPage;
   }
 
   async terminalSnapshot(
     runId: string,
     terminalId: string,
   ): Promise<TerminalSnapshot> {
-    return this.get<TerminalSnapshot>(
-      `/api/v1/runs/${runId}/terminal/${terminalId}/snapshot`,
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/terminals/${encodeURIComponent(terminalId)}/snapshot`,
     );
+    return response as TerminalSnapshot;
   }
 
-  async *events(cursor?: number): AsyncIterable<GatewayEnvelope> {
-    // Use SSE for event streaming with cursor-based replay
-    const params = new URLSearchParams();
-    if (cursor !== undefined) {
-      params.set("cursor", String(cursor));
+  // -- Event streams (SSE) --
+
+  async *events(fromCursor?: { sequence: number; partition: string }): AsyncIterable<GatewayEnvelope> {
+    const url = new URL(`${this.baseUri}/api/v1/events`);
+    if (fromCursor) {
+      url.searchParams.set("cursor_sequence", String(fromCursor.sequence));
+      url.searchParams.set("cursor_partition", fromCursor.partition);
     }
-    const url = `${this.baseUri}/api/v1/events?${params.toString()}`;
-
-    // For SSE, we create an EventSource-like pattern using fetch + ReadableStream
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        ...this.headers(),
-        Accept: "text/event-stream",
-      },
-      signal: this.abortController.signal,
-    });
-
-    if (!response.ok || !response.body) {
-      throw new Error(
-        `HTTP ${response?.status} from SSE stream: ${response?.statusText}`,
-      );
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let currentData = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          // Flush remaining data
-          if (currentData.trim()) {
-            yield parseSSEData(currentData);
-          }
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        // SSE events are separated by double newlines
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-
-        for (const event of events) {
-          if (!event.trim()) continue;
-          const parsed = parseSSEEvent(event);
-          if (parsed) {
-            yield parsed;
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+    yield* this.streamEvents(url);
   }
 
   async *terminalFrames(runId: string): AsyncIterable<GatewayEnvelope> {
-    // Use SSE for terminal frame streaming
-    const url = `${this.baseUri}/api/v1/streams/terminal/${runId}`;
+    const url = new URL(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/terminal/stream`,
+    );
+    yield* this.streamEvents(url);
+  }
 
-    const response = await fetch(url, {
-      method: "GET",
+  /** Shared SSE stream handler with reconnect logic. */
+  private async *streamEvents(url: URL): AsyncIterable<GatewayEnvelope> {
+    while (!this.closed) {
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+      let shouldReconnect = false;
+      try {
+        const controller = new AbortController();
+        this.abortController = controller;
+        const response = await fetch(url.toString(), {
+          ...this.buildRequestInit(),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          console.error(`Stream HTTP error: ${response.status} ${response.statusText}`);
+          shouldReconnect = true;
+        } else {
+          reader = response.body?.getReader() ?? null;
+          if (!reader) {
+            console.error("Stream response has no readable body");
+            shouldReconnect = true;
+          } else {
+            for await (const envelope of this.parseSSE(reader)) {
+              this.lastEventTimestamp = Date.now();
+              this.streamHealthy = true;
+              this.reconnectAttempts = 0;
+              yield envelope;
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          break; // Intentional close.
+        }
+        console.error("Stream fetch/parse error:", err);
+        shouldReconnect = true;
+      } finally {
+        reader?.releaseLock();
+      }
+
+      if (!this.closed && shouldReconnect) {
+        this.streamHealthy = false;
+        await this.waitForReconnect();
+      }
+    }
+  }
+
+  /** Parse an SSE stream into GatewayEnvelope objects. */
+  private async *parseSSE(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+  ): AsyncIterable<GatewayEnvelope> {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "";
+    let currentId = "";
+    let currentRetry = 0;
+    let currentData = "";
+
+    while (!this.closed) {
+      const { done, value } = await reader.read();
+      if (done) {
+        // Process any remaining buffer content before exiting.
+        // First, flush any accumulated currentData.
+        if (currentData) {
+          try {
+            const envelope = JSON.parse(currentData) as GatewayEnvelope;
+            yield envelope;
+          } catch (err) {
+            console.error("SSE parse error: malformed JSON event data (trailing buffer)", err);
+          }
+        }
+        // Also process any remaining buffer that might contain a partial event.
+        if (buffer.trim()) {
+          // Treat remaining buffer as potential data if it doesn't start with a field prefix.
+          const remainingLines = buffer.trim().split("\n");
+          let pendingData = "";
+          for (const line of remainingLines) {
+            if (line.startsWith("data: ")) {
+              pendingData += (pendingData ? "\n" : "") + line.slice(6);
+            } else if (line === "") {
+              // Empty line marks event boundary.
+              if (pendingData) {
+                try {
+                  const envelope = JSON.parse(pendingData) as GatewayEnvelope;
+                  yield envelope;
+                } catch (err) {
+                  console.error("SSE parse error: malformed JSON event data (buffer flush)", err);
+                }
+                pendingData = "";
+              }
+            }
+          }
+          // Flush any remaining pending data.
+          if (pendingData) {
+            try {
+              const envelope = JSON.parse(pendingData) as GatewayEnvelope;
+              yield envelope;
+            } catch (err) {
+              console.error("SSE parse error: malformed JSON event data (final buffer)", err);
+            }
+          }
+        }
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        // Empty line = end of event block.
+        if (line === "") {
+          if (currentData) {
+            try {
+              const envelope = JSON.parse(currentData) as GatewayEnvelope;
+              yield envelope;
+            } catch (err) {
+              console.error("SSE parse error: malformed JSON event data", err);
+            }
+            currentEvent = "";
+            currentId = "";
+            currentRetry = 0;
+            currentData = "";
+          }
+          continue;
+        }
+
+        if (line.startsWith("event: ")) {
+          currentEvent = line.slice(7);
+        } else if (line.startsWith("id: ")) {
+          currentId = line.slice(4);
+        } else if (line.startsWith("retry: ")) {
+          currentRetry = parseInt(line.slice(7), 10) || 0;
+        } else if (line.startsWith("data: ")) {
+          // Multi-line data: append with newline.
+          if (currentData) currentData += "\n";
+          currentData += line.slice(6);
+        } else if (line.startsWith(":")) {
+          // SSE comment line, ignore.
+        }
+        // Per SSE spec, unrecognized field names are discarded.
+      }
+
+      if (currentRetry > 0) {
+        this.reconnectDelayMs = currentRetry;
+      }
+    }
+  }
+
+  // -- Action mutations --
+
+  async dispatchAction(action: ActionDispatch): Promise<ActionReceipt> {
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/actions/dispatch`,
+      {
+        method: "POST",
+        body: JSON.stringify(action),
+      },
+    );
+    return response as ActionReceipt;
+  }
+
+  async cancelRun(runId: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `cancel-${runId}-${crypto.randomUUID()}`,
+      action_kind: "cancel",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `cancel-${runId}`,
+    });
+  }
+
+  async retryRun(runId: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `retry-${runId}-${crypto.randomUUID()}`,
+      action_kind: "retry",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `retry-${runId}`,
+    });
+  }
+
+  async resumeRun(runId: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `resume-${runId}-${crypto.randomUUID()}`,
+      action_kind: "resume",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `resume-${runId}`,
+    });
+  }
+
+  // -- Lifecycle --
+
+  async close(): Promise<void> {
+    this.closed = true;
+    this.abortController?.abort();
+  }
+
+  // -- Stream health diagnostics --
+
+  /** Whether the stream has received events recently. */
+  isStreamHealthy(): boolean {
+    if (this.lastEventTimestamp === null) return true;
+    return Date.now() - this.lastEventTimestamp < this.streamHealthTimeoutMs;
+  }
+
+  /** Reconnect attempt count since last successful event. */
+  getReconnectAttempts(): number {
+    return this.reconnectAttempts;
+  }
+
+  // -- Private helpers --
+
+  private buildRequestInit(): RequestInit {
+    const init: RequestInit = {
       headers: {
-        ...this.headers(),
         Accept: "text/event-stream",
       },
-      signal: this.abortController.signal,
-    });
+    };
+    if (this.authToken) {
+      init.headers = {
+        ...init.headers,
+        Authorization: `Bearer ${this.authToken}`,
+      };
+    }
+    return init;
+  }
 
-    if (!response.ok || !response.body) {
+  private async fetchJson(url: string, init?: RequestInit): Promise<unknown> {
+    const method = init?.method ?? "GET";
+    const headers: Record<string, string> = {
+      ...(init?.headers as Record<string, string> ?? {}),
+    };
+
+    // Only set Content-Type for requests with a body.
+    if (method !== "GET" && method !== "HEAD") {
+      headers["Content-Type"] = "application/json";
+    }
+
+    const requestInit: RequestInit = { ...init, headers };
+    if (this.authToken) {
+      requestInit.headers = {
+        ...requestInit.headers,
+        Authorization: `Bearer ${this.authToken}`,
+      };
+    }
+
+    const response = await fetch(url, requestInit);
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
       throw new Error(
-        `HTTP ${response?.status} from terminal stream: ${response?.statusText}`,
+        `HTTP ${response.status} ${response.statusText}: ${body}`,
       );
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let currentData = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          // Flush remaining data
-          if (currentData.trim()) {
-            yield parseSSEData(currentData);
-          }
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        // SSE events are separated by double newlines
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-
-        for (const event of events) {
-          if (!event.trim()) continue;
-          const parsed = parseSSEEvent(event);
-          if (parsed) {
-            yield parsed;
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
+    return response.json();
   }
 
-  async close(): Promise<void> {
-    this.abortController.abort();
+  private async waitForReconnect(): Promise<void> {
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      throw new Error(
+        `Max reconnect attempts (${this.maxReconnectAttempts}) reached`,
+      );
+    }
+    const delay = this.reconnectDelayMs * Math.pow(2, this.reconnectAttempts - 1);
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }
 
-/**
- * WebSocket-based transport adapter for the OpenSymphony Gateway.
- *
- * Uses WebSocket for bidirectional streaming of events and terminal frames.
- * Supports cursor-based replay and automatic reconnection.
- */
 export class WebSocketTransport implements GatewayTransport {
   readonly baseUri: string;
   private readonly authToken?: string;
@@ -628,6 +707,7 @@ export class WebSocketTransport implements GatewayTransport {
  * 3. Tauri channels (this transport) - high-volume frames to webview
  * 4. Loopback HTTP/WebSocket - compatibility baseline
  */
+
 export class TauriChannelTransport implements GatewayTransport {
   readonly baseUri: string;
   private readonly authToken?: string;
@@ -781,6 +861,7 @@ export class TauriChannelTransport implements GatewayTransport {
  * 3. Tauri channels (Rust backend to webview) - high-volume frames
  * 4. Loopback HTTP/WebSocket - compatibility baseline
  */
+
 export class TransportFactory {
   /**
    * Create a transport based on the recommended profile and available capabilities.
