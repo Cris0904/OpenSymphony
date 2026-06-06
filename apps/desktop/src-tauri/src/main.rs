@@ -7,13 +7,17 @@ use std::process;
 use tauri::Manager;
 
 mod commands;
+mod daemon;
 
 fn main() {
+    let desktop_state = commands::DesktopState::new();
+
     if let Err(e) = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .manage(desktop_state)
         .manage(commands::SubscriptionState::default())
         .manage(std::sync::RwLock::new(
             commands::GatewayConnection::default(),
@@ -40,6 +44,14 @@ fn main() {
             commands::subscribe_terminal,
             commands::unsubscribe_events,
             commands::unsubscribe_terminal,
+            // COE-404: Connection profile and daemon management
+            commands::store_profile,
+            commands::list_profiles,
+            commands::set_active_profile,
+            commands::probe_gateway,
+            commands::discover_default_gateway,
+            commands::start_daemon,
+            commands::stop_daemon,
         ])
         .run(tauri::generate_context!())
     {
