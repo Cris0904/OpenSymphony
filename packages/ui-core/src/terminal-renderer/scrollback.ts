@@ -22,6 +22,9 @@ export interface ScrollbackBuffer {
 
   /** Whether we are at the bottom (latest output visible). */
   atBottom: boolean;
+
+  /** Full ring buffer of frames (for scrolling to arbitrary positions). */
+  allFrames: DecodedFrame[];
 }
 
 /**
@@ -35,6 +38,7 @@ export function createScrollbackBuffer(capacity = 1000): ScrollbackBuffer {
     offset: 0,
     capacity,
     atBottom: true,
+    allFrames: [],
   };
 }
 
@@ -46,6 +50,17 @@ export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): 
   if (frames.length === 0) return buffer;
 
   const newTotal = buffer.totalFrames + frames.length;
+
+  // Append to full history (capped to 10x capacity to prevent unbounded growth)
+  const maxHistory = buffer.capacity * 10;
+  const newAllFrames = [...buffer.allFrames, ...frames];
+  let historyOffset = 0;
+  if (newAllFrames.length > maxHistory) {
+    historyOffset = newAllFrames.length - maxHistory;
+    newAllFrames.splice(0, historyOffset);
+  }
+
+  // Update visible frames
   let newVisible = [...buffer.visibleFrames, ...frames];
   let newOffset = buffer.offset;
 
@@ -62,24 +77,34 @@ export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): 
     visibleFrames: newVisible,
     offset: newOffset,
     atBottom: buffer.atBottom,
+    allFrames: newAllFrames,
   };
 }
 
 /**
  * Scroll to a specific frame index (relative to totalFrames).
- * Returns the new buffer state with updated offset.
+ * Returns the new buffer state with updated offset and visible frames.
  */
 export function scrollTo(buffer: ScrollbackBuffer, targetIndex: number): ScrollbackBuffer {
   const clampedTarget = Math.max(0, Math.min(targetIndex, buffer.totalFrames - 1));
 
-  // Calculate the offset to show frames around the target
-  const halfCapacity = Math.floor(buffer.capacity / 2);
-  const newOffset = Math.max(0, clampedTarget - halfCapacity);
+  // Map targetIndex to position in allFrames (accounting for history pruning)
+  const historyStartIndex = Math.max(0, buffer.totalFrames - buffer.allFrames.length);
+  if (clampedTarget < historyStartIndex) {
+    // Target frame has been pruned from history
+    return {
+      ...buffer,
+      atBottom: false,
+    };
+  }
 
-  // Slice visible frames from the full set (we only have visibleFrames)
-  // In practice, we'd need the full frame array, but for the prototype we use
-  // the visible frames and adjust the offset accordingly
-  const newVisible = buffer.visibleFrames;
+  const posInAllFrames = clampedTarget - historyStartIndex;
+  const halfCapacity = Math.floor(buffer.capacity / 2);
+  const startIdx = Math.max(0, posInAllFrames - halfCapacity);
+  const endIdx = Math.min(buffer.allFrames.length, startIdx + buffer.capacity);
+
+  const newVisible = buffer.allFrames.slice(startIdx, endIdx);
+  const newOffset = historyStartIndex + startIdx;
 
   return {
     ...buffer,
@@ -100,7 +125,7 @@ export function jumpToLatest(buffer: ScrollbackBuffer): ScrollbackBuffer {
 }
 
 /**
- * Search for text within the visible frames.
+ * Search for text within all frames.
  * Returns indices of frames containing the search text.
  */
 export function searchText(
@@ -113,12 +138,14 @@ export function searchText(
   const searchQuery = caseSensitive ? query : query.toLowerCase();
   const results: number[] = [];
 
-  for (let i = 0; i < buffer.visibleFrames.length; i++) {
-    const frame = buffer.visibleFrames[i];
+  const historyStartIndex = Math.max(0, buffer.totalFrames - buffer.allFrames.length);
+
+  for (let i = 0; i < buffer.allFrames.length; i++) {
+    const frame = buffer.allFrames[i];
     const frameText = caseSensitive ? frame.text : frame.text.toLowerCase();
 
     if (frameText.includes(searchQuery)) {
-      results.push(buffer.offset + i);
+      results.push(historyStartIndex + i);
     }
   }
 
@@ -133,14 +160,16 @@ export function copyFrameRange(
   startIndex: number,
   endIndex: number,
 ): string {
-  const startIdx = Math.max(0, startIndex - buffer.offset);
-  const endIdx = Math.min(buffer.visibleFrames.length - 1, endIndex - buffer.offset);
+  const historyStartIndex = Math.max(0, buffer.totalFrames - buffer.allFrames.length);
 
-  if (startIdx > endIdx || startIdx < 0 || endIdx >= buffer.visibleFrames.length) {
+  const startIdx = Math.max(0, startIndex - historyStartIndex);
+  const endIdx = Math.min(buffer.allFrames.length - 1, endIndex - historyStartIndex);
+
+  if (startIdx > endIdx || startIdx < 0 || endIdx >= buffer.allFrames.length) {
     return "";
   }
 
-  const text = buffer.visibleFrames
+  const text = buffer.allFrames
     .slice(startIdx, endIdx + 1)
     .map((f) => f.text)
     .join("\n");
@@ -153,7 +182,7 @@ export function copyFrameRange(
  */
 export function estimateMemoryUsage(buffer: ScrollbackBuffer): number {
   // Rough estimate: each frame ~100 bytes average
-  const frameSize = buffer.visibleFrames.length * 100;
-  const textData = buffer.visibleFrames.reduce((sum, f) => sum + f.text.length * 2, 0); // UTF-16
+  const frameSize = buffer.allFrames.length * 100;
+  const textData = buffer.allFrames.reduce((sum, f) => sum + f.text.length * 2, 0); // UTF-16
   return frameSize + textData + 256; // Base overhead
 }

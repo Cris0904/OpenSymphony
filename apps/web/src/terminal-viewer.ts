@@ -20,6 +20,11 @@ export interface TerminalViewerOptions {
 
 /**
  * Terminal viewer that renders frames to a DOM container.
+ *
+ * Maintains live DOM element references to avoid O(n²) thrashing:
+ * - New lines are appended directly (not cloned)
+ * - Old lines are removed when exceeding maxVisibleFrames
+ * - Search operates on in-document elements
  */
 export class TerminalViewer {
   private container: HTMLElement;
@@ -31,6 +36,7 @@ export class TerminalViewer {
   private copyButton!: HTMLButtonElement;
   private jumpButton!: HTMLButtonElement;
   private statusSpan!: HTMLSpanElement;
+  /** Live DOM elements that are children of scrollContainer. */
   private lineElements: HTMLElement[] = [];
   private searchTerm = "";
   private searchResults: number[] = [];
@@ -180,25 +186,26 @@ export class TerminalViewer {
   }
 
   /**
-   * Render new frames to the DOM.
+   * Render new frames to the DOM using incremental updates.
+   * Only appends new lines and removes pruned ones to avoid O(n²) DOM thrashing.
    */
   private renderFrames(decodedFrames: DecodedFrame[], buffer: ScrollbackBuffer): void {
-    // Create DOM elements for new frames
+    // Append only new frames
     for (const frame of decodedFrames) {
       const lineElement = this.createLineElement(frame);
       this.lineElements.push(lineElement);
+      this.scrollContainer.appendChild(lineElement);
     }
 
-    // Enforce max visible lines
-    while (this.lineElements.length > this.config.maxVisibleFrames) {
+    // Enforce max visible lines by removing oldest from DOM
+    const excess = this.lineElements.length - this.config.maxVisibleFrames;
+    for (let i = 0; i < excess; i++) {
       const removed = this.lineElements.shift();
-      if (removed && removed.parentNode) {
-        removed.parentNode.removeChild(removed);
+      if (removed && removed.parentNode === this.scrollContainer) {
+        this.scrollContainer.removeChild(removed);
       }
     }
 
-    // Update scroll container
-    this.updateScrollContainer();
     this.updateStatus(buffer);
 
     // Auto-scroll to bottom if at latest
@@ -273,19 +280,6 @@ export class TerminalViewer {
         return "#d29922"; // Yellow
       default:
         return "#c9d1d9"; // Default text
-    }
-  }
-
-  /**
-   * Update the scroll container with all visible lines.
-   */
-  private updateScrollContainer(): void {
-    // Clear existing content
-    this.scrollContainer.innerHTML = "";
-
-    // Add all visible lines
-    for (const line of this.lineElements) {
-      this.scrollContainer.appendChild(line.cloneNode(true));
     }
   }
 

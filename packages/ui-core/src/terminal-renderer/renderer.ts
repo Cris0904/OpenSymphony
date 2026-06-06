@@ -1,8 +1,9 @@
 /**
- * Worker-based decode and render loop for terminal frames.
+ * Decode and render loop for terminal frames.
  *
- * Uses requestAnimationFrame for smooth rendering while decoding
- * happens in a worker thread to prevent main thread blocking.
+ * Uses requestAnimationFrame for smooth rendering. Decoding
+ * runs on the main thread in prototype mode; worker-based
+ * decoding is planned for a future iteration.
  */
 
 import type { TerminalFrame, TerminalEncoding } from "@opensymphony/gateway-schema";
@@ -48,10 +49,8 @@ export class TerminalRenderer {
   private lastRenderTime = 0;
   private metrics: RenderMetrics;
   private renderCallback?: (frames: DecodedFrame[], buffer: ScrollbackBuffer) => void;
-  private worker: Worker | null = null;
-  private useWorker: boolean;
 
-  constructor(config?: Partial<RendererConfig>, useWorker = false) {
+  constructor(config?: Partial<RendererConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.buffer = createScrollbackBuffer(this.config.maxBufferCapacity);
     this.metrics = {
@@ -62,23 +61,6 @@ export class TerminalRenderer {
       renderTimeMs: 0,
       uiBlocked: false,
     };
-    this.useWorker = useWorker;
-
-    if (this.useWorker) {
-      this.initWorker();
-    }
-  }
-
-  /**
-   * Initialize Web Worker for off-main-thread decoding.
-   * Note: In a real implementation, this would load a separate worker file.
-   * For the prototype, we simulate worker behavior with message passing.
-   */
-  private initWorker(): void {
-    // Simulated worker for prototype
-    // In production: this.worker = new Worker(new URL("./decoder.worker.ts", import.meta.url));
-    this.useWorker = false; // Fallback for prototype
-    console.warn("Worker not available in prototype mode; using main thread decoding");
   }
 
   /**
@@ -228,10 +210,8 @@ export class TerminalRenderer {
    */
   dispose(): void {
     this.clear();
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
+    this.pendingFrames = [];
+    this.renderCallback = undefined;
   }
 
   /**

@@ -264,11 +264,14 @@ function formatBytes(bytes: number): string {
 /**
  * Print all benchmark results.
  */
-export function printBenchmarkResults(results: BenchmarkResult[]): void {
-  console.log("=== Terminal Renderer Benchmark Results ===\n");
+export function printBenchmarkResults(
+  results: BenchmarkResult[],
+  logger: (msg: string) => void = console.log,
+): void {
+  logger("=== Terminal Renderer Benchmark Results ===\n");
 
   for (const result of results) {
-    console.log(formatBenchmarkReport(result));
-    console.log("\n");
+    logger(formatBenchmarkReport(result));
+    logger("\n");
   }
 }
