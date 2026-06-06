@@ -7,12 +7,13 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { RunDetail } from "@opensymphony/gateway-schema";
 
 const fixturesDir = resolve(__dirname, "fixtures");
 
-function loadFixture(name: string): Record<string, unknown> {
+function loadFixture(name: string): RunDetail {
   const content = readFileSync(resolve(fixturesDir, name), "utf-8");
-  return JSON.parse(content);
+  return JSON.parse(content) as RunDetail;
 }
 
 // -- Schema version validation --
@@ -52,14 +53,14 @@ describe("run fixture schema validation", () => {
 // -- Active long-running run --
 
 describe("active long-running run fixture", () => {
-  const data = loadFixture("fixture_run_active_long_running.json");
+  const data: RunDetail = loadFixture("fixture_run_active_long_running.json");
 
   test("status is running", () => {
     expect(data.status).toBe("running");
   });
 
   test("has substantial token usage", () => {
-    expect((data.input_tokens as number) + (data.output_tokens as number)).toBeGreaterThan(100_000);
+    expect(data.input_tokens + data.output_tokens).toBeGreaterThan(100_000);
   });
 
   test("has long runtime indicating active work", () => {
@@ -74,7 +75,7 @@ describe("active long-running run fixture", () => {
 // -- Quiet run --
 
 describe("quiet run fixture", () => {
-  const data = loadFixture("fixture_run_quiet.json");
+  const data: RunDetail = loadFixture("fixture_run_quiet.json");
 
   test("status is running", () => {
     expect(data.status).toBe("running");
@@ -93,7 +94,7 @@ describe("quiet run fixture", () => {
 // -- Degraded run --
 
 describe("degraded run fixture", () => {
-  const data = loadFixture("fixture_run_degraded.json");
+  const data: RunDetail = loadFixture("fixture_run_degraded.json");
 
   test("status is running", () => {
     expect(data.status).toBe("running");
@@ -112,7 +113,7 @@ describe("degraded run fixture", () => {
 // -- Stalled run --
 
 describe("stalled run fixture", () => {
-  const data = loadFixture("fixture_run_stalled.json");
+  const data: RunDetail = loadFixture("fixture_run_stalled.json");
 
   test("status is claimed (not actively running)", () => {
     expect(data.status).toBe("claimed");
@@ -132,7 +133,7 @@ describe("stalled run fixture", () => {
 // -- Retry queued run --
 
 describe("retry queued run fixture", () => {
-  const data = loadFixture("fixture_run_retry_queued.json");
+  const data: RunDetail = loadFixture("fixture_run_retry_queued.json");
 
   test("status is retry_queued", () => {
     expect(data.status).toBe("retry_queued");
@@ -163,7 +164,7 @@ describe("retry queued run fixture", () => {
 // -- Detached run --
 
 describe("detached run fixture", () => {
-  const data = loadFixture("fixture_run_detached.json");
+  const data: RunDetail = loadFixture("fixture_run_detached.json");
 
   test("status is released", () => {
     expect(data.status).toBe("released");
