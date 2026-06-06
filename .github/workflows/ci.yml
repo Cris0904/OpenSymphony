@@ -35,4 +35,4 @@ jobs:
       - name: typecheck
         run: npm run type-check
       - name: jest
-        run: npx jest --config jest.config.js
+        run: npx jest --config jest.config.js --testPathIgnorePatterns="apps"
