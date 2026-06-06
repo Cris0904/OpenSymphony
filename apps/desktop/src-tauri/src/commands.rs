@@ -663,11 +663,14 @@ pub async fn attach_gateway(
     }
 
     // Determine profile based on URL
-    let host = parsed.host_str();
-    let is_loopback = host == Some("127.0.0.1")
-        || host == Some("localhost")
-        || host == Some("::1")
-        || host == Some("0.0.0.0");
+    let is_loopback = match parsed.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Domain(domain)) => {
+            domain.eq_ignore_ascii_case("localhost")
+        }
+        None => false,
+    };
     let profile = if is_loopback {
         "loopback_http"
     } else {

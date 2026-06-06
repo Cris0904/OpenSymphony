@@ -2,9 +2,8 @@
 //! frontend state. These tests validate that all transport profiles expose
 //! the same gateway DTOs, cursors, frames, and action receipts.
 
-#[path = "support/mod.rs"]
-mod compat;
-pub use compat::*;
+mod support;
+pub use support::*;
 
 use opensymphony::opensymphony_gateway_schema::{
     cursor::StreamCursor,
@@ -72,6 +71,41 @@ fn http_sse_format_parses_envelope() {
     let parsed: GatewayEnvelope = serde_json::from_str(json_str).expect("parse SSE envelope");
     assert_eq!(parsed.cursor.sequence, 42);
     assert_eq!(parsed.entity_ref.kind, EntityKind::Run);
+}
+
+/// HTTP transport handles multi-line SSE data with embedded newlines.
+#[test]
+fn http_sse_multi_line_data_parses_envelope() {
+    // Payload containing newlines inside a JSON string
+    let mut envelope = sample_envelope(43, "events");
+    envelope.payload = Some(serde_json::json!({
+        "content": "line1\nline2\nline3",
+        "nested": { "key": "value\nwith\nnewlines" },
+    }));
+    let payload = serde_json::to_string(&envelope).expect("serialize");
+
+    // SSE spec: multi-line data is split across multiple "data:" lines
+    let mut lines: Vec<String> = vec![];
+    for chunk in payload.lines() {
+        lines.push(format!("data: {}", chunk));
+    }
+    let sse_formatted = format!("{}\n\n", lines.join("\n"));
+
+    // Re-assemble multi-line data into a single JSON string
+    let mut data_lines: Vec<String> = vec![];
+    for line in sse_formatted.lines() {
+        if let Some(stripped) = line.strip_prefix("data: ") {
+            data_lines.push(stripped.to_string());
+        }
+    }
+    let json_str = data_lines.join("\n");
+
+    let parsed: GatewayEnvelope =
+        serde_json::from_str(&json_str).expect("parse multi-line SSE envelope");
+    assert_eq!(parsed.cursor.sequence, 43);
+    let payload = parsed.payload.as_ref().expect("payload present");
+    assert_eq!(payload["content"], "line1\nline2\nline3");
+    assert_eq!(payload["nested"]["key"], "value\nwith\nnewlines");
 }
 
 // ── WebSocket Transport Equivalence ──────────────────────────────────────────

@@ -289,6 +289,9 @@ describe("TransportFactory", () => {
     const transport = await TransportFactory.create(config);
     expect(transport).toBeInstanceOf(HttpGatewayTransport);
     expect(transport.baseUri).toBe("http://localhost:8080");
+    // Functional check: the transport exposes the expected interface
+    expect(typeof transport.health).toBe("function");
+    expect(typeof transport.close).toBe("function");
   });
 
   it("falls back to HTTP when profile requires unavailable runtime", async () => {
@@ -308,11 +311,14 @@ describe("TransportFactory", () => {
       transport: "loopback_websocket",
     };
 
-    // WebSocket is available in Node.js test environment
-    if (typeof WebSocket !== "undefined") {
-      const transport = await TransportFactory.create(config);
-      expect(transport).toBeInstanceOf(WebSocketTransport);
+    // WebSocket is a global in Node.js 21+ and in browser environments.
+    // Fail the test if not available so we don't silently skip the assertion.
+    if (typeof WebSocket === "undefined") {
+      throw new Error("WebSocket is not available in this test environment");
     }
+    const transport = await TransportFactory.create(config);
+    expect(transport).toBeInstanceOf(WebSocketTransport);
+    expect(transport.baseUri).toBe("http://localhost:8080");
   });
 
   it("prefers Tauri channel when running in Tauri context", async () => {

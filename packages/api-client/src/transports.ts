@@ -536,7 +536,8 @@ export class WebSocketTransport implements GatewayTransport {
         this.eventSubscribers.forEach((cb) => cb(envelope));
         // Also dispatch to terminal subscribers matching the run ID
         if (envelope.entity_ref.kind === "terminal_session") {
-          const runId = envelope.cursor.partition.split(":").pop();
+          const match = envelope.cursor.partition.match(/^[^:]+:(.+)$/);
+          const runId = match?.[1] ?? envelope.cursor.partition;
           if (runId) {
             this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
           }
@@ -563,7 +564,8 @@ export class WebSocketTransport implements GatewayTransport {
         this.eventSubscribers.forEach((cb) => cb(envelope));
         // Also dispatch to terminal subscribers matching the run ID
         if (envelope.entity_ref.kind === "terminal_session") {
-          const runId = envelope.cursor.partition.split(":").pop();
+          const match = envelope.cursor.partition.match(/^[^:]+:(.+)$/);
+          const runId = match?.[1] ?? envelope.cursor.partition;
           if (runId) {
             this.terminalSubscribers.get(runId)?.forEach((cb) => cb(envelope));
           }
