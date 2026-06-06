@@ -267,21 +267,30 @@ impl DaemonHandle {
                     .output();
             }
 
-            // Wait for process to exit
-            match child.wait() {
-                Ok(status) => {
-                    info!(pid = ?self.pid, status = ?status, "daemon stopped");
-                }
-                Err(e) => {
-                    warn!(pid = ?self.pid, error = %e, "error waiting for daemon to stop");
+            // Non-blocking wait: poll for exit with a short timeout to avoid
+            // blocking the tokio runtime indefinitely.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        info!(pid = ?self.pid, status = ?status, "daemon stopped");
+                        break;
+                    }
+                    Ok(None) => {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(e) => {
+                        warn!(pid = ?self.pid, error = %e, "error checking daemon status");
+                        break;
+                    }
                 }
             }
-
-            self.child = None;
-            self.pid = None;
-            self.state = DaemonState::Stopped;
-            self.owns_process = false;
         }
+
+        self.child = None;
+        self.pid = None;
+        self.state = DaemonState::Stopped;
+        self.owns_process = false;
 
         Ok(())
     }
@@ -290,12 +299,22 @@ impl DaemonHandle {
     pub fn kill(&mut self) -> Result<(), DaemonError> {
         if let Some(ref mut child) = self.child {
             info!(pid = ?self.pid, "force-killing daemon");
+            #[cfg(unix)]
+            {
+                let _ = unsafe { libc::kill(self.pid.unwrap_or(0) as i32, libc::SIGKILL) };
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
+                    .output();
+            }
             let _ = child.kill();
-            self.child = None;
-            self.pid = None;
-            self.state = DaemonState::Stopped;
-            self.owns_process = false;
         }
+        self.child = None;
+        self.pid = None;
+        self.state = DaemonState::Stopped;
+        self.owns_process = false;
         Ok(())
     }
 }
@@ -307,7 +326,8 @@ impl Drop for DaemonHandle {
                 pid = ?self.pid,
                 "daemon handle dropped, cleaning up owned process",
             );
-            let _ = self.stop();
+            // Non-blocking cleanup: just kill, never wait
+            let _ = self.kill();
         }
     }
 }

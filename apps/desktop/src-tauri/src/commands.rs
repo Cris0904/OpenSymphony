@@ -13,6 +13,49 @@ use tauri::command;
 use tauri::State;
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tracing::warn;
+
+// ─── Executable validation ─────────────────────────────────────────────────
+
+/// Validate that a daemon executable path is safe to run.
+///
+/// Rejects paths that don't exist, aren't regular files, or lack execute
+/// permission on Unix systems.
+///
+/// In production deployments, this should be restricted to bundled
+/// executables within the app's resource directory.
+fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
+    if !path.exists() {
+        return Err(DaemonPathError::NotFound);
+    }
+
+    let metadata = std::fs::metadata(path).map_err(|e| DaemonPathError::AccessDenied { detail: e.to_string() })?;
+    if !metadata.is_file() {
+        return Err(DaemonPathError::NotAFile);
+    }
+
+    // On Unix, verify execute permission
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = metadata.permissions();
+        if perms.mode() & 0o111 == 0 {
+            return Err(DaemonPathError::NotExecutable);
+        }
+    }
+
+    Ok(())
+}
+
+/// Error returned when a daemon executable path fails validation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "error")]
+enum DaemonPathError {
+    NotFound,
+    NotAFile,
+    NotExecutable,
+    AccessDenied { detail: String },
+}
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -355,19 +398,34 @@ pub struct StartDaemonRequest {
 }
 
 /// Start and supervise a local daemon.
+///
+/// Acquires the daemon mutex for the entire start sequence to prevent
+/// concurrent starts that could orphan processes.
 #[command]
 pub async fn start_daemon(
     state: State<'_, DesktopState>,
     req: StartDaemonRequest,
 ) -> CommandResult<StartupResult> {
-    if state.daemon_supervised.load(Ordering::SeqCst) {
+    // Atomically check-and-start by holding the mutex for the entire operation
+    let mut handle_guard = state.daemon_handle.lock().await;
+
+    if handle_guard.is_some() {
+        warn!("daemon already supervised, rejecting start request");
         return Err(DesktopError::Internal {
             message: "Daemon already supervised by this instance".to_string(),
         });
     }
 
+    let exec_path = PathBuf::from(&req.executable);
+
+    // Validate executable path for safety
+    if let Err(err) = validate_executable_path(&exec_path) {
+        warn!(?err, path = ?exec_path, "daemon executable path validation failed");
+        return Err(DesktopError::PermissionDenied);
+    }
+
     let config = DaemonConfig {
-        executable: PathBuf::from(&req.executable),
+        executable: exec_path,
         args: req.args.unwrap_or_default(),
         env: req.env.unwrap_or_default(),
         startup_timeout: Duration::from_secs(req.startup_timeout_secs.unwrap_or(30)),
@@ -380,7 +438,9 @@ pub async fn start_daemon(
 
     if result.success {
         state.daemon_supervised.store(true, Ordering::SeqCst);
-        *state.daemon_handle.lock().await = Some(handle);
+        *handle_guard = Some(handle);
+    } else {
+        warn!(error = ?result.error, "daemon startup failed");
     }
 
     Ok(result)
