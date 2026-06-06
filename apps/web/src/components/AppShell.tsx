@@ -30,8 +30,14 @@ function renderPage(page: Page, navigate: (page: Page) => void): React.ReactNode
   }
 }
 
+// Read initial page from hash to avoid dashboard flash on direct navigation.
+function getInitialPage(): Page {
+  if (typeof window === "undefined") return { kind: "dashboard" };
+  return routeToPage(window.location.hash) ?? { kind: "dashboard" };
+}
+
 export function AppShell(): React.ReactElement {
-  const [page, setPage] = useState<Page>({ kind: "dashboard" });
+  const [page, setPage] = useState<Page>(getInitialPage);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -49,7 +55,6 @@ export function AppShell(): React.ReactElement {
       if (p) setPage(p);
     };
     window.addEventListener("hashchange", onHashChange);
-    onHashChange();
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
