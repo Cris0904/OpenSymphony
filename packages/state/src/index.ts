@@ -315,67 +315,94 @@ export function computeLivenessState(
  * Compute the set of safe actions for a run based on its phase state and
  * stream health. This informs the UI which controls should be enabled.
  *
- * Safety matrix:
- * - active|healthy: cancel, detach
- * - active|degraded: cancel, detach
- * - active|stale: cancel, rehydrate, detach
- * - quiet|*: cancel, rehydrate, detach
- * - degraded|*: cancel, rehydrate, detach
- * - stalled|*: retry, cancel, rehydrate, detach
- * - retry_queued|*: cancel, rehydrate
- * - cancelled|*: retry (if harness still active)
- * - completed|dead: retry, rehydrate, detach
- * - detached|*: cancel, rehydrate, detach
+ * Safety matrix (exactly matching the reviewed specification):
+ *
+ * | phaseState    | streamHealth | retry | cancel | rehydrate | detach |
+ * |---------------|--------------|-------|--------|-----------|--------|
+ * | active        | healthy      | false | true   | false     | false  |
+ * | active        | degraded     | false | true   | false     | false  |
+ * | active        | stale        | false | true   | true      | false  |
+ * | active        | dead         | false | false  | false     | false  |
+ * | quiet         | healthy      | false | true   | false     | false  |
+ * | quiet         | degraded     | false | true   | false     | false  |
+ * | quiet         | stale        | false | true   | true      | false  |
+ * | quiet         | dead         | false | false  | false     | false  |
+ * | degraded      | healthy      | false | true   | false     | false  |
+ * | degraded      | degraded     | false | true   | true      | false  |
+ * | degraded      | stale        | false | true   | true      | false  |
+ * | degraded      | dead         | false | false  | false     | false  |
+ * | stalled       | healthy      | true  | true   | false     | false  |
+ * | stalled       | degraded     | true  | true   | false     | false  |
+ * | stalled       | stale        | true  | true   | true      | false  |
+ * | stalled       | dead         | false | false  | false     | false  |
+ * | retry_queued  | *            | true  | false  | false     | false  |
+ * | cancelled     | *            | true  | false  | false     | false  |
+ * | completed     | healthy      | false | false  | false     | false  |
+ * | completed     | degraded     | false | false  | false     | false  |
+ * | completed     | stale        | false | false  | false     | false  |
+ * | completed     | dead         | true  | false  | true      | false  |
+ * | detached      | healthy      | false | false  | false     | false  |
+ * | detached      | degraded     | false | false  | false     | false  |
+ * | detached      | stale        | false | false  | true      | false  |
+ * | detached      | dead         | false | false  | false     | false  |
  */
 export function computeSafeActions(
   phaseState: RunPhaseState,
   streamHealth: "healthy" | "degraded" | "stale" | "dead",
-  runStatus: RunStatus,
-  hasDiagnostics: boolean,
 ): SafeActions {
-  const base: SafeActions = { retry: false, cancel: false, rehydrate: false, detach: false };
+  // Lookup table implementing the exact safety matrix above.
+  const matrix: Record<string, Record<string, SafeActions>> = {
+    active: {
+      healthy: { retry: false, cancel: true, rehydrate: false, detach: false },
+      degraded: { retry: false, cancel: true, rehydrate: false, detach: false },
+      stale: { retry: false, cancel: true, rehydrate: true, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+    },
+    quiet: {
+      healthy: { retry: false, cancel: true, rehydrate: false, detach: false },
+      degraded: { retry: false, cancel: true, rehydrate: false, detach: false },
+      stale: { retry: false, cancel: true, rehydrate: true, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+    },
+    degraded: {
+      healthy: { retry: false, cancel: true, rehydrate: false, detach: false },
+      degraded: { retry: false, cancel: true, rehydrate: true, detach: false },
+      stale: { retry: false, cancel: true, rehydrate: true, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+    },
+    stalled: {
+      healthy: { retry: true, cancel: true, rehydrate: false, detach: false },
+      degraded: { retry: true, cancel: true, rehydrate: false, detach: false },
+      stale: { retry: true, cancel: true, rehydrate: true, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+    },
+    retry_queued: {
+      healthy: { retry: true, cancel: false, rehydrate: false, detach: false },
+      degraded: { retry: true, cancel: false, rehydrate: false, detach: false },
+      stale: { retry: true, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: true, cancel: false, rehydrate: false, detach: false },
+    },
+    cancelled: {
+      healthy: { retry: true, cancel: false, rehydrate: false, detach: false },
+      degraded: { retry: true, cancel: false, rehydrate: false, detach: false },
+      stale: { retry: true, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: true, cancel: false, rehydrate: false, detach: false },
+    },
+    completed: {
+      healthy: { retry: false, cancel: false, rehydrate: false, detach: false },
+      degraded: { retry: false, cancel: false, rehydrate: false, detach: false },
+      stale: { retry: false, cancel: false, rehydrate: false, detach: false },
+      dead: { retry: true, cancel: false, rehydrate: true, detach: false },
+    },
+    detached: {
+      healthy: { retry: false, cancel: false, rehydrate: false, detach: false },
+      degraded: { retry: false, cancel: false, rehydrate: false, detach: false },
+      stale: { retry: false, cancel: false, rehydrate: true, detach: false },
+      dead: { retry: false, cancel: false, rehydrate: false, detach: false },
+    },
+  };
 
-  // Detach is generally safe for any non-terminal state.
-  if (phaseState !== "completed" && phaseState !== "cancelled") {
-    base.detach = true;
-  }
-
-  // Cancel is safe for any non-terminal, non-retry-queued state.
-  if (phaseState !== "completed" && phaseState !== "cancelled" && phaseState !== "retry_queued") {
-    base.cancel = true;
-  }
-
-  // Retry is safe when:
-  // - stalled (may be recoverable)
-  // - completed|dead (harness died, need restart)
-  // - cancelled (can requeue)
-  // - scheduler says retry_queued but diagnostics indicate harness still active
-  if (
-    phaseState === "stalled" ||
-    (phaseState === "completed" && streamHealth === "dead") ||
-    phaseState === "cancelled" ||
-    hasDiagnostics
-  ) {
-    base.retry = true;
-  }
-
-  // Rehydrate is safe when:
-  // - stream is stale or dead (connection loss)
-  // - run is stalled or degraded
-  // - retry_queued (scheduler waiting but harness may be stuck)
-  // - completed|dead (recover from harness failure)
-  if (
-    streamHealth === "stale" ||
-    streamHealth === "dead" ||
-    phaseState === "stalled" ||
-    phaseState === "degraded" ||
-    phaseState === "retry_queued" ||
-    (phaseState === "completed" && streamHealth === "dead")
-  ) {
-    base.rehydrate = true;
-  }
-
-  return base;
+  return matrix[phaseState]?.[streamHealth] ?? { retry: false, cancel: false, rehydrate: false, detach: false };
 }
 
 // -- Reducer --
