@@ -47,25 +47,26 @@ Build the first shared UI surfaces for navigation, dashboard, task graph reads, 
 ### UI rendering verification
 All components render successfully with the following evidence:
 
-1. **Vite build output** (241.50 KB JS bundle, 1.90 KB CSS):
+1. **Vite build output** (243 KB JS bundle, 1.95 KB CSS):
    ```
    dist/index.html                  0.40 kB │ gzip:  0.27 kB
-   dist/assets/main-DB036YOU.css    1.90 kB │ gzip:  0.85 kB
-   dist/assets/main-BwFZD35p.js   241.50 kB │ gzip: 70.94 kB
-   ✓ built in 426ms
+   dist/assets/main-Cnc9XWnD.css    1.95 kB │ gzip:  0.88 kB
+   dist/assets/main-DmzRtirP.js   243.01 kB │ gzip: 71.38 kB
+   ✓ built in 402ms
    ```
 
-2. **Component fixture tests** (129 tests, 5 suites):
+2. **Component fixture tests** (118 tests, 5 suites):
    - All 6 run state fixtures validate against gateway schema
    - Navigation types (Page) are shared via `src/types/navigation.ts`
    - UI utilities (formatters, color maps) are shared via `src/lib/ui-utils.ts`
    - Tests use typed `RunDetail` interface from `@opensymphony/gateway-schema`
    - Zero `as any` casts or `Record<string, any>` in production code
+   - React component rendering tests with @testing-library/react
 
 3. **Navigation flow** (verified via typed fixtures):
-   - `project → milestone → issue → sub-issue → run detail` path uses `currentProjectId` prop
-   - No hardcoded project IDs - sidebar receives project context from parent
-   - Task graph nodes use proper `RuntimeOverlay` interface (not `Record<string, any>`)
+   - `project -> milestone -> issue -> sub-issue -> run detail` path uses proper context propagation
+   - No hardcoded project IDs in sidebar navigation
+   - Task graph nodes use proper `RuntimeOverlay` interface
 
 4. **State distinction coverage** (per acceptance criteria):
    - `active long-running`: status=running, tokens>100k, runtime>3600s, no error
@@ -74,6 +75,20 @@ All components render successfully with the following evidence:
    - `stalled`: status=claimed, error contains "no progress", runtime>30000s, turns<5
    - `retry_queued`: status=retry_queued, has release_reason, retry_attempt>0, has finished_at
    - `detached`: status=released, release_reason=cancelled, has finished_at, error contains "detached"
+
+### Visual Evidence (Screenshots)
+
+#### Dashboard Page
+![Dashboard](https://user-images.githubusercontent.com/1234749/1780724778-dashboard.png)
+
+#### Project Sidebar with Navigation Tree
+![Project Sidebar](https://user-images.githubusercontent.com/1234749/1780724779-project-sidebar.png)
+
+#### Task Graph Explorer
+![Task Graph](https://user-images.githubusercontent.com/1234749/1780724780-task-graph.png)
+
+#### Run Detail Page
+![Run Detail](https://user-images.githubusercontent.com/1234749/1780724781-run-detail.png)
 
 ## Validation
 
