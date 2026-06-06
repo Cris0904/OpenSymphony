@@ -165,8 +165,9 @@ export function generateRealisticSession(
 
 /**
  * Generate a realistic terminal output line.
+ * Uses a deterministic timestamp based on index for reproducible fixtures.
  */
-function generateRealisticLine(index: number, kind: TerminalFrameKind): string {
+function generateRealisticLine(index: number, kind: TerminalFrameKind, baseTimestampMs = 0): string {
   const stdoutMessages = [
     "Processing request...",
     "Building project...",
@@ -190,29 +191,44 @@ function generateRealisticLine(index: number, kind: TerminalFrameKind): string {
 
   const messages = kind === "stderr" ? stderrMessages : stdoutMessages;
   const message = messages[index % messages.length];
-  const timestamp = new Date().toISOString().substring(11, 23);
+  const ts = new Date(baseTimestampMs + index * 10).toISOString().substring(11, 23);
 
-  return `[${timestamp}] ${message} (iteration ${index})\n`;
+  return `[${ts}] ${message} (iteration ${index})\n`;
+}
+
+/**
+ * Simple seeded pseudo-random number generator (LCG).
+ * Produces deterministic output for reproducible test fixtures.
+ */
+function createSeededRandom(seed: number): () => number {
+  let s = seed >>> 0; // Ensure unsigned 32-bit
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0; // LCG parameters
+    return s / 0x100000000; // Normalize to [0, 1)
+  };
 }
 
 /**
  * Generate bursty output with varying rates.
  * Simulates realistic OpenHands agent behavior with spikes.
+ * Uses a seeded PRNG for deterministic, reproducible output.
  */
 export function generateBurstySession(
   totalDurationMs = 30000,
   burstIntervalMs = 2000,
   burstSize = 100,
   quietSize = 5,
+  seed = 42,
 ): TerminalFrame[] {
   const frames: TerminalFrame[] = [];
-  const runId = `burst-session-${Date.now()}`;
-  const sessionId = `burst-term-${Date.now()}`;
+  const runId = `burst-session-${seed}`;
+  const sessionId = `burst-term-${seed}`;
+  const rng = createSeededRandom(seed);
   let sequence = 0;
 
   for (let t = 0; t < totalDurationMs; t += burstIntervalMs) {
     // Determine if this is a burst or quiet period
-    const isBurst = Math.random() < 0.3; // 30% chance of burst
+    const isBurst = rng() < 0.3; // 30% chance of burst
     const count = isBurst ? burstSize : quietSize;
 
     for (let i = 0; i < count; i++) {

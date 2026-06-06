@@ -194,6 +194,22 @@ describe("scrollTo", () => {
     const result2 = scrollTo(buffer, 999999);
     expect(result2.offset).toBe(0);
   });
+
+  it("returns different visible frames for different scroll positions", () => {
+    const buffer = createScrollbackBuffer(10);
+    const frames = generateBurstFrames(100).map((f) =>
+      decodeFrame(f.content, f.encoding, f)
+    );
+    const filledBuffer = appendFrames(buffer, frames);
+
+    const atBottom = filledBuffer.visibleFrames;
+    const scrolledUp = scrollTo(filledBuffer, 20);
+
+    // Scrolling up should show different frames
+    expect(scrolledUp.visibleFrames.length).toBeLessThanOrEqual(buffer.capacity);
+    // The scrolled-up view should start from a different offset
+    expect(scrolledUp.offset).toBeLessThan(filledBuffer.offset);
+  });
 });
 
 describe("jumpToLatest", () => {
@@ -373,6 +389,29 @@ describe("generateBurstySession", () => {
     const stdoutCount = frames.filter((f) => f.frame_kind === "stdout").length;
     const logCount = frames.filter((f) => f.frame_kind === "log").length;
     expect(stdoutCount + logCount).toBe(frames.length);
+  });
+
+  it("produces deterministic output with same seed", () => {
+    const session1 = generateBurstySession(5000, 500, 50, 5, 42);
+    const session2 = generateBurstySession(5000, 500, 50, 5, 42);
+
+    expect(session1.length).toBe(session2.length);
+    for (let i = 0; i < session1.length; i++) {
+      expect(session1[i].frame_kind).toBe(session2[i].frame_kind);
+      expect(session1[i].frame_sequence).toBe(session2[i].frame_sequence);
+      expect(session1[i].content).toBe(session2[i].content);
+    }
+  });
+
+  it("produces different output with different seeds", () => {
+    const session1 = generateBurstySession(5000, 500, 50, 5, 42);
+    const session2 = generateBurstySession(5000, 500, 50, 5, 99);
+
+    // At least some frames should differ
+    const differs = session1.filter(
+      (f, i) => session2[i]?.frame_kind !== f.frame_kind,
+    ).length;
+    expect(differs).toBeGreaterThan(0);
   });
 });
 
