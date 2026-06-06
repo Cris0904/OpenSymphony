@@ -4,10 +4,7 @@
 //! Custom commands are gated by capability files in `src-tauri/capabilities/`.
 
 use std::process;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::Mutex;
 
 mod commands;
 mod daemon;

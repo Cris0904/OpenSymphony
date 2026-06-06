@@ -137,7 +137,10 @@ while true; do sleep 1; done
                     break;
                 }
                 if std::time::Instant::now() >= deadline {
-                    panic!("process {} still exists after drop and 2s grace period", pid);
+                    panic!(
+                        "process {} still exists after drop and 2s grace period",
+                        pid
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -185,8 +188,14 @@ while true; do sleep 1; done
         let result2 = handle2.start().await;
 
         // Verify both processes were spawned and have PIDs
-        assert!(result1.pid.is_some(), "daemon 1 should have a PID after spawn");
-        assert!(result2.pid.is_some(), "daemon 2 should have a PID after spawn");
+        assert!(
+            result1.pid.is_some(),
+            "daemon 1 should have a PID after spawn"
+        );
+        assert!(
+            result2.pid.is_some(),
+            "daemon 2 should have a PID after spawn"
+        );
 
         // Verify PIDs are unique - each daemon tracks its own process
         assert_ne!(
@@ -199,8 +208,14 @@ while true; do sleep 1; done
         assert!(handle1.pid().is_some(), "handle 1 should track its PID");
         assert!(handle2.pid().is_some(), "handle 2 should track its PID");
         // With health check skipped, daemons should be in Running state
-        assert!(matches!(handle1.state(), DaemonState::Running), "handle 1 should be Running");
-        assert!(matches!(handle2.state(), DaemonState::Running), "handle 2 should be Running");
+        assert!(
+            matches!(handle1.state(), DaemonState::Running),
+            "handle 1 should be Running"
+        );
+        assert!(
+            matches!(handle2.state(), DaemonState::Running),
+            "handle 2 should be Running"
+        );
 
         // Verify stop only affects the targeted daemon
         handle1.stop().await.unwrap();

@@ -291,24 +291,23 @@ impl DaemonHandle {
         }
     }
 
-    /// Check if the OS process is still alive.
-    #[cfg(unix)]
-    fn is_process_alive(&self) -> bool {
-        if let Some(pid) = self.pid {
-            // kill(pid, 0) checks process existence without sending a signal
-            let result = unsafe { libc::kill(pid as i32, 0) };
-            result == 0
-        } else {
-            false
-        }
-    }
-
-    #[cfg(windows)]
+    /// Check if the child process is still alive.
+    ///
+    /// `try_wait()` is non-blocking and reaps the child if it has already
+    /// exited, which keeps liveness checks accurate on every platform.
     fn is_process_alive(&mut self) -> bool {
-        // Use try_wait() on the actual Child handle to check if the process
-        // has exited. Returns Ok(Some(status)) if exited, Ok(None) if still running.
         if let Some(ref mut child) = self.child {
-            matches!(child.try_wait(), Ok(None))
+            match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(status)) => {
+                    info!(pid = ?self.pid, status = ?status, "daemon process exited");
+                    false
+                }
+                Err(e) => {
+                    warn!(pid = ?self.pid, error = %e, "failed to check daemon process status");
+                    false
+                }
+            }
         } else {
             false
         }
@@ -355,11 +354,9 @@ impl DaemonHandle {
 
             #[cfg(windows)]
             {
-                // Use spawn() to avoid blocking the async worker thread.
-                // The OS reaps the taskkill process asynchronously.
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &self.pid.unwrap_or(0).to_string()])
-                    .spawn();
+                if let Some(pid) = self.pid {
+                    Self::spawn_taskkill(pid, false);
+                }
             }
 
             // Async wait loop: poll for exit without blocking the tokio worker thread.
@@ -404,66 +401,88 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and waits for the process to exit to ensure it is fully
-    /// reaped. This avoids zombies and is safe for `Drop` context because
-    /// SIGKILL termination is immediate. The wait is bounded by the OS
-    /// scheduler — typically under 1 ms after signal delivery.
+    /// Sends a force-kill signal and performs only an immediate `try_wait()` on
+    /// the caller's thread. If the child has not exited yet, a background thread
+    /// owns the final blocking wait so `Drop` and async callers never stall.
     fn kill_process_only(&mut self) {
-        if let Some(ref mut child) = self.child {
-            #[cfg(unix)]
-            {
-                if let Some(pid) = self.pid {
-                    // Kill the entire process group (negative PID means process group ID).
-                    // This ensures all child processes are also terminated, preventing
-                    // orphaned processes when the parent is killed.
-                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        if let Some(mut child) = self.child.take() {
+            let pid = self.pid;
+            Self::force_kill_child(pid, &mut child);
+
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    info!(pid = ?pid, status = ?status, "daemon process reaped after force kill");
+                }
+                Ok(None) => {
+                    Self::reap_child_in_background(child, pid);
+                }
+                Err(e) => {
+                    warn!(pid = ?pid, error = %e, "failed to reap daemon after force kill");
+                    Self::reap_child_in_background(child, pid);
                 }
             }
-            #[cfg(windows)]
-            {
-                // Use spawn() instead of output() to avoid blocking the thread.
-                // The OS will reap the taskkill process asynchronously.
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
-                    .spawn();
-            }
-            let _ = child.kill();
-
-            // Wait for the process to fully exit so it is reaped from the
-            // process table. SIGKILL is immediate, so this returns quickly.
-            let _ = child.wait();
         }
-        self.child = None;
     }
 
     /// Force-kill the daemon process.
     pub fn kill(&mut self) -> Result<(), DaemonError> {
-        if let Some(ref mut child) = self.child {
-            info!(pid = ?self.pid, "force-killing daemon");
-            #[cfg(unix)]
-            {
-                if let Some(pid) = self.pid {
-                    // Kill the entire process group to ensure all children are also terminated.
-                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
-                }
-            }
-            #[cfg(windows)]
-            {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
-                    .spawn();
-            }
-            let _ = child.kill();
-        }
-        // Non-blocking reap: try_wait() returns immediately even if process hasn't exited yet
-        if let Some(ref mut child) = self.child {
-            let _ = child.try_wait();
-        }
-        self.child = None;
+        info!(pid = ?self.pid, "force-killing daemon");
+        self.kill_process_only();
         self.pid = None;
         self.state = DaemonState::Stopped;
         self.owns_process = false;
         Ok(())
+    }
+
+    fn force_kill_child(pid: Option<u32>, child: &mut Child) {
+        #[cfg(unix)]
+        {
+            if let Some(pid) = pid {
+                // Kill the entire process group (negative PID means process group ID).
+                // This ensures all child processes are also terminated, preventing
+                // orphaned processes when the parent is killed.
+                let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            }
+        }
+        #[cfg(windows)]
+        {
+            if let Some(pid) = pid {
+                Self::spawn_taskkill(pid, true);
+            }
+        }
+        let _ = child.kill();
+    }
+
+    #[cfg(windows)]
+    fn spawn_taskkill(pid: u32, force: bool) {
+        let pid_arg = pid.to_string();
+        let mut command = Command::new("taskkill");
+        command.args(["/PID", pid_arg.as_str(), "/T"]);
+        if force {
+            command.arg("/F");
+        }
+        if let Err(e) = command.spawn() {
+            warn!(pid, error = %e, "failed to spawn taskkill");
+        }
+    }
+
+    fn reap_child_in_background(mut child: Child, pid: Option<u32>) {
+        let name = pid
+            .map(|pid| format!("opensymphony-daemon-reaper-{pid}"))
+            .unwrap_or_else(|| "opensymphony-daemon-reaper".to_string());
+        if let Err(e) = std::thread::Builder::new().name(name).spawn(move || {
+            let status = child.wait();
+            match status {
+                Ok(status) => {
+                    info!(pid = ?pid, status = ?status, "daemon process reaped in background");
+                }
+                Err(e) => {
+                    warn!(pid = ?pid, error = %e, "background daemon reap failed");
+                }
+            }
+        }) {
+            warn!(pid = ?pid, error = %e, "failed to spawn daemon reaper thread");
+        }
     }
 }
 

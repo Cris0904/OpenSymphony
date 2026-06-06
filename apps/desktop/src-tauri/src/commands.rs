@@ -6,11 +6,11 @@
 use crate::daemon::{DaemonConfig, DaemonHandle, StartupResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tauri::command;
 use tauri::State;
+use tauri::command;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -34,7 +34,9 @@ fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
         return Err(DaemonPathError::NotFound);
     }
 
-    let metadata = std::fs::metadata(path).map_err(|e| DaemonPathError::AccessDenied { detail: e.to_string() })?;
+    let metadata = std::fs::metadata(path).map_err(|e| DaemonPathError::AccessDenied {
+        detail: e.to_string(),
+    })?;
     if !metadata.is_file() {
         return Err(DaemonPathError::NotAFile);
     }
@@ -60,13 +62,18 @@ fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
 }
 
 /// Error returned when a daemon executable path fails validation.
-#[derive(Debug, Serialize)]
+#[derive(Error, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "error")]
 enum DaemonPathError {
+    #[error("daemon executable path does not exist")]
     NotFound,
+    #[error("daemon executable path is not a regular file")]
     NotAFile,
+    #[error("daemon executable path is not executable")]
     NotExecutable,
+    #[error("daemon executable path is world-writable")]
     WorldWritable,
+    #[error("daemon executable path cannot be inspected: {detail}")]
     AccessDenied { detail: String },
 }
 
@@ -120,6 +127,12 @@ impl DesktopState {
             daemon_handle: Arc::new(Mutex::new(None)),
             daemon_supervised: Arc::new(AtomicBool::new(false)),
         }
+    }
+}
+
+impl Default for DesktopState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -299,7 +312,10 @@ pub async fn store_profile(_req: ProfileRequest) -> CommandResult<ProfileRespons
         label: _req.label,
         kind: _req.kind.as_str().to_string(),
         gateway_url: _req.gateway_url,
-        managed: matches!(_req.kind, ProfileKind::SupervisedLocalDaemon | ProfileKind::EmbeddedHost),
+        managed: matches!(
+            _req.kind,
+            ProfileKind::SupervisedLocalDaemon | ProfileKind::EmbeddedHost
+        ),
         daemon_path: _req.daemon_path,
     })
 }
@@ -350,13 +366,13 @@ pub async fn probe_gateway(gateway_url: String) -> CommandResult<DiscoveryResult
     match client.get(&health_url).send().await {
         Ok(response) if response.status().is_success() => {
             let _health_latency = start.elapsed().as_millis() as u64;
-            
+
             // Probe capabilities
             match client.get(&capabilities_url).send().await {
                 Ok(cap_response) if cap_response.status().is_success() => {
                     let capabilities: Option<serde_json::Value> = cap_response.json().await.ok();
                     let total_latency = start.elapsed().as_millis() as u64;
-                    
+
                     Ok(DiscoveryResult {
                         healthy: true,
                         compatible: true,
@@ -371,7 +387,10 @@ pub async fn probe_gateway(gateway_url: String) -> CommandResult<DiscoveryResult
                     compatible: false,
                     gateway_url,
                     latency_ms: start.elapsed().as_millis() as u64,
-                    error: Some(format!("Capabilities endpoint returned {}", cap_response.status())),
+                    error: Some(format!(
+                        "Capabilities endpoint returned {}",
+                        cap_response.status()
+                    )),
                     capabilities: None,
                 }),
                 Err(e) => Ok(DiscoveryResult {
@@ -406,10 +425,7 @@ pub async fn probe_gateway(gateway_url: String) -> CommandResult<DiscoveryResult
 /// Discover gateway on default loopback address.
 #[command]
 pub async fn discover_default_gateway() -> CommandResult<DiscoveryResult> {
-    let default_urls = [
-        "http://127.0.0.1:8080",
-        "http://localhost:8080",
-    ];
+    let default_urls = ["http://127.0.0.1:8080", "http://localhost:8080"];
 
     for url in &default_urls {
         let result = probe_gateway(url.to_string()).await?;
@@ -466,7 +482,7 @@ pub async fn start_daemon(
     if let Err(err) = validate_executable_path(&exec_path) {
         warn!(?err, path = ?exec_path, "daemon executable path validation failed");
         return Err(DesktopError::DaemonPath {
-            detail: format!("path validation failed: {:?}", err),
+            detail: err.to_string(),
         });
     }
 
@@ -476,7 +492,9 @@ pub async fn start_daemon(
         env: req.env.unwrap_or_default(),
         startup_timeout: Duration::from_secs(req.startup_timeout_secs.unwrap_or(30)),
         auto_restart: req.auto_restart.unwrap_or(true),
-        gateway_url: req.gateway_url.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+        gateway_url: req
+            .gateway_url
+            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
         skip_health_check: false,
     };
 

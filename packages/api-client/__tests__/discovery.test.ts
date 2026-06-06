@@ -283,6 +283,20 @@ describe("gateway discovery", () => {
   });
 
   describe("discoverGatewayWithFallback", () => {
+    it("does not probe 0.0.0.0 in the default fallback list", async () => {
+      const { discoverGatewayWithFallback } = await import("../src/discovery");
+      const probedUrls: string[] = [];
+      global.fetch = jest.fn(async (url: string) => {
+        probedUrls.push(url);
+        throw new Error("Connection refused");
+      }) as jest.MockedFunction<typeof global.fetch>;
+
+      const result = await discoverGatewayWithFallback();
+
+      expect(result.healthy).toBe(false);
+      expect(probedUrls.some((url) => url.includes("0.0.0.0"))).toBe(false);
+    });
+
     it("tries fallback URLs until one succeeds", async () => {
       const { discoverGatewayWithFallback } = await import("../src/discovery");
       let callCount = 0;
