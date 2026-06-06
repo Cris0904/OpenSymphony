@@ -127,20 +127,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_redacted_mask() {
-        assert_eq!(REDACTED, "****");
-    }
-
-    #[test]
-    fn test_credential_status_fields() {
-        let s = CredentialStatusResponse {
-            configured: false,
-            display: "none".into(),
-        };
-        assert!(!s.configured);
-    }
-
-    #[test]
     fn test_redact_value_does_not_leak_errors() {
         // Missing key should return None (not error information)
         let result = redact_value("nonexistent_key_for_testing_12345");
@@ -150,13 +136,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_credential_status_response_structure() {
-        // Verify response structure doesn't leak error info
-        let resp = CredentialStatusResponse {
-            configured: false,
-            display: "none".into(),
-        };
+    #[tokio::test]
+    async fn test_credential_status_hides_missing_or_unavailable_secret() {
+        let resp = credential_status(CredentialStatusRequest {
+            key: format!("opensymphony-missing-test-{}", std::process::id()),
+        })
+        .await
+        .unwrap();
         assert!(!resp.configured);
         assert_eq!(resp.display, "none");
     }

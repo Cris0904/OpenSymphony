@@ -173,13 +173,17 @@ pub struct OpenLinearLinkRequest {
 // Centralized Linear workspace base URL for deployment-specific builds.
 const LINEAR_WORKSPACE_BASE: &str = "https://linear.app/trilogy-ai-coe";
 
+fn linear_issue_url(issue_id: &str) -> String {
+    let encoded_id = urlencoding::encode(issue_id);
+    format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded_id)
+}
+
 #[command]
 pub async fn open_linear_link(
     app: tauri::AppHandle,
     req: OpenLinearLinkRequest,
 ) -> CommandResult<()> {
-    let encoded_id = urlencoding::encode(&req.issue_id);
-    let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded_id);
+    let url = linear_issue_url(&req.issue_id);
     app.opener()
         .open_url(&url, None::<&str>)
         .map_err(|e| DesktopError::Internal {
@@ -217,25 +221,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_copy_request() {
-        let r = CopyToClipboardRequest {
-            text: "test".into(),
-        };
-        assert_eq!(r.text, "test");
-    }
-
-    #[test]
-    fn test_linear_link_request() {
-        let r = OpenLinearLinkRequest {
-            issue_id: "COE-409".into(),
-        };
-        assert_eq!(r.issue_id, "COE-409");
-    }
-
-    #[test]
     fn test_linear_url_constant() {
         assert!(LINEAR_WORKSPACE_BASE.starts_with("https://linear.app/"));
-        let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, "COE-123");
+        let url = linear_issue_url("COE-123");
         assert_eq!(url, format!("{}/issue/COE-123", LINEAR_WORKSPACE_BASE));
     }
 
@@ -254,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn test_safety_workspace_path_blocks_system() {
+    fn test_is_safe_workspace_path_blocks_paths_outside_whitelist() {
         let path = std::path::Path::new("/System/Volumes/Data");
         assert!(!is_safe_workspace_path(path));
         let path = std::path::Path::new("/usr/bin/something");
@@ -266,17 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_request_structure() {
-        let req = NotifyRequest {
-            title: "Test".into(),
-            body: "Body".into(),
-        };
-        assert_eq!(req.title, "Test");
-        assert_eq!(req.body, "Body");
-    }
-
-    #[test]
-    fn test_is_safe_workspace_path_blocks_tricky_system_paths() {
+    fn test_is_safe_workspace_path_blocks_workspace_like_paths_outside_whitelist() {
         let blocked = vec![
             "/System/Volumes/Data/.opensymphony/workspaces/escape",
             "/usr/local/.opensymphony/workspaces/escape",
@@ -292,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_canonicalize_nonexistent_path_error_kind() {
+    fn test_canonicalize_not_found_maps_to_desktop_error() {
         let path = std::path::Path::new("/definitely/does/not/exist/12345");
         let result = canonicalize_action_path(path);
         assert!(matches!(result, Err(DesktopError::NotFound)));
@@ -381,22 +359,13 @@ mod tests {
 
     #[test]
     fn test_open_linear_link_request_url_encoding() {
-        // Verify URL encoding handles special characters in issue IDs
-        let req = OpenLinearLinkRequest {
-            issue_id: "COE-409".into(),
-        };
-        let encoded = urlencoding::encode(&req.issue_id);
-        let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded);
+        let url = linear_issue_url("COE-409");
         assert_eq!(url, format!("{}/issue/COE-409", LINEAR_WORKSPACE_BASE));
 
-        // Test with special characters that need encoding
-        let req_special = OpenLinearLinkRequest {
-            issue_id: "COE-409/test".into(),
-        };
-        let encoded_special = urlencoding::encode(&req_special.issue_id);
-        assert!(
-            encoded_special.to_string().contains("%2F"),
-            "Slash should be URL-encoded"
+        let special_url = linear_issue_url("COE-409/test");
+        assert_eq!(
+            special_url,
+            format!("{}/issue/COE-409%2Ftest", LINEAR_WORKSPACE_BASE)
         );
     }
 }
