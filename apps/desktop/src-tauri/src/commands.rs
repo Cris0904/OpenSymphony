@@ -2,13 +2,17 @@
 //!
 //! Every command uses narrow, strongly-typed request and response structs so
 //! that the capability matrix stays auditable and the attack surface is small.
-//!
-//! Fields are stubbed and unused until COE-404/COE-409 implement real backends.
-#![allow(dead_code)]
 
+use crate::daemon::{DaemonConfig, DaemonHandle, StartupResult};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::command;
+use tauri::State;
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -40,6 +44,25 @@ pub enum DesktopError {
 
 /// Alias for ergonomic command return types.
 type CommandResult<T> = Result<T, DesktopError>;
+
+// ─── Shared desktop state ───────────────────────────────────────────────────
+
+/// Shared application state managed by Tauri.
+pub struct DesktopState {
+    /// The supervised daemon handle, if any.
+    pub daemon_handle: Arc<Mutex<Option<DaemonHandle>>>,
+    /// Whether the daemon is currently supervised by this app instance.
+    pub daemon_supervised: Arc<AtomicBool>,
+}
+
+impl DesktopState {
+    pub fn new() -> Self {
+        Self {
+            daemon_handle: Arc::new(Mutex::new(None)),
+            daemon_supervised: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
 
 // ─── File / Folder Selection ────────────────────────────────────────────────
 
@@ -150,27 +173,281 @@ pub async fn set_setting(_req: SetSettingRequest) -> CommandResult<SetSettingRes
     Ok(SetSettingResponse { persisted: false })
 }
 
-// ─── Local Process Supervision (stencil only) ───────────────────────────────
+// ─── Connection Profiles ───────────────────────────────────────────────────
 
-/// The shell plugin is loaded at minimal baseline (`shell:default`) to allow
-/// future process supervision without requiring a capability redesign.
-/// `shell:default` grants only the `open` helper (launch default app for a URL/path).
-/// No `shell:execute` or `shell:kill` permissions are active.
-/// COE-404 will implement whitelisted executable paths, PID tracking, and
-/// input sanitization before any execute/kill permissions are added.
+/// Connection profile kind discriminant.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileKind {
+    LocalDaemon,
+    SupervisedLocalDaemon,
+    EmbeddedHost,
+    ExternalGateway,
+    HostedGateway,
+}
 
+/// Request to create or update a connection profile.
+#[derive(Debug, Deserialize)]
+pub struct ProfileRequest {
+    pub id: Option<String>,
+    pub label: String,
+    pub kind: ProfileKind,
+    pub gateway_url: String,
+    pub daemon_path: Option<String>,
+    pub daemon_args: Option<Vec<String>>,
+    pub auto_restart: Option<bool>,
+    pub startup_timeout_secs: Option<u64>,
+}
+
+/// Response with profile details.
+#[derive(Debug, Serialize)]
+pub struct ProfileResponse {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub gateway_url: String,
+    pub managed: bool,
+    pub daemon_path: Option<String>,
+}
+
+/// Store a connection profile.
+#[command]
+pub async fn store_profile(_req: ProfileRequest) -> CommandResult<ProfileResponse> {
+    // Real implementation persists to local storage
+    Ok(ProfileResponse {
+        id: _req.id.unwrap_or_else(|| "new-profile".to_string()),
+        label: _req.label,
+        kind: format!("{:?}", _req.kind),
+        gateway_url: _req.gateway_url,
+        managed: matches!(_req.kind, ProfileKind::SupervisedLocalDaemon | ProfileKind::EmbeddedHost),
+        daemon_path: _req.daemon_path,
+    })
+}
+
+/// List all stored connection profiles.
+#[command]
+pub async fn list_profiles() -> CommandResult<Vec<ProfileResponse>> {
+    // Real implementation reads from local storage
+    Ok(vec![])
+}
+
+/// Set the active connection profile.
+#[command]
+pub async fn set_active_profile(_profile_id: String) -> CommandResult<ProfileResponse> {
+    // Real implementation updates active profile in storage
+    Err(DesktopError::NotFound)
+}
+
+// ─── Gateway Discovery ──────────────────────────────────────────────────────
+
+/// Result of a gateway discovery probe.
+#[derive(Debug, Serialize)]
+pub struct DiscoveryResult {
+    pub healthy: bool,
+    pub compatible: bool,
+    pub gateway_url: String,
+    pub latency_ms: u64,
+    pub error: Option<String>,
+    pub capabilities: Option<serde_json::Value>,
+}
+
+/// Probe a gateway URL for health and capabilities.
+#[command]
+pub async fn probe_gateway(gateway_url: String) -> CommandResult<DiscoveryResult> {
+    let start = std::time::Instant::now();
+    let health_url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
+    let capabilities_url = format!("{}/api/v1/capabilities", gateway_url.trim_end_matches('/'));
+
+    // Probe health
+    match reqwest::get(&health_url).await {
+        Ok(response) if response.status().is_success() => {
+            let _health_latency = start.elapsed().as_millis() as u64;
+            
+            // Probe capabilities
+            match reqwest::get(&capabilities_url).await {
+                Ok(cap_response) if cap_response.status().is_success() => {
+                    let capabilities: Option<serde_json::Value> = cap_response.json().await.ok();
+                    let total_latency = start.elapsed().as_millis() as u64;
+                    
+                    Ok(DiscoveryResult {
+                        healthy: true,
+                        compatible: true,
+                        gateway_url,
+                        latency_ms: total_latency,
+                        error: None,
+                        capabilities,
+                    })
+                }
+                Ok(cap_response) => Ok(DiscoveryResult {
+                    healthy: true,
+                    compatible: false,
+                    gateway_url,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    error: Some(format!("Capabilities endpoint returned {}", cap_response.status())),
+                    capabilities: None,
+                }),
+                Err(e) => Ok(DiscoveryResult {
+                    healthy: true,
+                    compatible: false,
+                    gateway_url,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    error: Some(format!("Capabilities probe failed: {}", e)),
+                    capabilities: None,
+                }),
+            }
+        }
+        Ok(response) => Ok(DiscoveryResult {
+            healthy: false,
+            compatible: false,
+            gateway_url,
+            latency_ms: start.elapsed().as_millis() as u64,
+            error: Some(format!("Health check returned {}", response.status())),
+            capabilities: None,
+        }),
+        Err(e) => Ok(DiscoveryResult {
+            healthy: false,
+            compatible: false,
+            gateway_url,
+            latency_ms: start.elapsed().as_millis() as u64,
+            error: Some(format!("Health probe failed: {}", e)),
+            capabilities: None,
+        }),
+    }
+}
+
+/// Discover gateway on default loopback address.
+#[command]
+pub async fn discover_default_gateway() -> CommandResult<DiscoveryResult> {
+    let default_urls = [
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+        "http://0.0.0.0:8080",
+    ];
+
+    for url in &default_urls {
+        let result = probe_gateway(url.to_string()).await?;
+        if result.healthy && result.compatible {
+            return Ok(result);
+        }
+    }
+
+    // Return last result if none succeeded
+    probe_gateway(default_urls[0].to_string()).await
+}
+
+// ─── Daemon Supervision ─────────────────────────────────────────────────────
+
+/// Request to start a supervised daemon.
+#[derive(Debug, Deserialize)]
+pub struct StartDaemonRequest {
+    /// Path to the daemon executable.
+    pub executable: String,
+    /// Arguments to pass to the daemon.
+    pub args: Option<Vec<String>>,
+    /// Environment variables for the daemon.
+    pub env: Option<Vec<(String, String)>>,
+    /// Gateway URL where the daemon listens.
+    pub gateway_url: Option<String>,
+    /// Startup timeout in seconds.
+    pub startup_timeout_secs: Option<u64>,
+    /// Whether to auto-restart on failure.
+    pub auto_restart: Option<bool>,
+}
+
+/// Start and supervise a local daemon.
+#[command]
+pub async fn start_daemon(
+    state: State<'_, DesktopState>,
+    req: StartDaemonRequest,
+) -> CommandResult<StartupResult> {
+    if state.daemon_supervised.load(Ordering::SeqCst) {
+        return Err(DesktopError::Internal {
+            message: "Daemon already supervised by this instance".to_string(),
+        });
+    }
+
+    let config = DaemonConfig {
+        executable: PathBuf::from(&req.executable),
+        args: req.args.unwrap_or_default(),
+        env: req.env.unwrap_or_default(),
+        startup_timeout: Duration::from_secs(req.startup_timeout_secs.unwrap_or(30)),
+        auto_restart: req.auto_restart.unwrap_or(true),
+        gateway_url: req.gateway_url.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+    };
+
+    let mut handle = DaemonHandle::new(config);
+    let result = handle.start().await;
+
+    if result.success {
+        state.daemon_supervised.store(true, Ordering::SeqCst);
+        *state.daemon_handle.lock().await = Some(handle);
+    }
+
+    Ok(result)
+}
+
+/// Stop the supervised daemon.
+///
+/// Only stops if this app instance owns the process.
+#[command]
+pub async fn stop_daemon(state: State<'_, DesktopState>) -> CommandResult<serde_json::Value> {
+    if !state.daemon_supervised.load(Ordering::SeqCst) {
+        return Ok(serde_json::json!({
+            "stopped": false,
+            "reason": "no daemon supervised"
+        }));
+    }
+
+    let mut handle_guard = state.daemon_handle.lock().await;
+    if let Some(ref mut handle) = *handle_guard {
+        match handle.stop() {
+            Ok(()) => {
+                state.daemon_supervised.store(false, Ordering::SeqCst);
+                *handle_guard = None;
+                Ok(serde_json::json!({
+                    "stopped": true,
+                    "reason": null
+                }))
+            }
+            Err(e) => Ok(serde_json::json!({
+                "stopped": false,
+                "reason": e.to_string()
+            })),
+        }
+    } else {
+        Ok(serde_json::json!({
+            "stopped": false,
+            "reason": "no daemon handle"
+        }))
+    }
+}
+
+/// Query the status of the supervised daemon.
+#[command]
+pub async fn daemon_status(state: State<'_, DesktopState>) -> CommandResult<ProcessStatus> {
+    let handle_guard = state.daemon_handle.lock().await;
+    if let Some(ref handle) = *handle_guard {
+        Ok(ProcessStatus {
+            pid: handle.pid(),
+            running: handle.is_running(),
+            state: format!("{:?}", handle.state()),
+            supervised: state.daemon_supervised.load(Ordering::SeqCst),
+        })
+    } else {
+        Ok(ProcessStatus {
+            pid: None,
+            running: false,
+            state: "stopped".to_string(),
+            supervised: false,
+        })
+    }
+}
+
+/// Response for daemon process status.
 #[derive(Debug, Serialize)]
 pub struct ProcessStatus {
     pub pid: Option<u32>,
     pub running: bool,
-}
-
-/// Stub: query whether the locally-supervised daemon process is running.
-#[command]
-pub async fn daemon_status() -> CommandResult<ProcessStatus> {
-    // COE-404 will implement actual discovery + supervision.
-    Ok(ProcessStatus {
-        pid: None,
-        running: false,
-    })
+    pub state: String,
+    pub supervised: bool,
 }

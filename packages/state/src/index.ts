@@ -15,7 +15,23 @@ import type {
   TerminalFrame,
   ApprovalRequest,
   PlanningSessionSummary,
+  ConnectionProfile,
+  ConnectionProfileKind,
 } from "@opensymphony/gateway-schema";
+
+// Profile state management
+export type {
+  ProfileState,
+  ProfileAction,
+} from "./profiles.js";
+export {
+  initialProfileState,
+  profileReducer,
+  getEffectiveGatewayUrl,
+  getActiveProfile,
+  isManagedProfile,
+  isLocalProfile,
+} from "./profiles.js";
 
 // -- State slices --
 
