@@ -367,8 +367,8 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Reap the zombie so the PID becomes truly invalid
-            let _ = child.try_wait();
+            // Block to reap the zombie so the PID becomes truly invalid
+            let _ = child.wait();
         }
     }
 
