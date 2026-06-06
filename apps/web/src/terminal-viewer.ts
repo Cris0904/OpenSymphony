@@ -301,15 +301,23 @@ export class TerminalViewer {
       return { frames: buffer.visibleFrames, offset: buffer.offset };
     }
 
-    let start = buffer.atBottom ? buffer.visibleFrames.length - this.config.maxVisibleFrames : 0;
+    const max = this.config.maxVisibleFrames;
+    let start = 0;
     const windowEnd = buffer.offset + buffer.visibleFrames.length;
     if (focusIndex !== undefined && focusIndex >= buffer.offset && focusIndex < windowEnd) {
       const focusOffset = focusIndex - buffer.offset;
-      const centeredStart = focusOffset - Math.floor(this.config.maxVisibleFrames / 2);
-      start = Math.max(0, Math.min(centeredStart, buffer.visibleFrames.length - this.config.maxVisibleFrames));
+      start = Math.max(0, Math.min(focusOffset - Math.floor(max / 2), buffer.visibleFrames.length - max));
+    } else if (buffer.atBottom) {
+      start = buffer.visibleFrames.length - max;
+    } else {
+      // Center on the middle of the visible window when not at bottom
+      start = Math.max(0, Math.min(
+        Math.floor(buffer.visibleFrames.length / 2) - Math.floor(max / 2),
+        buffer.visibleFrames.length - max,
+      ));
     }
     return {
-      frames: buffer.visibleFrames.slice(start, start + this.config.maxVisibleFrames),
+      frames: buffer.visibleFrames.slice(start, start + max),
       offset: buffer.offset + start,
     };
   }
@@ -540,6 +548,15 @@ export class TerminalViewer {
   private jumpToLatest(): void {
     this.pendingFocusFrameIndex = undefined;
     this.renderer?.jumpToLatest();
+  }
+
+  /**
+   * Scroll to a specific frame index and center the visible window on it.
+   * Public API for programmatic navigation (e.g., keyboard shortcuts, direct links).
+   */
+  scrollToFrame(targetIndex: number): void {
+    this.pendingFocusFrameIndex = targetIndex;
+    this.renderer?.scrollToFrame(targetIndex);
   }
 
   /**
