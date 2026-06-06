@@ -53,6 +53,7 @@ pub async fn open_repository_folder(
     // canonicalize() returns io::Error for non-existent paths naturally
     let canon = p.canonicalize().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => DesktopError::NotFound,
+        std::io::ErrorKind::PermissionDenied => DesktopError::PermissionDenied,
         _ => DesktopError::Internal {
             message: format!("failed to canonicalize: {e}"),
         },
@@ -92,6 +93,7 @@ pub async fn reveal_workspace(
     // canonicalize() returns io::Error for non-existent paths naturally
     let canon = p.canonicalize().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => DesktopError::NotFound,
+        std::io::ErrorKind::PermissionDenied => DesktopError::PermissionDenied,
         _ => DesktopError::Internal {
             message: format!("failed to canonicalize: {e}"),
         },
@@ -99,9 +101,9 @@ pub async fn reveal_workspace(
     let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
         message: "could not determine home directory".into(),
     })?;
-    let base = home.join(".opensymphony").join("workspaces");
-    // Canonicalize base to handle symlinks in home directory path
-    let canon_base = base.canonicalize().unwrap_or(base);
+    // Canonicalize home itself first, then build the base path to avoid symlink mismatch
+    let canon_home = home.canonicalize().unwrap_or(home);
+    let canon_base = canon_home.join(".opensymphony").join("workspaces");
     if !canon.starts_with(&canon_base) {
         return Err(DesktopError::PermissionDenied);
     }
@@ -116,9 +118,9 @@ pub async fn reveal_workspace(
 
 fn is_safe_workspace_path(path: &std::path::Path) -> bool {
     if let Some(home) = dirs::home_dir() {
-        let os_base = home.join(".opensymphony");
-        // Canonicalize base to handle symlinks in home directory path
-        let canon_base = os_base.canonicalize().unwrap_or(os_base);
+        // Canonicalize home itself first to handle symlinks in home path
+        let canon_home = home.canonicalize().unwrap_or(home);
+        let canon_base = canon_home.join(".opensymphony");
         if path.starts_with(&canon_base) {
             return true;
         }
@@ -142,13 +144,11 @@ pub struct CopyToClipboardResponse {
 
 #[command]
 pub async fn copy_to_clipboard(
+    app: tauri::AppHandle,
     req: CopyToClipboardRequest,
 ) -> CommandResult<CopyToClipboardResponse> {
-    use arboard::Clipboard;
-    let mut cb = Clipboard::new().map_err(|e| DesktopError::Internal {
-        message: format!("clipboard unavailable: {e}"),
-    })?;
-    cb.set_text(&req.text).map_err(|e| DesktopError::Internal {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard().write_text(&req.text).map_err(|e| DesktopError::Internal {
         message: format!("failed to copy: {e}"),
     })?;
     Ok(CopyToClipboardResponse { copied: true })

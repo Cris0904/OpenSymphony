@@ -2501,7 +2501,6 @@ dependencies = [
 name = "opensymphony-desktop"
 version = "1.6.0"
 dependencies = [
- "arboard",
  "directories",
  "dirs",
  "keyring",
