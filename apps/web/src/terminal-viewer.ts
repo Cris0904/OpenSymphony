@@ -186,11 +186,13 @@ export class TerminalViewer {
     };
     this._onCopy = () => this.copyToClipboard();
     this._onJump = () => this.jumpToLatest();
+    this._onScroll = () => this.syncScrollStateFromDom();
 
     searchButton.addEventListener("click", this._onSearch);
     searchInput.addEventListener("keypress", this._onSearchKeypress);
     copyButton.addEventListener("click", this._onCopy);
     jumpButton.addEventListener("click", this._onJump);
+    scrollContainer.addEventListener("scroll", this._onScroll, { passive: true });
 
     this.toolbar = toolbar;
     this.searchInput = searchInput;
@@ -206,6 +208,7 @@ export class TerminalViewer {
   private _onSearchKeypress?: (e: KeyboardEvent) => void;
   private _onCopy?: () => void;
   private _onJump?: () => void;
+  private _onScroll?: () => void;
 
   /**
    * Attach to the renderer and listen for updates.
@@ -429,6 +432,62 @@ export class TerminalViewer {
   }
 
   /**
+   * Keep renderer scrollback state aligned with manual DOM scrolling.
+   *
+   * The DOM only renders a small window, so "scrolled to bottom" means latest
+   * only when the rendered bottom line is also the newest retained frame.
+   */
+  private syncScrollStateFromDom(): void {
+    const renderer = this.renderer;
+    const scrollContainer = this.scrollContainer;
+    if (!renderer || !scrollContainer || this.lineElements.length === 0) return;
+
+    const buffer = renderer.getBuffer();
+    const lastRenderedIndex = this.getLineIndex(
+      this.lineElements[this.lineElements.length - 1],
+    );
+    const domAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight
+      >= scrollContainer.scrollHeight - 2;
+    const atLatest = domAtBottom
+      && lastRenderedIndex !== undefined
+      && lastRenderedIndex >= buffer.totalFrames - 1;
+
+    if (atLatest) {
+      renderer.syncScrollPosition(lastRenderedIndex, true);
+      this.updateStatus(renderer.getBuffer());
+      return;
+    }
+
+    const firstVisibleIndex = this.getFirstVisibleLineIndex();
+    if (firstVisibleIndex === undefined) return;
+
+    renderer.syncScrollPosition(firstVisibleIndex, false);
+    this.updateStatus(renderer.getBuffer());
+  }
+
+  private getFirstVisibleLineIndex(): number | undefined {
+    const scrollContainer = this.scrollContainer;
+    if (!scrollContainer) return undefined;
+
+    const containerRect = scrollContainer.getBoundingClientRect();
+    for (const line of this.lineElements) {
+      const lineRect = line.getBoundingClientRect();
+      if (lineRect.bottom >= containerRect.top && lineRect.top <= containerRect.bottom) {
+        return this.getLineIndex(line);
+      }
+    }
+
+    return this.getLineIndex(this.lineElements[this.lineElements.length - 1]);
+  }
+
+  private getLineIndex(line: HTMLElement | undefined): number | undefined {
+    if (!line) return undefined;
+
+    const index = Number(line.dataset.lineIndex);
+    return Number.isFinite(index) ? index : undefined;
+  }
+
+  /**
    * Perform text search in terminal output.
    * Searches the full scrollback buffer history, not just visible DOM elements.
    */
@@ -575,6 +634,9 @@ export class TerminalViewer {
     if (this.jumpButton && this._onJump) {
       this.jumpButton.removeEventListener("click", this._onJump);
     }
+    if (this.scrollContainer && this._onScroll) {
+      this.scrollContainer.removeEventListener("scroll", this._onScroll);
+    }
 
     this.detachRender?.();
     this.detachRender = undefined;
@@ -594,6 +656,7 @@ export class TerminalViewer {
     this._onSearchKeypress = undefined;
     this._onCopy = undefined;
     this._onJump = undefined;
+    this._onScroll = undefined;
   }
 }
 

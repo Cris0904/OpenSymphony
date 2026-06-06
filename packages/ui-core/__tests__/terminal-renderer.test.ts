@@ -519,6 +519,25 @@ describe("loadFixturesFromJson", () => {
 
 // -- Renderer tests --
 
+function queueGeneratedFrames(renderer: TerminalRenderer, startSequence: number, count: number): void {
+  const frames = generateBurstFrames(count);
+  for (let index = 0; index < frames.length; index++) {
+    const frame = {
+      ...frames[index],
+      content: `frame ${startSequence + index}`,
+      frame_sequence: startSequence + index,
+    };
+    renderer.queueFrame(frame.content, frame.encoding, frame);
+  }
+}
+
+async function waitForFrameCount(renderer: TerminalRenderer, expectedCount: number): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (renderer.getMetrics().frameCount < expectedCount && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 describe("TerminalRenderer", () => {
   it("creates renderer with default config", () => {
     const renderer = createTerminalRenderer();
@@ -662,6 +681,36 @@ describe("TerminalRenderer", () => {
 
     const newBuffer = renderer.getBuffer();
     expect(newBuffer.atBottom).toBe(true);
+  });
+
+  it("preserves manually synced scroll position while live frames arrive", async () => {
+    const renderer = createTerminalRenderer({
+      maxBufferCapacity: 20,
+      renderIntervalMs: 0,
+      batchSize: 100,
+    });
+
+    try {
+      queueGeneratedFrames(renderer, 0, 30);
+      await waitForFrameCount(renderer, 30);
+
+      renderer.syncScrollPosition(12, false);
+      const scrolledBuffer = renderer.getBuffer();
+      const visibleBefore = scrolledBuffer.visibleFrames.map(
+        (frame) => frame.frame.frame_sequence,
+      );
+
+      queueGeneratedFrames(renderer, 30, 5);
+      await waitForFrameCount(renderer, 35);
+
+      const updatedBuffer = renderer.getBuffer();
+      expect(updatedBuffer.atBottom).toBe(false);
+      expect(updatedBuffer.offset).toBe(scrolledBuffer.offset);
+      expect(updatedBuffer.visibleFrames.map((frame) => frame.frame.frame_sequence))
+        .toEqual(visibleBefore);
+    } finally {
+      renderer.dispose();
+    }
   });
 });
 

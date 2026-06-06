@@ -217,6 +217,20 @@ export class TerminalRenderer {
   }
 
   /**
+   * Synchronize scroll state owned by an external DOM viewport.
+   *
+   * Unlike scrollToFrame(), this intentionally does not invoke the render
+   * callback because the viewport has already moved. The renderer only needs
+   * updated atBottom/offset state so later frame appends preserve the user's
+   * manual scroll position instead of jumping back to the latest output.
+   */
+  syncScrollPosition(firstVisibleFrameIndex: number, atBottom: boolean): void {
+    this.buffer = atBottom
+      ? jumpToLatest(this.buffer)
+      : scrollTo(this.buffer, firstVisibleFrameIndex);
+  }
+
+  /**
    * Clear all frames and reset state.
    */
   clear(): void {
