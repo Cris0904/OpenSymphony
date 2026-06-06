@@ -117,26 +117,32 @@ pub async fn reveal_workspace(
 }
 
 fn is_safe_workspace_path(path: &std::path::Path) -> bool {
-    if let Some(home) = dirs::home_dir() {
-        // Canonicalize home first to resolve symlinks, then build base
-        let canon_home = home.canonicalize().unwrap_or(home);
-        let canon_base = canon_home.join(".opensymphony");
-        // Canonicalize input path to handle .. components and symlinks
-        if let Ok(canon_path) = path.canonicalize() {
+    // Reject paths with .. components immediately as potential escape attempts
+    if path.components().any(|c| c.as_os_str() == "..") {
+        // Only allow .. if the path can be canonicalized and stays under .opensymphony
+        if let (Ok(canon_path), Some(home)) = (path.canonicalize(), dirs::home_dir()) {
+            let canon_home = home.canonicalize().unwrap_or(home);
+            let canon_base = canon_home.join(".opensymphony");
             if canon_path.starts_with(&canon_base) {
                 return true;
             }
-            // Path exists but isn't under .opensymphony - block it
-            return false;
         }
-        // Path doesn't exist - check for escape attempts via .. components
-        // before falling back to string prefix check
-        if path.components().any(|c| c.as_os_str() == "..") {
-            // Reject paths with .. that can't be canonicalized (may escape workspace)
-            return false;
-        }
-        if path.starts_with(&canon_base) {
+        return false;
+    }
+    
+    if let Some(home) = dirs::home_dir() {
+        let base = home.join(".opensymphony");
+        // Check containment BEFORE canonicalization to avoid symlink mismatch
+        if path.starts_with(&base) {
             return true;
+        }
+        // Canonicalize to check resolved symlinks
+        if let Ok(canon_path) = path.canonicalize() {
+            let canon_home = home.canonicalize().unwrap_or(home);
+            let canon_base = canon_home.join(".opensymphony");
+            if canon_path.starts_with(&canon_base) {
+                return true;
+            }
         }
     }
     let s = path.to_string_lossy();

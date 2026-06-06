@@ -210,10 +210,30 @@ mod tests {
     fn test_settings_load_or_default() {
         let tmp = std::env::temp_dir().join(format!("default_test_{}.json", std::process::id()));
         
-        // When file doesn't exist, should create with defaults
+        // When file doesn't exist, should return defaults (empty HashMap)
         let mgr = SettingsManager::with_path(&tmp).unwrap();
         assert!(mgr.get("nonexistent").is_none());
-        
+
+        // Set a value and verify persistence
+        mgr.set("persisted_key", SettingValue::Text("initial".into())).unwrap();
+        assert_eq!(mgr.get("persisted_key"), Some(SettingValue::Text("initial".into())));
+
+        // Create a new manager pointing to same file to verify load
+        let mgr2 = SettingsManager::with_path(&tmp).unwrap();
+        assert_eq!(mgr2.get("persisted_key"), Some(SettingValue::Text("initial".into())));
+
+        // Overwrite and verify
+        mgr2.set("persisted_key", SettingValue::Text("updated".into())).unwrap();
+        assert_eq!(mgr2.get("persisted_key"), Some(SettingValue::Text("updated".into())));
+
+        // Verify type preservation across save/load cycles
+        mgr2.set("num_key", SettingValue::Number(99.0)).unwrap();
+        mgr2.set("flag_key", SettingValue::Flag(true)).unwrap();
+
+        let mgr3 = SettingsManager::with_path(&tmp).unwrap();
+        assert_eq!(mgr3.get("num_key"), Some(SettingValue::Number(99.0)));
+        assert_eq!(mgr3.get("flag_key"), Some(SettingValue::Flag(true)));
+
         std::fs::remove_file(&tmp).ok();
     }
 }
