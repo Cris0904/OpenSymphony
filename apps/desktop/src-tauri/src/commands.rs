@@ -859,84 +859,14 @@ pub async fn get_connection_profiles() -> CommandResult<Vec<ConnectionProfile>> 
 
 // ─── Gateway Local Stream Transport (COE-410) ──────────────────────────────
 
-/// Schema version used in all gateway payloads.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SchemaVersion {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
-
-impl SchemaVersion {
-    pub fn v1() -> Self {
-        Self {
-            major: 1,
-            minor: 0,
-            patch: 0,
-        }
-    }
-}
-
-/// Stream cursor for replay and resumable subscriptions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamCursor {
-    pub sequence: u64,
-    pub partition: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp_anchor: Option<u64>,
-}
-
-/// Entity reference in gateway envelopes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityRef {
-    pub kind: String,
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifier: Option<String>,
-}
-
-/// Gateway event envelope — the shared contract across all transport profiles.
-/// Local and remote transports must produce identical envelope shapes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayEnvelope {
-    pub schema_version: SchemaVersion,
-    pub cursor: StreamCursor,
-    pub entity_ref: EntityRef,
-    pub event_kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payload: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw_payload: Option<serde_json::Value>,
-    pub emitted_at: String,
-}
-
-/// Health capability response for the gateway.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayCapabilities {
-    pub schema_version: SchemaVersion,
-    pub gateway_version: String,
-    pub supported_api_versions: Vec<String>,
-    pub transports: Vec<GatewayTransportCapability>,
-    pub features: Vec<GatewayFeatureCapability>,
-    pub auth_modes: Vec<String>,
-    pub max_event_page_size: usize,
-    pub max_terminal_frame_batch: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayTransportCapability {
-    pub transport: String,
-    pub modes: Vec<String>,
-    pub supported_encodings: Vec<String>,
-    pub bidirectional: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayFeatureCapability {
-    pub feature: String,
-    pub available: bool,
-    pub requires_auth: bool,
-}
+use opensymphony_gateway_schema::{
+    capability::{
+        AuthMode, FeatureCapability as GatewayFeatureCapability, GatewayCapabilities,
+        TransportCapability as GatewayTransportCapability,
+    },
+    envelope::GatewayEnvelope,
+    version::SchemaVersion,
+};
 
 /// Request to subscribe to the gateway event stream via Tauri channel.
 #[derive(Debug, Deserialize)]
@@ -951,20 +881,6 @@ pub struct SubscribeTerminalRequest {
     pub run_id: String,
     /// Optional cursor to resume from (sequence number).
     pub cursor: Option<u64>,
-}
-
-/// Terminal frame payload for high-throughput local streaming.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TerminalFrame {
-    pub schema_version: SchemaVersion,
-    pub frame_sequence: u64,
-    pub stream_id: String,
-    pub run_id: String,
-    pub terminal_session_id: String,
-    pub frame_kind: String,
-    pub encoding: String,
-    pub content: String,
-    pub timestamp: String,
 }
 
 /// Gateway health status.
@@ -1020,14 +936,16 @@ pub async fn gateway_capabilities() -> CommandResult<GatewayCapabilities> {
                 feature: "task_graph".to_string(),
                 available: true,
                 requires_auth: false,
+                requires_plan: None,
             },
             GatewayFeatureCapability {
                 feature: "terminal_stream".to_string(),
                 available: true,
                 requires_auth: false,
+                requires_plan: None,
             },
         ],
-        auth_modes: vec!["none".to_string(), "api_key".to_string()],
+        auth_modes: vec![AuthMode::None, AuthMode::ApiKey],
         max_event_page_size: 1000,
         max_terminal_frame_batch: 500,
     })

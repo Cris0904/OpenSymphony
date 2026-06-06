@@ -708,31 +708,58 @@ export class WebSocketTransport implements GatewayTransport {
  * 4. Loopback HTTP/WebSocket - compatibility baseline
  */
 
+/**
+ * Tauri IPC Channel shape compatible with @tauri-apps/api/core.Channel.
+ *
+ * In Tauri v2, the frontend creates a Channel via `new Channel<T>(onMessage)`,
+ * passes it as `tx` to `invoke(cmd, { tx })`, and the backend receives it as
+ * `tauri::ipc::Channel<T>`.
+ */
+export interface TauriChannel<T> {
+  onmessage: ((data: T) => void) | null;
+  close(): void;
+}
+
+/**
+ * Tauri runtime API shape available on `globalThis.__TAURI__`.
+ * Provides the `invoke` function and the `Channel` constructor.
+ */
+export interface TauriRuntime {
+  invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+  core: {
+    Channel<T>(onMessage: (data: T) => void): TauriChannel<T>;
+  };
+}
+
 export class TauriChannelTransport implements GatewayTransport {
   readonly baseUri: string;
   private readonly authToken?: string;
   private eventChannel?: TauriChannel<GatewayEnvelope>;
   private terminalChannels: Map<string, TauriChannel<GatewayEnvelope>> = new Map();
+  private isClosed = false;
+  private readonly pendingGeneratorCancellers = new Set<() => void>();
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
     this.authToken = config.authToken;
   }
 
-  private async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-    // In a real Tauri app, this would use @tauri-apps/api/core invoke
-    // For type compatibility, we define the expected interface
+  private tauri(): TauriRuntime {
     const tauri = (globalThis as Record<string, unknown>).__TAURI__ as
-      | { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<T> }
+      | TauriRuntime
       | undefined;
 
-    if (!tauri?.invoke) {
+    if (!tauri?.invoke || !tauri?.core?.Channel) {
       throw new Error(
-        "TauriChannelTransport requires Tauri runtime context",
+        "TauriChannelTransport requires Tauri v2 runtime with invoke and Channel",
       );
     }
 
-    return tauri.invoke(command, {
+    return tauri;
+  }
+
+  private async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    return this.tauri().invoke(command, {
       ...args,
       auth_token: this.authToken,
     });
@@ -769,28 +796,35 @@ export class TauriChannelTransport implements GatewayTransport {
   }
 
   async *events(_cursor?: number): AsyncIterable<GatewayEnvelope> {
-    // Tauri channels provide a callback-based stream
-    // We convert it to an async iterable for the GatewayTransport interface
     const queue: GatewayEnvelope[] = [];
     let resolveNext: ((value: IteratorResult<GatewayEnvelope>) => void) | null = null;
 
-    const channel = await this.invoke<TauriChannel<GatewayEnvelope>>(
-      "subscribe_events",
-      {},
+    const channel = this.tauri().core.Channel<GatewayEnvelope>(
+      (envelope: GatewayEnvelope) => {
+        queue.push(envelope);
+        if (resolveNext) {
+          resolveNext({ value: envelope, done: false });
+          resolveNext = null;
+        }
+      },
     );
 
-    channel.onmessage = (envelope: GatewayEnvelope) => {
-      queue.push(envelope);
-      if (resolveNext) {
-        resolveNext({ value: envelope, done: false });
-        resolveNext = null;
-      }
-    };
+    // Pass the frontend-created channel as `tx` to the Rust backend.
+    // The backend receives this as `tauri::ipc::Channel<GatewayEnvelope>`.
+    await this.invoke("subscribe_events", { tx: channel });
 
     this.eventChannel = channel;
 
+    const cancelGenerator = () => {
+      if (resolveNext) {
+        resolveNext({ value: {} as GatewayEnvelope, done: true });
+        resolveNext = null;
+      }
+    };
+    this.pendingGeneratorCancellers.add(cancelGenerator);
+
     try {
-      while (true) {
+      while (!this.isClosed) {
         if (queue.length > 0) {
           yield queue.shift()!;
         } else {
@@ -800,7 +834,9 @@ export class TauriChannelTransport implements GatewayTransport {
         }
       }
     } finally {
+      this.pendingGeneratorCancellers.delete(cancelGenerator);
       channel.close?.();
+      this.eventChannel = undefined;
     }
   }
 
@@ -808,25 +844,33 @@ export class TauriChannelTransport implements GatewayTransport {
     const queue: GatewayEnvelope[] = [];
     let resolveNext: ((value: IteratorResult<GatewayEnvelope>) => void) | null = null;
 
-    const channel = await this.invoke<TauriChannel<GatewayEnvelope>>(
-      "subscribe_terminal",
-      { run_id: runId },
+    const channel = this.tauri().core.Channel<GatewayEnvelope>(
+      (envelope: GatewayEnvelope) => {
+        if (envelope.entity_ref.kind === "terminal_session") {
+          queue.push(envelope);
+          if (resolveNext) {
+            resolveNext({ value: envelope, done: false });
+            resolveNext = null;
+          }
+        }
+      },
     );
 
-    channel.onmessage = (envelope: GatewayEnvelope) => {
-      if (envelope.entity_ref.kind === "terminal_session") {
-        queue.push(envelope);
-        if (resolveNext) {
-          resolveNext({ value: envelope, done: false });
-          resolveNext = null;
-        }
-      }
-    };
+    // Pass the frontend-created channel as `tx` to the Rust backend.
+    await this.invoke("subscribe_terminal", { run_id: runId, tx: channel });
 
     this.terminalChannels.set(runId, channel);
 
+    const cancelGenerator = () => {
+      if (resolveNext) {
+        resolveNext({ value: {} as GatewayEnvelope, done: true });
+        resolveNext = null;
+      }
+    };
+    this.pendingGeneratorCancellers.add(cancelGenerator);
+
     try {
-      while (true) {
+      while (!this.isClosed) {
         if (queue.length > 0) {
           yield queue.shift()!;
         } else {
@@ -836,12 +880,21 @@ export class TauriChannelTransport implements GatewayTransport {
         }
       }
     } finally {
+      this.pendingGeneratorCancellers.delete(cancelGenerator);
       channel.close?.();
       this.terminalChannels.delete(runId);
     }
   }
 
   async close(): Promise<void> {
+    this.isClosed = true;
+
+    // Resolve all pending generator promises to prevent hangs
+    for (const cancel of this.pendingGeneratorCancellers) {
+      cancel();
+    }
+    this.pendingGeneratorCancellers.clear();
+
     this.eventChannel?.close?.();
     for (const channel of this.terminalChannels.values()) {
       channel.close?.();
