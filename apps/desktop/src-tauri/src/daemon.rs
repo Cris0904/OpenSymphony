@@ -255,15 +255,18 @@ impl DaemonHandle {
         if self.pid.is_none()
             || !matches!(
                 self.state,
-                DaemonState::Running | DaemonState::Starting | DaemonState::Unhealthy
+                DaemonState::Running
+                    | DaemonState::Starting
+                    | DaemonState::Unhealthy
+                    | DaemonState::Stopping
             )
         {
             return false;
         }
         if !self.is_process_alive() {
-            // OS process died but state still says running - update to reflect reality.
+            // OS process died but state still says running/stopping - update to reflect reality.
             // This prevents stale-state hazards where is_running() returns false
-            // but daemon_status() still reports state as "running".
+            // but daemon_status() still reports state as "running" or "stopping".
             warn!(pid = ?self.pid, "daemon process detected dead, updating state");
             self.state = DaemonState::Stopped;
             self.pid = None;
@@ -379,11 +382,9 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and calls `wait()` to reap the zombie. This is safe
-    /// because SIGKILL is uncatchable: the process is guaranteed to exit
-    /// within milliseconds, so `wait()` returns immediately rather than
-    /// blocking indefinitely. Use this instead of `try_wait()` when you
-    /// need to guarantee the zombie is reaped (e.g., before PID reuse).
+    /// Sends SIGKILL and polls with `try_wait()` to verify the process exits.
+    /// Uses a short retry loop (max 100 ms) so it remains safe for `Drop` and
+    /// async contexts while ensuring the process is actually reaped.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -399,9 +400,17 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Block briefly to reap the zombie. This returns almost immediately
-            // because SIGKILL is uncatchable — the process cannot ignore it.
-            let _ = child.wait();
+
+            // Poll briefly so SIGKILL propagates and the child is reaped.
+            // 100 ms max keeps this safe for Drop and async callers.
+            let deadline = Instant::now() + Duration::from_millis(100);
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break, // Process reaped.
+                    Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                    Err(_) => break,
+                }
+            }
         }
         self.child = None;
     }
