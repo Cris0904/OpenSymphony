@@ -27,6 +27,13 @@ fn main() {
             commands::get_setting,
             commands::set_setting,
             commands::daemon_status,
+            // COE-410: Gateway local stream transport commands
+            commands::gateway_capabilities,
+            commands::gateway_health,
+            commands::subscribe_events,
+            commands::subscribe_terminal,
+            commands::unsubscribe_events,
+            commands::unsubscribe_terminal,
         ])
         .run(tauri::generate_context!())
     {
