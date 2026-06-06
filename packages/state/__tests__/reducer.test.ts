@@ -922,14 +922,17 @@ describe("computeSafeActions", () => {
     expect(actions).toEqual<SafeActions>({ retry: true, cancel: true, rehydrate: true, detach: true });
   });
 
-  it("allows cancel and rehydrate for retry_queued runs", () => {
+  it("allows cancel, rehydrate, detach for retry_queued runs", () => {
     const actions = computeSafeActions("retry_queued", "healthy", "retry_queued", false);
-    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: true, detach: false });
+    // retry_queued: detach allowed (non-terminal), cancel not allowed (already queued),
+    // rehydrate allowed (scheduler waiting but harness may be stuck)
+    expect(actions).toEqual<SafeActions>({ retry: false, cancel: false, rehydrate: true, detach: true });
   });
 
-  it("allows retry for cancelled runs", () => {
+  it("allows retry and rehydrate for cancelled runs", () => {
     const actions = computeSafeActions("cancelled", "dead", "released", false);
-    expect(actions).toEqual<SafeActions>({ retry: true, cancel: false, rehydrate: false, detach: false });
+    // cancelled: retry allowed, rehydrate allowed (dead stream)
+    expect(actions).toEqual<SafeActions>({ retry: true, cancel: false, rehydrate: true, detach: false });
   });
 
   it("allows retry for completed, dead runs", () => {
@@ -950,9 +953,10 @@ describe("computeSafeActions", () => {
     expect(actions.detach).toBe(true);
   });
 
-  it("allows cancel, rehydrate, detach for quiet runs", () => {
+  it("allows cancel and detach for quiet runs", () => {
     const actions = computeSafeActions("quiet", "healthy", "running", false);
-    expect(actions).toEqual<SafeActions>({ retry: false, cancel: true, rehydrate: true, detach: true });
+    // quiet: rehydrate not allowed (stream healthy, not stalled/degraded)
+    expect(actions).toEqual<SafeActions>({ retry: false, cancel: true, rehydrate: false, detach: true });
   });
 
   it("allows all actions for detached runs", () => {
