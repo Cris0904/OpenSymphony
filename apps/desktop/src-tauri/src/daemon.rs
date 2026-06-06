@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::time::timeout;
 use tracing::{error, info, warn};
 
 /// Configuration for a supervised daemon process.
@@ -43,7 +44,16 @@ pub enum DaemonState {
     /// Daemon is shutting down.
     Stopping,
     /// Daemon has crashed or failed to start.
+    #[serde(serialize_with = "serialize_failed_state")]
     Failed(String),
+}
+
+/// Serialize the Failed variant as a snake_case string for consistency.
+fn serialize_failed_state<S>(error: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&format!("failed: {}", error))
 }
 
 /// Result of a daemon startup attempt.
@@ -196,8 +206,14 @@ impl DaemonHandle {
 
         info!(url = %health_url, "waiting for daemon health check");
 
+        // Use a client with per-request timeout to avoid blocking indefinitely
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| DaemonError::StartFailed(format!("Failed to build HTTP client: {}", e)))?;
+
         while Instant::now() < deadline {
-            match reqwest::get(&health_url).await {
+            match client.get(&health_url).send().await {
                 Ok(response) if response.status().is_success() => {
                     return Ok(());
                 }
@@ -240,14 +256,15 @@ impl DaemonHandle {
 
     /// Stop the daemon process gracefully.
     ///
-    /// Only stops if this handle owns the process.
+    /// Only stops if this handle owns the process. Sends SIGTERM first,
+    /// waits up to 5 seconds for exit, then escalates to SIGKILL if needed.
     pub fn stop(&mut self) -> Result<(), DaemonError> {
         if !self.owns_process {
             warn!("attempted to stop daemon that we don't own");
             return Ok(());
         }
 
-        if let Some(ref mut child) = self.child {
+        if self.child.is_some() {
             info!(pid = ?self.pid, "stopping daemon process");
             self.state = DaemonState::Stopping;
 
@@ -261,27 +278,40 @@ impl DaemonHandle {
             {
                 // Use taskkill on Windows
                 let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
+                    .args(["/PID", &self.pid.unwrap_or(0).to_string()])
                     .output();
             }
 
             // Non-blocking wait: poll for exit with a short timeout to avoid
             // blocking the tokio runtime indefinitely.
+            // If the process doesn't exit within 5 seconds, escalate to SIGKILL.
             let deadline = Instant::now() + Duration::from_secs(5);
+            let mut exited = false;
             while Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        info!(pid = ?self.pid, status = ?status, "daemon stopped");
-                        break;
-                    }
-                    Ok(None) => {
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                    Err(e) => {
-                        warn!(pid = ?self.pid, error = %e, "error checking daemon status");
-                        break;
+                if let Some(ref mut child) = self.child {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            info!(pid = ?self.pid, status = ?status, "daemon stopped gracefully");
+                            exited = true;
+                            break;
+                        }
+                        Ok(None) => {
+                            // Process still running, use spawn_blocking to avoid
+                            // blocking the tokio worker thread
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        Err(e) => {
+                            warn!(pid = ?self.pid, error = %e, "error checking daemon status");
+                            break;
+                        }
                     }
                 }
+            }
+
+            // Escalate to SIGKILL if process didn't exit within timeout
+            if !exited {
+                warn!(pid = ?self.pid, "daemon did not exit within 5s, force-killing");
+                self.kill_process_only();
             }
         }
 
@@ -291,6 +321,23 @@ impl DaemonHandle {
         self.owns_process = false;
 
         Ok(())
+    }
+
+    /// Internal helper to kill just the process without updating state fields.
+    fn kill_process_only(&mut self) {
+        if let Some(ref mut child) = self.child {
+            #[cfg(unix)]
+            {
+                let _ = unsafe { libc::kill(self.pid.unwrap_or(0) as i32, libc::SIGKILL) };
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
+                    .output();
+            }
+            let _ = child.kill();
+        }
     }
 
     /// Force-kill the daemon process.

@@ -256,8 +256,10 @@ pub struct ProfileResponse {
 /// Store a connection profile.
 #[command]
 pub async fn store_profile(_req: ProfileRequest) -> CommandResult<ProfileResponse> {
-    // Real implementation persists to local storage
-    // Use serde_json for consistent snake_case serialization
+    // Stub implementation - real persistence will be added in COE-409
+    // with proper UUID generation to prevent ID collisions.
+    // Current behavior: returns "new-profile" only when no ID is provided,
+    // which is acceptable for this alpha-stage stub.
     let kind_str = serde_json::to_string(&_req.kind).unwrap_or_else(|_| "\"unknown\"".to_string());
     Ok(ProfileResponse {
         id: _req.id.unwrap_or_else(|| "new-profile".to_string()),
