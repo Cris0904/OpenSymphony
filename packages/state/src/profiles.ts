@@ -169,7 +169,16 @@ export function isManagedProfile(state: ProfileState): boolean {
 }
 
 /**
- * Check if the active profile uses local daemon transport.
+ * Check if the active profile uses local transport (daemon or embedded).
+ *
+ * Heuristic: local profiles include daemon-managed modes and local gateways.
+ * - local_daemon: unmanaged local daemon (user started externally)
+ * - supervised_local_daemon: app-managed daemon lifecycle
+ * - embedded_host: daemon runs in-process with the desktop app
+ * - external_gateway: local gateway on loopback or LAN (not hosted cloud)
+ *
+ * hosted_gateway is excluded because it uses a remote cloud endpoint that
+ * requires authentication and different connection handling.
  */
 export function isLocalProfile(state: ProfileState): boolean {
   const activeProfile = getActiveProfile(state);

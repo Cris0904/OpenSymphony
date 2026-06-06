@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 /// Configuration for a supervised daemon process.
@@ -78,6 +77,7 @@ pub enum DaemonError {
 /// Handle to a supervised daemon process.
 ///
 /// Tracks process ownership and provides lifecycle management.
+/// Only stops processes that this handle explicitly owns.
 pub struct DaemonHandle {
     /// The child process.
     child: Option<Child>,
@@ -89,8 +89,6 @@ pub struct DaemonHandle {
     owns_process: bool,
     /// Configuration used to start this daemon.
     config: DaemonConfig,
-    /// Shutdown signal sender.
-    shutdown_tx: Option<watch::Sender<bool>>,
 }
 
 impl DaemonHandle {
@@ -102,7 +100,6 @@ impl DaemonHandle {
             state: DaemonState::Stopped,
             owns_process: false,
             config,
-            shutdown_tx: None,
         }
     }
 
@@ -330,62 +327,6 @@ impl Drop for DaemonHandle {
             // Non-blocking cleanup: just kill, never wait
             let _ = self.kill();
         }
-    }
-}
-
-/// Supervisor that manages a daemon's lifecycle.
-///
-/// Monitors the daemon process and optionally restarts it on failure.
-pub struct DaemonSupervisor {
-    /// The daemon handle being supervised.
-    handle: DaemonHandle,
-    /// Whether auto-restart is enabled.
-    auto_restart: bool,
-    /// Shutdown signal receiver.
-    shutdown_rx: watch::Receiver<bool>,
-}
-
-impl DaemonSupervisor {
-    /// Create a new supervisor for the given daemon configuration.
-    pub fn new(config: DaemonConfig) -> (Self, watch::Sender<bool>) {
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let auto_restart = config.auto_restart;
-        let handle = DaemonHandle::new(config);
-        let supervisor = Self {
-            handle,
-            auto_restart,
-            shutdown_rx,
-        };
-        (supervisor, shutdown_tx)
-    }
-
-    /// Start supervising the daemon.
-    ///
-    /// Returns immediately after starting the daemon. The supervisor will
-    /// monitor and optionally restart the daemon in the background.
-    pub async fn start(&mut self) -> StartupResult {
-        self.handle.start().await
-    }
-
-    /// Get a reference to the daemon handle.
-    pub fn handle(&self) -> &DaemonHandle {
-        &self.handle
-    }
-
-    /// Get a mutable reference to the daemon handle.
-    pub fn handle_mut(&mut self) -> &mut DaemonHandle {
-        &mut self.handle
-    }
-
-    /// Check if the daemon is currently running.
-    pub fn is_running(&self) -> bool {
-        self.handle.is_running()
-    }
-
-    /// Stop the supervised daemon.
-    pub fn stop(&mut self) -> Result<(), DaemonError> {
-        self.auto_restart = false;
-        self.handle.stop()
     }
 }
 
