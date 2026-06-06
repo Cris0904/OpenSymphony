@@ -90,15 +90,17 @@ pub async fn reveal_workspace(
         return Err(DesktopError::PermissionDenied);
     }
     let p = std::path::Path::new(&req.path);
+
+    // Canonicalize home_dir first to resolve any symlinks in the home path
     let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
         message: "could not determine home directory".into(),
     })?;
-    let base = home.join(".opensymphony").join("workspaces");
-    // Check containment BEFORE canonicalization to avoid symlink mismatch
-    if !p.starts_with(&base) {
-        return Err(DesktopError::PermissionDenied);
-    }
-    // canonicalize() returns io::Error for non-existent paths naturally
+    let canon_home = home.canonicalize().map_err(|e| DesktopError::Internal {
+        message: format!("failed to canonicalize home directory: {e}"),
+    })?;
+    let canon_base = canon_home.join(".opensymphony").join("workspaces");
+
+    // Canonicalize the input path and check containment against the resolved base
     let canon = p.canonicalize().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => DesktopError::NotFound,
         std::io::ErrorKind::PermissionDenied => DesktopError::PermissionDenied,
@@ -106,6 +108,10 @@ pub async fn reveal_workspace(
             message: format!("failed to canonicalize: {e}"),
         },
     })?;
+    if !canon.starts_with(&canon_base) {
+        return Err(DesktopError::PermissionDenied);
+    }
+
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid workspace path".into(),
     })?;
@@ -116,43 +122,26 @@ pub async fn reveal_workspace(
 }
 
 fn is_safe_workspace_path(path: &std::path::Path) -> bool {
-    // Reject paths with .. components immediately as potential escape attempts
+    // Whitelist-based security check: default to false for unknown paths.
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let Ok(canon_home) = home.canonicalize() else {
+        return false;
+    };
+    let canon_base = canon_home.join(".opensymphony");
+
+    // Try to canonicalize the input path and check containment
+    if let Ok(canon_path) = path.canonicalize() {
+        return canon_path.starts_with(&canon_base);
+    }
+
+    // If canonicalization fails (path doesn't exist), check literal prefix.
+    // Reject any path with .. components that can't be resolved.
     if path.components().any(|c| c.as_os_str() == "..") {
-        // Only allow .. if the path can be canonicalized and stays under .opensymphony
-        if let (Ok(canon_path), Some(home)) = (path.canonicalize(), dirs::home_dir()) {
-            let canon_home = home.canonicalize().unwrap_or(home);
-            let canon_base = canon_home.join(".opensymphony");
-            if canon_path.starts_with(&canon_base) {
-                return true;
-            }
-        }
         return false;
     }
-    
-    if let Some(home) = dirs::home_dir() {
-        let base = home.join(".opensymphony");
-        // Check containment BEFORE canonicalization to avoid symlink mismatch
-        if path.starts_with(&base) {
-            return true;
-        }
-        // Canonicalize to check resolved symlinks
-        if let Ok(canon_path) = path.canonicalize() {
-            let canon_home = home.canonicalize().unwrap_or(home);
-            let canon_base = canon_home.join(".opensymphony");
-            if canon_path.starts_with(&canon_base) {
-                return true;
-            }
-        }
-    }
-    let s = path.to_string_lossy();
-    !s.starts_with("/System")
-        && !s.starts_with("/usr")
-        && !s.starts_with("/etc")
-        && !s.starts_with("/private/var")
-        && !s.starts_with("/var")
-        && !s.starts_with("/tmp")
-        && !s.starts_with("/bin")
-        && !s.starts_with("/sbin")
+    path.starts_with(&canon_base)
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,8 +260,9 @@ mod tests {
 
     #[test]
     fn test_safety_workspace_path_allows_home() {
-        let path = std::path::Path::new("/home/user/.opensymphony/workspaces/test");
-        assert!(is_safe_workspace_path(path));
+        let home = dirs::home_dir().expect("home dir available");
+        let path = home.join(".opensymphony").join("workspaces").join("test");
+        assert!(is_safe_workspace_path(&path));
     }
 
     #[test]
@@ -325,15 +315,16 @@ mod tests {
     #[test]
     fn test_is_safe_workspace_path_allows_opensymphony_subdirs() {
         // Various valid workspace paths under .opensymphony should pass
+        let home = dirs::home_dir().expect("home dir available");
         let valid = vec![
-            "/home/user/.opensymphony/workspaces/test",
-            "/home/user/.opensymphony/workspaces/deep/nested/path",
-            "/home/user/.opensymphony/workspaces/test-123",
+            home.join(".opensymphony").join("workspaces").join("test"),
+            home.join(".opensymphony").join("workspaces").join("deep").join("nested").join("path"),
+            home.join(".opensymphony").join("workspaces").join("test-123"),
         ];
-        for path_str in valid {
+        for path in valid {
             assert!(
-                is_safe_workspace_path(std::path::Path::new(path_str)),
-                "Path {path_str} should be allowed"
+                is_safe_workspace_path(&path),
+                "Path {:?} should be allowed", path
             );
         }
     }
@@ -341,16 +332,17 @@ mod tests {
     #[test]
     fn test_is_safe_workspace_path_blocks_path_traversal_attempts() {
         // Paths that try to escape via .. or mimic .opensymphony elsewhere should be blocked
+        let home = dirs::home_dir().expect("home dir available");
         let blocked = vec![
-            "/home/user/.opensymphony/../../../etc/passwd",
-            "/var/.opensymphony/workspaces/test",
-            "/tmp/.opensymphony/workspaces/test",
-            "/home/user/.opensymphony/workspaces/../../../etc/shadow",
+            home.join(".opensymphony").join("..").join("..").join("etc").join("passwd"),
+            std::path::PathBuf::from("/var/.opensymphony/workspaces/test"),
+            std::path::PathBuf::from("/tmp/.opensymphony/workspaces/test"),
+            home.join(".opensymphony").join("workspaces").join("..").join("..").join("etc").join("shadow"),
         ];
-        for path_str in blocked {
+        for path in blocked {
             assert!(
-                !is_safe_workspace_path(std::path::Path::new(path_str)),
-                "Path {path_str} should be blocked"
+                !is_safe_workspace_path(&path),
+                "Path {:?} should be blocked", path
             );
         }
     }
