@@ -6,8 +6,6 @@
   ],
   "permissions": [
     "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "clipboard-manager:allow-read-text",
-    "clipboard-manager:allow-write-text"
+    "fs:allow-write-text-file"
   ]
 }

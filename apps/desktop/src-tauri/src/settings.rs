@@ -86,9 +86,15 @@ fn global_manager() -> &'static SettingsManager {
     M.get_or_init(|| {
         SettingsManager::new().unwrap_or_else(|e| {
             eprintln!("Warning: settings unavailable: {e}");
+            // Cross-platform null path fallback
+            let null_path = if cfg!(windows) {
+                PathBuf::from("NUL")
+            } else {
+                PathBuf::from("/dev/null")
+            };
             SettingsManager {
                 settings: Mutex::new(AppSettings::default()),
-                path: PathBuf::from("/dev/null"),
+                path: null_path,
             }
         })
     })

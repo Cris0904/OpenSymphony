@@ -52,16 +52,19 @@ pub async fn open_repository_folder(
     if !p.exists() {
         return Err(DesktopError::NotFound);
     }
-    if !is_safe_workspace_path(p) {
-        return Err(DesktopError::PermissionDenied);
-    }
+    // Canonicalize FIRST to resolve symlinks before safety check (prevent TOCTOU bypass)
     let canon = p.canonicalize().map_err(|e| DesktopError::Internal {
         message: format!("failed to canonicalize: {e}"),
     })?;
+    if !is_safe_workspace_path(&canon) {
+        return Err(DesktopError::PermissionDenied);
+    }
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid file path".into(),
     })?;
-    let _ = app.opener().open_url(url.as_str(), None::<&str>);
+    app.opener().open_url(url.as_str(), None::<&str>).map_err(|e| DesktopError::Internal {
+        message: format!("failed to open folder: {e}"),
+    })?;
     Ok(OpenRepositoryFolderResponse { opened: true })
 }
 
@@ -101,7 +104,9 @@ pub async fn reveal_workspace(
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid workspace path".into(),
     })?;
-    let _ = app.opener().open_url(url.as_str(), None::<&str>);
+    app.opener().open_url(url.as_str(), None::<&str>).map_err(|e| DesktopError::Internal {
+        message: format!("failed to reveal workspace: {e}"),
+    })?;
     Ok(RevealWorkspaceResponse { revealed: true })
 }
 
