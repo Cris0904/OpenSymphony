@@ -46,6 +46,7 @@ export function createScrollbackBuffer(capacity = 1000): ScrollbackBuffer {
  * Append decoded frames to the scrollback buffer.
  * Prunes old frames if capacity is exceeded while maintaining stable scrollback.
  * Uses efficient push/shift pattern instead of spread for better performance.
+ * Respects the atBottom flag: only updates visible frames if user is at bottom.
  */
 export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): ScrollbackBuffer {
   if (frames.length === 0) return buffer;
@@ -59,28 +60,31 @@ export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): 
   for (const frame of frames) {
     newAllFrames.push(frame);
   }
-  let historyOffset = 0;
   if (newAllFrames.length > maxHistory) {
     const excess = newAllFrames.length - maxHistory;
-    historyOffset = excess;
     newAllFrames.splice(0, excess);
   }
 
-  // Update visible frames efficiently
-  let newVisible = buffer.visibleFrames.slice();
+  // Only update visible frames if user is at bottom (auto-scroll mode)
+  // If user scrolled up, preserve their visible window position
+  let newVisible = buffer.visibleFrames;
   let newOffset = buffer.offset;
 
-  // Prune if we exceed capacity
-  if (newVisible.length + frames.length > buffer.capacity) {
-    const excess = newVisible.length + frames.length - buffer.capacity;
-    newOffset += excess;
-    // Remove only what's needed from visible, keep the rest
-    newVisible = newVisible.slice(excess);
-  }
+  if (buffer.atBottom) {
+    newVisible = buffer.visibleFrames.slice();
 
-  // Append new frames to visible
-  for (const frame of frames) {
-    newVisible.push(frame);
+    // Prune if we exceed capacity
+    if (newVisible.length + frames.length > buffer.capacity) {
+      const excess = newVisible.length + frames.length - buffer.capacity;
+      newOffset += excess;
+      // Remove only what's needed from visible, keep the rest
+      newVisible = newVisible.slice(excess);
+    }
+
+    // Append new frames to visible
+    for (const frame of frames) {
+      newVisible.push(frame);
+    }
   }
 
   return {

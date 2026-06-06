@@ -5,7 +5,8 @@
  */
 
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   generateBurstFrames,
   generateRealisticSession,
@@ -13,7 +14,8 @@ import {
   exportFixturesToJson,
 } from "./terminal-fixtures.js";
 
-const fixturesDir = resolve(__dirname, "json");
+const __filename = fileURLToPath(import.meta.url);
+const fixturesDir = resolve(dirname(__filename), "json");
 
 if (!existsSync(fixturesDir)) {
   mkdirSync(fixturesDir, { recursive: true });

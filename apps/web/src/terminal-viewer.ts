@@ -188,21 +188,34 @@ export class TerminalViewer {
   /**
    * Render new frames to the DOM using incremental updates.
    * Only appends new lines and removes pruned ones to avoid O(n²) DOM thrashing.
+   * When called with empty decodedFrames (e.g., from scrollToFrame/jumpToLatest),
+   * rebuilds the visible DOM from the buffer's current visibleFrames.
    */
   private renderFrames(decodedFrames: DecodedFrame[], buffer: ScrollbackBuffer): void {
-    // Append only new frames
-    for (const frame of decodedFrames) {
-      const lineElement = this.createLineElement(frame);
-      this.lineElements.push(lineElement);
-      this.scrollContainer.appendChild(lineElement);
-    }
+    if (decodedFrames.length > 0) {
+      // Append only new frames
+      for (const frame of decodedFrames) {
+        const lineElement = this.createLineElement(frame);
+        this.lineElements.push(lineElement);
+        this.scrollContainer.appendChild(lineElement);
+      }
 
-    // Enforce max visible lines by removing oldest from DOM
-    const excess = this.lineElements.length - this.config.maxVisibleFrames;
-    for (let i = 0; i < excess; i++) {
-      const removed = this.lineElements.shift();
-      if (removed && removed.parentNode === this.scrollContainer) {
-        this.scrollContainer.removeChild(removed);
+      // Enforce max visible lines by removing oldest from DOM
+      const excess = this.lineElements.length - this.config.maxVisibleFrames;
+      for (let i = 0; i < excess; i++) {
+        const removed = this.lineElements.shift();
+        if (removed && removed.parentNode === this.scrollContainer) {
+          this.scrollContainer.removeChild(removed);
+        }
+      }
+    } else {
+      // Rebuild visible DOM from buffer (for scrollToFrame/jumpToLatest)
+      this.scrollContainer.innerHTML = "";
+      this.lineElements = [];
+      for (const frame of buffer.visibleFrames) {
+        const lineElement = this.createLineElement(frame);
+        this.lineElements.push(lineElement);
+        this.scrollContainer.appendChild(lineElement);
       }
     }
 
@@ -372,15 +385,26 @@ export class TerminalViewer {
 
     // Use renderer's scrollTo to bring the frame into view
     this.renderer.scrollToFrame(frameIndex);
+
+    // Apply visual highlight to the DOM element after render
+    requestAnimationFrame(() => {
+      if (this.lineElements.length > 0) {
+        const targetElement = this.lineElements[Math.min(currentIndex, this.lineElements.length - 1)];
+        targetElement.style.outline = "2px solid #58a6ff";
+        targetElement.style.backgroundColor = "rgba(88, 166, 255, 0.2)";
+      }
+    });
   }
 
   /**
    * Copy terminal output to clipboard.
+   * Uses the full scrollback buffer to avoid losing pruned data.
    */
   private copyToClipboard(): void {
-    const text = this.lineElements
-      .map((line) => line.textContent)
-      .filter((t) => t !== null)
+    // Get text from full scrollback buffer, not just visible DOM
+    const buffer = this.renderer.getBuffer();
+    const text = buffer.allFrames
+      .map((frame) => frame.text)
       .join("\n");
 
     navigator.clipboard.writeText(text).then(() => {
