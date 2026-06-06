@@ -475,6 +475,7 @@ pub async fn start_daemon(
         startup_timeout: Duration::from_secs(req.startup_timeout_secs.unwrap_or(30)),
         auto_restart: req.auto_restart.unwrap_or(true),
         gateway_url: req.gateway_url.unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+        skip_health_check: false,
     };
 
     let mut handle = DaemonHandle::new(config);

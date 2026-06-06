@@ -76,6 +76,7 @@ while true; do sleep 1; done
             startup_timeout: Duration::from_secs(1),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8080".to_string(),
+            skip_health_check: true,
         };
         let handle = DaemonHandle::new(config);
         assert!(handle.pid().is_none());
@@ -92,6 +93,7 @@ while true; do sleep 1; done
             startup_timeout: Duration::from_secs(1),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8080".to_string(),
+            skip_health_check: true,
         };
         let mut handle = DaemonHandle::new(config);
         // Calling stop on an unstarted handle should succeed without error
@@ -111,6 +113,7 @@ while true; do sleep 1; done
             startup_timeout: Duration::from_secs(2),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8080".to_string(),
+            skip_health_check: true,
         };
 
         let pid = {
@@ -149,6 +152,7 @@ while true; do sleep 1; done
             startup_timeout: Duration::from_secs(2),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8081".to_string(),
+            skip_health_check: true,
         };
 
         let config2 = DaemonConfig {
@@ -158,6 +162,7 @@ while true; do sleep 1; done
             startup_timeout: Duration::from_secs(2),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8082".to_string(),
+            skip_health_check: true,
         };
 
         let mut handle1 = DaemonHandle::new(config1);
@@ -185,14 +190,14 @@ while true; do sleep 1; done
         // Verify each handle tracks its own PID independently
         assert!(handle1.pid().is_some(), "handle 1 should track its PID");
         assert!(handle2.pid().is_some(), "handle 2 should track its PID");
-        // Health check fails for fake daemons, so state is Failed
-        assert!(matches!(handle1.state(), DaemonState::Failed(_)), "handle 1 should be Failed");
-        assert!(matches!(handle2.state(), DaemonState::Failed(_)), "handle 2 should be Failed");
+        // With health check skipped, daemons should be in Running state
+        assert!(matches!(handle1.state(), DaemonState::Running), "handle 1 should be Running");
+        assert!(matches!(handle2.state(), DaemonState::Running), "handle 2 should be Running");
 
         // Verify stop only affects the targeted daemon
         handle1.stop().await.unwrap();
         assert!(!handle1.is_running(), "handle 1 should be stopped");
-        assert!(!handle2.is_running(), "handle 2 should be stopped after its health check fails");
+        assert!(handle2.is_running(), "handle 2 should still be running");
 
         // Clean up second daemon
         handle2.stop().await.unwrap();

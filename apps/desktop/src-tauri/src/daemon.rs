@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::time::timeout;
 use tracing::{error, info, warn};
 
 /// Configuration for a supervised daemon process.
@@ -27,6 +26,8 @@ pub struct DaemonConfig {
     pub auto_restart: bool,
     /// Gateway URL where the daemon listens.
     pub gateway_url: String,
+    /// Skip health check after startup (for testing or daemons without HTTP).
+    pub skip_health_check: bool,
 }
 
 /// Current state of the supervised daemon.
@@ -161,8 +162,12 @@ impl DaemonHandle {
 
                 info!(pid, "daemon process started");
 
-                // Wait for health check
-                let health_result = self.wait_for_health().await;
+                // Wait for health check unless explicitly skipped
+                let health_result = if self.config.skip_health_check {
+                    Ok(())
+                } else {
+                    self.wait_for_health().await
+                };
 
                 let elapsed = start_time.elapsed().as_millis() as u64;
 
@@ -180,9 +185,15 @@ impl DaemonHandle {
                     Err(e) => {
                         self.state = DaemonState::Failed(e.to_string());
                         error!(pid, error = %e, "daemon failed health check");
+                        // Kill the spawned process since startup failed.
+                        // This prevents orphaned daemon processes.
+                        self.kill_process_only();
+                        self.child = None;
+                        self.pid = None;
+                        self.owns_process = false;
                         StartupResult {
                             success: false,
-                            pid: Some(pid),
+                            pid: None,
                             error: Some(e.to_string()),
                             elapsed_ms: elapsed,
                         }
@@ -355,15 +366,16 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and spins briefly to reap the zombie. This is used by
-    /// Drop where blocking wait() is undesirable. Since SIGKILL cannot be
-    /// caught or ignored, the process dies almost instantly and the spin
-    /// loop typically reaps the zombie within a few iterations.
+    /// Sends SIGKILL and calls `wait()` to reap the zombie. After SIGKILL
+    /// the process is already dead, so `wait()` returns immediately rather
+    /// than blocking. This ensures the PID is fully released for reuse.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
             {
-                let _ = unsafe { libc::kill(self.pid.unwrap_or(0) as i32, libc::SIGKILL) };
+                if let Some(pid) = self.pid {
+                    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                }
             }
             #[cfg(windows)]
             {
@@ -372,20 +384,11 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Spin briefly to reap the zombie without blocking indefinitely.
-            // After SIGKILL the process is already dead, so try_wait() should
-            // succeed quickly to reap the zombie.
-            for _ in 0..50 {
-                match child.try_wait() {
-                    Ok(Some(_)) => return, // Zombie reaped successfully
-                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
-                    Err(_) => return, // Process already reaped or error
-                }
-            }
-            // Final attempt: if the process hasn't been reaped yet, it may
-            // still be in the process of dying. Give up gracefully rather
-            // than blocking the Drop handler indefinitely.
+            // Reap the zombie immediately after SIGKILL. Since the process
+            // is already dead, wait() returns without blocking.
+            let _ = child.wait();
         }
+        self.child = None;
     }
 
     /// Force-kill the daemon process.
@@ -448,6 +451,7 @@ mod tests {
             startup_timeout: Duration::from_secs(5),
             auto_restart: true,
             gateway_url: "http://127.0.0.1:8080".to_string(),
+            skip_health_check: false,
         }
     }
 
@@ -484,14 +488,15 @@ mod tests {
         config.args = vec![];
         config.startup_timeout = Duration::from_secs(2);
         config.gateway_url = format!("file://{}", dir.path().display());
+        config.skip_health_check = true;
 
         let mut handle = DaemonHandle::new(config);
 
         // Start the daemon
         let result = handle.start().await;
-        // The fake daemon won't have a health endpoint, so it should fail health check
-        assert!(!result.success);
-        // But the process was spawned before health check failure
+        // With skip_health_check = true, startup succeeds without waiting for health check.
+        assert!(result.success);
+        // The spawned process is not killed since health check was skipped
         assert!(result.pid.is_some());
 
         // Clean up
