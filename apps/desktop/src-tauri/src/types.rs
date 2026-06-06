@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared types for desktop commands.
 
 use serde::Serialize;

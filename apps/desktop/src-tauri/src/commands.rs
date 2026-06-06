@@ -6,26 +6,7 @@
 
 use serde::Serialize;
 use tauri::command;
-
-pub use crate::types::{CommandResult, DesktopError};
-
-pub use crate::settings::{
-    get_setting, set_setting, GetSettingRequest, GetSettingResponse, SetSettingRequest,
-    SetSettingResponse, SettingValue,
-};
-pub use crate::keychain::{
-    credential_status, delete_credential, get_credential, set_credential,
-    CredentialStatusRequest, CredentialStatusResponse, DeleteCredentialRequest,
-    GetCredentialRequest, GetCredentialResponse, SetCredentialRequest,
-    SetCredentialResponse,
-};
-pub use crate::actions::{
-    copy_to_clipboard, notify, open_file, open_folder, open_linear_link,
-    open_repository_folder, reveal_workspace, CopyToClipboardRequest, CopyToClipboardResponse,
-    NotifyRequest, NotifyResponse, OpenFileRequest, OpenFileResponse, OpenFolderResponse,
-    OpenLinearLinkRequest, OpenRepositoryFolderRequest, OpenRepositoryFolderResponse,
-    RevealWorkspaceRequest, RevealWorkspaceResponse, NotifyLevel,
-};
+use crate::types::CommandResult;
 
 // --- Local Process Supervision (stencil only) ---
 

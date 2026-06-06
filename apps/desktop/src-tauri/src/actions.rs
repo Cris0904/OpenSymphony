@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use tauri::command;
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::types::{CommandResult, DesktopError};
 
@@ -61,7 +61,7 @@ pub async fn open_repository_folder(
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid file path".into(),
     })?;
-    let _ = app.shell().open(url.as_str(), None);
+    let _ = app.opener().open_url(url.as_str(), None::<&str>);
     Ok(OpenRepositoryFolderResponse { opened: true })
 }
 
@@ -101,7 +101,7 @@ pub async fn reveal_workspace(
     let url = url::Url::from_file_path(&canon).map_err(|_| DesktopError::Internal {
         message: "invalid workspace path".into(),
     })?;
-    let _ = app.shell().open(url.as_str(), None);
+    let _ = app.opener().open_url(url.as_str(), None::<&str>);
     Ok(RevealWorkspaceResponse { revealed: true })
 }
 
@@ -158,7 +158,7 @@ pub async fn open_linear_link(
         "https://linear.app/trilogy-ai-coe/issue/{}",
         req.issue_id
     );
-    app.shell().open(&url, None).map_err(|e| DesktopError::Internal {
+    app.opener().open_url(&url, None::<&str>).map_err(|e| DesktopError::Internal {
         message: format!("failed to open link: {e}"),
     })
 }
