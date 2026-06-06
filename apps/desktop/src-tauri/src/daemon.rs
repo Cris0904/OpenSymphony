@@ -346,8 +346,11 @@ impl DaemonHandle {
 
             #[cfg(unix)]
             {
-                // Send SIGTERM for graceful shutdown on Unix
-                let _ = unsafe { libc::kill(self.pid.unwrap_or(0) as i32, libc::SIGTERM) };
+                if let Some(pid) = self.pid {
+                    // Send SIGTERM to the entire process group for graceful shutdown.
+                    // Since we use setsid(), all child processes are in the same group.
+                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+                }
             }
 
             #[cfg(windows)]
@@ -410,7 +413,10 @@ impl DaemonHandle {
             #[cfg(unix)]
             {
                 if let Some(pid) = self.pid {
-                    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                    // Kill the entire process group (negative PID means process group ID).
+                    // This ensures all child processes are also terminated, preventing
+                    // orphaned processes when the parent is killed.
+                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
                 }
             }
             #[cfg(windows)]
@@ -436,7 +442,10 @@ impl DaemonHandle {
             info!(pid = ?self.pid, "force-killing daemon");
             #[cfg(unix)]
             {
-                let _ = unsafe { libc::kill(self.pid.unwrap_or(0) as i32, libc::SIGKILL) };
+                if let Some(pid) = self.pid {
+                    // Kill the entire process group to ensure all children are also terminated.
+                    let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                }
             }
             #[cfg(windows)]
             {
