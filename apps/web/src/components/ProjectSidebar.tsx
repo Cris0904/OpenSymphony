@@ -10,7 +10,6 @@ import type { Page } from "../types/navigation";
 
 interface ProjectSidebarProps {
   navigate: (page: Page) => void;
-  currentProjectId?: string;
 }
 
 interface SidebarItem {

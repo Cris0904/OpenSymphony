@@ -41,7 +41,7 @@ export function AppShell(): React.ReactElement {
   // Stable close handler for CommandPalette to avoid re-registering keydown listeners.
   const closePalette = useCallback(() => setPaletteOpen(false), []);
 
-  // Listen for hash changes.
+  // Listen for hash changes - single source of truth for page state.
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash;
@@ -53,13 +53,15 @@ export function AppShell(): React.ReactElement {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  // Sync hash with page state.
+  // Navigate by updating hash; hashchange listener updates page state.
   const navigate = useCallback((nextPage: Page) => {
     window.location.hash = pageToRoute(nextPage);
-    setPage(nextPage);
   }, []);
 
-  // Keyboard shortcuts.
+  // Keyboard shortcuts - use ref for paletteOpen to avoid re-registering keydown listener on every toggle.
+  const paletteOpenRef = useRef(paletteOpen);
+  paletteOpenRef.current = paletteOpen;
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Cmd/Ctrl+K opens command palette.
@@ -68,7 +70,7 @@ export function AppShell(): React.ReactElement {
         setPaletteOpen((prev) => !prev);
       }
       // Escape closes palette.
-      if (e.key === "Escape" && paletteOpen) {
+      if (e.key === "Escape" && paletteOpenRef.current) {
         setPaletteOpen(false);
       }
       // Cmd/Ctrl+B toggles sidebar.
@@ -88,7 +90,7 @@ export function AppShell(): React.ReactElement {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [paletteOpen, focusNext, focusPrev]);
+  }, [focusNext, focusPrev]);
 
   // Sidebar resize handlers.
   const startResize = useCallback((e: React.MouseEvent) => {

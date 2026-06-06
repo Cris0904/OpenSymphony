@@ -59,7 +59,11 @@ export function CommandPalette({
       id: "projects",
       label: "View Projects",
       shortcut: "G P",
-      action: () => { navigate({ kind: "project", projectId: currentProjectId ?? "all" }); onClose(); },
+      action: () => {
+        if (!currentProjectId) return;
+        navigate({ kind: "project", projectId: currentProjectId });
+        onClose();
+      },
       category: "Navigation",
       requiresProject: true,
     },
@@ -67,7 +71,11 @@ export function CommandPalette({
       id: "task-graph",
       label: "View Task Graph",
       shortcut: "G T",
-      action: () => { navigate({ kind: "task-graph", projectId: currentProjectId ?? "all" }); onClose(); },
+      action: () => {
+        if (!currentProjectId) return;
+        navigate({ kind: "task-graph", projectId: currentProjectId });
+        onClose();
+      },
       category: "Navigation",
       requiresProject: true,
     },
