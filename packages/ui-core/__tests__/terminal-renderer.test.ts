@@ -171,6 +171,38 @@ describe("appendFrames", () => {
     const result = appendFrames(buffer, []);
     expect(result).toBe(buffer); // No change
   });
+
+  it("caps visible frames when a single append batch exceeds capacity", () => {
+    const buffer = createScrollbackBuffer(5);
+    const frames = generateBurstFrames(12).map((f) =>
+      decodeFrame(f.content, f.encoding, f)
+    );
+
+    const result = appendFrames(buffer, frames);
+
+    expect(result.totalFrames).toBe(12);
+    expect(result.visibleFrames.length).toBe(5);
+    expect(result.offset).toBe(7);
+  });
+
+  it("preserves the visible window while scrolled up", () => {
+    const buffer = createScrollbackBuffer(5);
+    const frames = generateBurstFrames(10).map((f) =>
+      decodeFrame(f.content, f.encoding, f)
+    );
+    const filledBuffer = appendFrames(buffer, frames);
+    const scrolledUp = scrollTo(filledBuffer, 2);
+    const visibleBefore = scrolledUp.visibleFrames.map((frame) => frame.frame.frame_sequence);
+
+    const newFrames = generateBurstFrames(3).map((f, index) => {
+      const frame = { ...f, frame_sequence: 10 + index };
+      return decodeFrame(frame.content, frame.encoding, frame);
+    });
+    const updated = appendFrames(scrolledUp, newFrames);
+
+    expect(updated.atBottom).toBe(false);
+    expect(updated.visibleFrames.map((frame) => frame.frame.frame_sequence)).toEqual(visibleBefore);
+  });
 });
 
 describe("scrollTo", () => {
@@ -218,6 +250,21 @@ describe("jumpToLatest", () => {
     const result = jumpToLatest(buffer);
     expect(result.atBottom).toBe(true);
   });
+
+  it("restores the latest visible window after scrolling up", () => {
+    const buffer = createScrollbackBuffer(5);
+    const frames = generateBurstFrames(20).map((f) =>
+      decodeFrame(f.content, f.encoding, f)
+    );
+    const filledBuffer = appendFrames(buffer, frames);
+    const scrolledUp = scrollTo(filledBuffer, 3);
+
+    const result = jumpToLatest(scrolledUp);
+
+    expect(result.atBottom).toBe(true);
+    expect(result.offset).toBe(15);
+    expect(result.visibleFrames.map((frame) => frame.frame.frame_sequence)).toEqual([15, 16, 17, 18, 19]);
+  });
 });
 
 describe("searchText", () => {
@@ -259,6 +306,20 @@ describe("searchText", () => {
     const buffer = createScrollbackBuffer(100);
     const results = searchText(buffer, "");
     expect(results).toEqual([]);
+  });
+
+  it("returns global frame indices after history pruning", () => {
+    const buffer = createScrollbackBuffer(5);
+    const frames = generateBurstFrames(60).map((f, index) => {
+      const frame = { ...f, content: `unique frame ${index}\n` };
+      return decodeFrame(frame.content, frame.encoding, frame);
+    });
+    const filledBuffer = appendFrames(buffer, frames);
+
+    const results = searchText(filledBuffer, "unique frame 42");
+
+    expect(filledBuffer.allFrames.length).toBe(50);
+    expect(results).toEqual([42]);
   });
 });
 

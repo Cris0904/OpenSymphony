@@ -9,6 +9,7 @@
  * - ANSI color display
  */
 
+import { searchText } from "@opensymphony/ui-core";
 import type { DecodedFrame, ScrollbackBuffer, TerminalRenderConfig, TextStyle, ColorStyle } from "@opensymphony/ui-core";
 import type { TerminalRenderer } from "@opensymphony/ui-core";
 
@@ -41,6 +42,7 @@ export class TerminalViewer {
   private searchTerm = "";
   private searchResults: number[] = [];
   private currentSearchIndex = 0;
+  private pendingFocusFrameIndex: number | undefined;
 
   constructor(private renderer: TerminalRenderer, options: TerminalViewerOptions) {
     this.container = options.container;
@@ -192,10 +194,12 @@ export class TerminalViewer {
    * rebuilds the visible DOM from the buffer's current visibleFrames.
    */
   private renderFrames(decodedFrames: DecodedFrame[], buffer: ScrollbackBuffer): void {
-    if (decodedFrames.length > 0) {
+    if (decodedFrames.length > 0 && buffer.atBottom) {
       // Append only new frames
-      for (const frame of decodedFrames) {
-        const lineElement = this.createLineElement(frame);
+      const firstFrameIndex = buffer.totalFrames - decodedFrames.length;
+      for (let i = 0; i < decodedFrames.length; i++) {
+        const frame = decodedFrames[i];
+        const lineElement = this.createLineElement(frame, firstFrameIndex + i);
         this.lineElements.push(lineElement);
         this.scrollContainer.appendChild(lineElement);
       }
@@ -209,14 +213,8 @@ export class TerminalViewer {
         }
       }
     } else {
-      // Rebuild visible DOM from buffer (for scrollToFrame/jumpToLatest)
-      this.scrollContainer.innerHTML = "";
-      this.lineElements = [];
-      for (const frame of buffer.visibleFrames) {
-        const lineElement = this.createLineElement(frame);
-        this.lineElements.push(lineElement);
-        this.scrollContainer.appendChild(lineElement);
-      }
+      // Rebuild visible DOM from buffer (for scrollToFrame/jumpToLatest/history view)
+      this.rebuildVisibleFrames(buffer);
     }
 
     this.updateStatus(buffer);
@@ -228,9 +226,48 @@ export class TerminalViewer {
   }
 
   /**
+   * Rebuild the DOM from the current visible frame window.
+   */
+  private rebuildVisibleFrames(buffer: ScrollbackBuffer): void {
+    this.scrollContainer.innerHTML = "";
+    this.lineElements = [];
+
+    const window = this.getRenderableWindow(buffer);
+    for (let i = 0; i < window.frames.length; i++) {
+      const frame = window.frames[i];
+      const lineElement = this.createLineElement(frame, window.offset + i);
+      this.lineElements.push(lineElement);
+      this.scrollContainer.appendChild(lineElement);
+    }
+  }
+
+  /**
+   * Pick the DOM-sized slice to render from the buffer window.
+   */
+  private getRenderableWindow(buffer: ScrollbackBuffer): { frames: DecodedFrame[]; offset: number } {
+    if (buffer.visibleFrames.length <= this.config.maxVisibleFrames) {
+      return { frames: buffer.visibleFrames, offset: buffer.offset };
+    }
+
+    let start = buffer.atBottom ? buffer.visibleFrames.length - this.config.maxVisibleFrames : 0;
+    const focusIndex = this.pendingFocusFrameIndex;
+    const windowEnd = buffer.offset + buffer.visibleFrames.length;
+    if (focusIndex !== undefined && focusIndex >= buffer.offset && focusIndex < windowEnd) {
+      const focusOffset = focusIndex - buffer.offset;
+      const centeredStart = focusOffset - Math.floor(this.config.maxVisibleFrames / 2);
+      start = Math.max(0, Math.min(centeredStart, buffer.visibleFrames.length - this.config.maxVisibleFrames));
+    }
+
+    return {
+      frames: buffer.visibleFrames.slice(start, start + this.config.maxVisibleFrames),
+      offset: buffer.offset + start,
+    };
+  }
+
+  /**
    * Create a DOM element for a decoded frame line.
    */
-  private createLineElement(frame: DecodedFrame): HTMLElement {
+  private createLineElement(frame: DecodedFrame, lineIndex: number): HTMLElement {
     const line = document.createElement("div");
     line.style.cssText = `
       padding: 2px 0;
@@ -248,7 +285,7 @@ export class TerminalViewer {
     }
 
     // Add data attribute for search
-    line.dataset.lineIndex = String(frame.frame.frame_sequence);
+    line.dataset.lineIndex = String(lineIndex);
     line.dataset.frameKind = frame.frame.frame_kind;
 
     return line;
@@ -338,20 +375,13 @@ export class TerminalViewer {
     if (!this.searchTerm) {
       this.searchResults = [];
       this.currentSearchIndex = 0;
+      this.pendingFocusFrameIndex = undefined;
       return;
     }
 
-    // Search the full scrollback buffer history via the renderer
+    // Search the full scrollback buffer history via the renderer.
     const buffer = this.renderer.getBuffer();
-    this.searchResults = [];
-
-    for (let i = 0; i < buffer.allFrames.length; i++) {
-      const frame = buffer.allFrames[i];
-      const frameText = frame.text.toLowerCase();
-      if (frameText.includes(this.searchTerm.toLowerCase())) {
-        this.searchResults.push(i);
-      }
-    }
+    this.searchResults = searchText(buffer, this.searchTerm, false);
 
     // Highlight first result if it's in visible range
     if (this.searchResults.length > 0) {
@@ -382,18 +412,25 @@ export class TerminalViewer {
     // Highlight current result
     const currentIndex = this.currentSearchIndex % this.searchResults.length;
     const frameIndex = this.searchResults[currentIndex];
+    this.pendingFocusFrameIndex = frameIndex;
 
     // Use renderer's scrollTo to bring the frame into view
     this.renderer.scrollToFrame(frameIndex);
 
-    // Apply visual highlight to the DOM element after render
-    requestAnimationFrame(() => {
-      if (this.lineElements.length > 0) {
-        const targetElement = this.lineElements[Math.min(currentIndex, this.lineElements.length - 1)];
-        targetElement.style.outline = "2px solid #58a6ff";
-        targetElement.style.backgroundColor = "rgba(88, 166, 255, 0.2)";
-      }
-    });
+    // Apply visual highlight to the matching DOM element after render.
+    requestAnimationFrame(() => this.highlightLine(frameIndex));
+  }
+
+  /**
+   * Highlight a specific global frame index if it is visible.
+   */
+  private highlightLine(frameIndex: number): void {
+    const targetElement = this.lineElements.find((line) => line.dataset.lineIndex === String(frameIndex));
+    if (!targetElement) return;
+
+    targetElement.style.outline = "2px solid #58a6ff";
+    targetElement.style.backgroundColor = "rgba(88, 166, 255, 0.2)";
+    targetElement.scrollIntoView({ block: "center" });
   }
 
   /**
@@ -431,23 +468,8 @@ export class TerminalViewer {
    * Updates visible frames to show the most recent content.
    */
   private jumpToLatest(): void {
+    this.pendingFocusFrameIndex = undefined;
     this.renderer.jumpToLatest();
-
-    // Clear existing DOM elements
-    this.scrollContainer.innerHTML = "";
-    this.lineElements = [];
-
-    // Rebuild from visible frames in the buffer
-    const updatedBuffer = this.renderer.getBuffer();
-    for (let i = 0; i < updatedBuffer.visibleFrames.length; i++) {
-      const frame = updatedBuffer.visibleFrames[i];
-      const lineElement = this.createLineElement(frame);
-      this.lineElements.push(lineElement);
-      this.scrollContainer.appendChild(lineElement);
-    }
-
-    this.updateStatus(updatedBuffer);
-    this.scrollToBottom();
   }
 
   /**

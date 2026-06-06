@@ -83,14 +83,14 @@ if (root) {
   const viewer = createTerminalViewer(renderer, { container });
 
   // Wire up buttons
-  document.getElementById("btn-burst-100")?.addEventListener("click", async () => {
+  document.getElementById("btn-burst-100")?.addEventListener("click", () => {
     const frames = generateBurstFrames(100, { includeAnsiCodes: true });
     for (const frame of frames) {
       renderer.queueFrame(frame.content, frame.encoding, frame);
     }
   });
 
-  document.getElementById("btn-burst-1000")?.addEventListener("click", async () => {
+  document.getElementById("btn-burst-1000")?.addEventListener("click", () => {
     const frames = generateBurstFrames(1000, { includeAnsiCodes: true });
     for (const frame of frames) {
       renderer.queueFrame(frame.content, frame.encoding, frame);
@@ -135,7 +135,7 @@ if (root) {
     output.textContent = report;
   });
 
-  document.getElementById("btn-clear")?.addEventListener("click", async () => {
+  document.getElementById("btn-clear")?.addEventListener("click", () => {
     renderer.clear();
     const output = document.getElementById("benchmark-output")!;
     output.textContent = "Terminal cleared.";

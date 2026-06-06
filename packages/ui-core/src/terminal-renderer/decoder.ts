@@ -1,8 +1,8 @@
 /**
- * Worker-based terminal frame decoder.
+ * Terminal frame decoder.
  *
- * Runs off the main thread to handle high-throughput decoding of
- * TerminalFrame payloads without blocking UI responsiveness.
+ * Provides pure decoding helpers for TerminalFrame payloads. A future worker
+ * wrapper can call these helpers without changing the renderer API.
  */
 
 import type { TerminalFrame, TerminalEncoding } from "@opensymphony/gateway-schema";

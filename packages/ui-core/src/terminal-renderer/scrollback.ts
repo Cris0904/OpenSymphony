@@ -65,25 +65,28 @@ export function appendFrames(buffer: ScrollbackBuffer, frames: DecodedFrame[]): 
     newAllFrames.splice(0, excess);
   }
 
-  // Only update visible frames if user is at bottom (auto-scroll mode)
-  // If user scrolled up, preserve their visible window position
+  // Only update visible frames if user is at bottom (auto-scroll mode).
+  // If user scrolled up, preserve their visible window position unless the
+  // current window has been pruned out of retained history.
   let newVisible = buffer.visibleFrames;
   let newOffset = buffer.offset;
 
   if (buffer.atBottom) {
     newVisible = buffer.visibleFrames.slice();
-
-    // Prune if we exceed capacity
-    if (newVisible.length + frames.length > buffer.capacity) {
-      const excess = newVisible.length + frames.length - buffer.capacity;
-      newOffset += excess;
-      // Remove only what's needed from visible, keep the rest
-      newVisible = newVisible.slice(excess);
-    }
-
-    // Append new frames to visible
     for (const frame of frames) {
       newVisible.push(frame);
+    }
+
+    if (newVisible.length > buffer.capacity) {
+      const excess = newVisible.length - buffer.capacity;
+      newVisible.splice(0, excess);
+    }
+    newOffset = newTotal - newVisible.length;
+  } else {
+    const historyStartIndex = Math.max(0, newTotal - newAllFrames.length);
+    if (newOffset < historyStartIndex) {
+      newOffset = historyStartIndex;
+      newVisible = newAllFrames.slice(0, buffer.capacity);
     }
   }
 
@@ -137,8 +140,14 @@ export function scrollTo(buffer: ScrollbackBuffer, targetIndex: number): Scrollb
  * Jump to the latest frame (bottom of scrollback).
  */
 export function jumpToLatest(buffer: ScrollbackBuffer): ScrollbackBuffer {
+  const historyStartIndex = Math.max(0, buffer.totalFrames - buffer.allFrames.length);
+  const visibleFrames = buffer.allFrames.slice(-buffer.capacity);
+  const offset = historyStartIndex + Math.max(0, buffer.allFrames.length - visibleFrames.length);
+
   return {
     ...buffer,
+    visibleFrames,
+    offset,
     atBottom: true,
   };
 }
