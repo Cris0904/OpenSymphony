@@ -182,7 +182,7 @@ function SidebarTreeNode({
     } else if (item.id.startsWith("project-")) {
       navigate({ kind: "project", projectId: item.id });
     } else if (item.id.startsWith("issue-") || item.id.startsWith("sub-issue-")) {
-      // Navigate to task-graph using the project context from the item hierarchy.
+      // TODO: Extract real project ID from parent hierarchy when multiple projects are supported.
       const projectId = item.projectContext ?? "project-1";
       navigate({ kind: "task-graph", projectId });
     } else if (item.id.startsWith("run-")) {

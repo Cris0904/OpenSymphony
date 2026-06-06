@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Update Linear workpad comment."""
+import json, subprocess, os
+
+COMMENT_ID = "643fc153-b4c2-483e-9ffa-db992ced32df"
+
+body = """## Agent Harness Workpad
+
+```text
+Mac.NL-WR8103:/Users/magos/.opensymphony/workspaces/COE-402@a547f35
+```
+
+### Plan
+
+- [x] 1. Extract shared types and utilities
+  - [x] 1.1 Create src/types/navigation.ts with shared Page type, pageToRoute, routeToPage
+  - [x] 1.2 Create src/lib/ui-utils.ts with formatTimeAgo, formatDuration, formatTokens, formatCost, badge color maps
+  - [x] 1.3 Update all 6 files to import from shared modules
+- [x] 2. Wire up focus manager keyboard shortcuts
+  - [x] 2.1 Add Cmd/Ctrl+Alt+ArrowUp/Down to navigate focus zones in AppShell
+- [x] 3. Add expand/collapse to TaskGraph TreeNode
+  - [x] 3.1 Auto-expand top 2 levels, deeper levels collapsed by default
+- [x] 4. Add component render tests
+  - [x] 4.1 32 new tests covering utilities, navigation, fixture rendering, state distinctions
+- [x] 5. Address all AI review comments inline
+  - [x] 5.1 All 7 review comments replied to with resolution details
+- [x] 6. Stabilize React callbacks and improve project ID fallback
+  - [x] 6.1 Replace unstable inline arrow function with useCallback for CommandPalette onClose handler
+  - [x] 6.2 Change getCurrentProjectId to return string | undefined instead of hardcoded 'all'
+  - [x] 6.3 Add requiresProject flag to CommandPalette commands to filter based on project context
+  - [x] 6.4 Use nullish coalescing in CommandPalette navigation actions as explicit fallback
+
+### Acceptance Criteria
+
+- [x] Users can navigate from project to milestone to issue to sub-issue to run detail.
+- [x] Reconnecting and stale states are visible in dashboard and detail views.
+- [x] Task graph views use Linear milestone, issue, and sub-issue nomenclature.
+- [x] Dashboard and run detail distinguish quiet/degraded active work from stalled, retry-queued, and detached runs.
+- [x] Active runs display last progress and stream-health context when provided by the gateway.
+- [x] Retry queue views make detached or active-underlying-harness state explicit when present.
+
+### Validation
+
+- [x] All 129 tests pass (5 test suites): npm test
+- [x] TypeScript compilation passes: npm run type-check
+- [x] Vite build succeeds (241KB JS bundle): npm run build --workspace=@opensymphony/web
+- [x] Build smoke tests pass (4/4)
+- [x] AI review comments addressed and replied to inline
+- [x] PR #104 pushed with review-this label
+- [x] Unstable callback fixed: useCallback for CommandPalette onClose handler
+- [x] Hardcoded 'all' fallback replaced with context-aware undefined + nullish coalescing
+
+### Notes
+
+- 2026-06-06 02:42Z: State transition: Todo -> In Progress, created workpad
+- 2026-06-06 02:56Z: Pull skill: merged origin/main clean, HEAD at 7033d57
+- 2026-06-06 03:00Z: All 7 AI review comments addressed and replied to inline
+- 2026-06-06 03:06Z: Pushed commit 72ceacb, all 129 tests green, type-check passes
+- 2026-06-06 03:07Z: Added review-this label to re-trigger AI PR review
+- 2026-06-06 03:15Z: Fixed unstable onClose callback using useCallback in AppShell
+- 2026-06-06 03:15Z: Improved getCurrentProjectId fallback: returns undefined instead of hardcoded 'all'
+- 2026-06-06 03:15Z: Added requiresProject filtering to CommandPalette commands
+- 2026-06-06 03:15Z: Committed a547f35, pushed to origin, all 129 tests still passing
+
+### Confusions
+
+- None at this time; all changes are well-scoped and verified."""
+
+vars = {"id": COMMENT_ID, "body": body}
+vars_file = "/tmp/linear_vars_update.json"
+with open(vars_file, "w") as f:
+    json.dump(vars, f)
+
+cmd = [
+    "python3",
+    ".agents/skills/linear/scripts/linear_graphql.py",
+    "--query-file", ".agents/skills/linear/queries/comment_update.graphql",
+    "--variables-file", vars_file
+]
+result = subprocess.run(cmd, capture_output=True, text=True, cwd="/Users/magos/.opensymphony/workspaces/COE-402")
+print("STDOUT:", result.stdout[:300] if result.stdout else "(empty)")
+if result.stderr:
+    print("STDERR:", result.stderr[:300])
+print("Return code:", result.returncode)

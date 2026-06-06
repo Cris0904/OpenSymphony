@@ -27,7 +27,7 @@ interface Command {
 export function CommandPalette({
   onClose,
   navigate,
-  currentProjectId = "all",
+  currentProjectId,
 }: CommandPaletteProps): React.ReactElement {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
