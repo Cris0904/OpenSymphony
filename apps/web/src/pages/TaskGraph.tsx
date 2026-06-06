@@ -620,18 +620,3 @@ function getKindIcon(kind: TaskGraphNodeKind): string {
       return "☐";
   }
 }
-
-function getStateCategoryColor(category: TaskGraphStateCategory): string {
-  switch (category) {
-    case "done":
-      return "var(--color-success)";
-    case "in_progress":
-      return "var(--color-accent)";
-    case "todo":
-      return "var(--color-fg-muted)";
-    case "backlog":
-      return "var(--color-fg-subtle)";
-    case "canceled":
-      return "var(--color-danger)";
-  }
-}
