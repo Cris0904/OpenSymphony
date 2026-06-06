@@ -355,9 +355,10 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and does a blocking wait() to reap the zombie, ensuring
-    /// the PID becomes fully invalid. This is used by Drop where blocking is
-    /// acceptable since we're already in a synchronous cleanup context.
+    /// Sends SIGKILL and spins briefly to reap the zombie. This is used by
+    /// Drop where blocking wait() is undesirable. Since SIGKILL cannot be
+    /// caught or ignored, the process dies almost instantly and the spin
+    /// loop typically reaps the zombie within a few iterations.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -371,8 +372,19 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Reap the zombie synchronously
-            let _ = child.wait();
+            // Spin briefly to reap the zombie without blocking indefinitely.
+            // After SIGKILL the process is already dead, so try_wait() should
+            // succeed quickly to reap the zombie.
+            for _ in 0..50 {
+                match child.try_wait() {
+                    Ok(Some(_)) => return, // Zombie reaped successfully
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    Err(_) => return, // Process already reaped or error
+                }
+            }
+            // Final attempt: if the process hasn't been reaped yet, it may
+            // still be in the process of dying. Give up gracefully rather
+            // than blocking the Drop handler indefinitely.
         }
     }
 
