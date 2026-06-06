@@ -93,6 +93,9 @@ pub enum DesktopError {
     /// The local daemon is not running.
     #[error("daemon unavailable")]
     DaemonUnavailable,
+    /// Daemon executable path validation failed with a specific reason.
+    #[error("daemon path error: {detail}")]
+    DaemonPath { detail: String },
     /// Generic internal error with a human-readable message.
     #[error("internal error: {message}")]
     Internal { message: String },
@@ -462,7 +465,9 @@ pub async fn start_daemon(
     // Validate executable path for safety
     if let Err(err) = validate_executable_path(&exec_path) {
         warn!(?err, path = ?exec_path, "daemon executable path validation failed");
-        return Err(DesktopError::PermissionDenied);
+        return Err(DesktopError::DaemonPath {
+            detail: format!("path validation failed: {:?}", err),
+        });
     }
 
     let config = DaemonConfig {

@@ -149,6 +149,19 @@ impl DaemonHandle {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
+        // Create a new process group so we can kill the entire group on cleanup.
+        // This prevents orphaned child processes when the parent is killed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+
         for (key, value) in &self.config.env {
             cmd.env(key, value);
         }
@@ -290,10 +303,15 @@ impl DaemonHandle {
         }
     }
 
-    #[cfg(not(unix))]
-    fn is_process_alive(&self) -> bool {
-        // Windows would use OpenProcess/GetExitCodeProcess
-        self.pid.is_some()
+    #[cfg(windows)]
+    fn is_process_alive(&mut self) -> bool {
+        // Use try_wait() on the actual Child handle to check if the process
+        // has exited. Returns Ok(Some(status)) if exited, Ok(None) if still running.
+        if let Some(ref mut child) = self.child {
+            matches!(child.try_wait(), Ok(None))
+        } else {
+            false
+        }
     }
 
     /// Get the current state of the daemon.
@@ -334,10 +352,11 @@ impl DaemonHandle {
 
             #[cfg(windows)]
             {
-                // Use taskkill on Windows
+                // Use spawn() to avoid blocking the async worker thread.
+                // The OS reaps the taskkill process asynchronously.
                 let _ = std::process::Command::new("taskkill")
                     .args(["/PID", &self.pid.unwrap_or(0).to_string()])
-                    .output();
+                    .spawn();
             }
 
             // Async wait loop: poll for exit without blocking the tokio worker thread.
@@ -382,9 +401,10 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and polls with `try_wait()` to verify the process exits.
-    /// Uses a short retry loop (max 100 ms) so it remains safe for `Drop` and
-    /// async contexts while ensuring the process is actually reaped.
+    /// Sends SIGKILL and waits for the process to exit to ensure it is fully
+    /// reaped. This avoids zombies and is safe for `Drop` context because
+    /// SIGKILL termination is immediate. The wait is bounded by the OS
+    /// scheduler — typically under 1 ms after signal delivery.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -395,22 +415,17 @@ impl DaemonHandle {
             }
             #[cfg(windows)]
             {
+                // Use spawn() instead of output() to avoid blocking the thread.
+                // The OS will reap the taskkill process asynchronously.
                 let _ = std::process::Command::new("taskkill")
                     .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
-                    .output();
+                    .spawn();
             }
             let _ = child.kill();
 
-            // Poll briefly so SIGKILL propagates and the child is reaped.
-            // 100 ms max keeps this safe for Drop and async callers.
-            let deadline = Instant::now() + Duration::from_millis(100);
-            while Instant::now() < deadline {
-                match child.try_wait() {
-                    Ok(Some(_)) => break, // Process reaped.
-                    Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-                    Err(_) => break,
-                }
-            }
+            // Wait for the process to fully exit so it is reaped from the
+            // process table. SIGKILL is immediate, so this returns quickly.
+            let _ = child.wait();
         }
         self.child = None;
     }
@@ -427,7 +442,7 @@ impl DaemonHandle {
             {
                 let _ = std::process::Command::new("taskkill")
                     .args(["/PID", &self.pid.unwrap_or(0).to_string(), "/F"])
-                    .output();
+                    .spawn();
             }
             let _ = child.kill();
         }

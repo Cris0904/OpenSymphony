@@ -147,7 +147,7 @@ export async function validateGateway(baseUrl: string): Promise<boolean> {
  * Tries each URL in order until one responds with a healthy, compatible gateway.
  */
 export async function discoverGatewayWithFallback(
-  urls: string[] = [DEFAULT_GATEWAY_URL, "http://localhost:8080", "http://0.0.0.0:8080"],
+  urls: string[] = [DEFAULT_GATEWAY_URL, "http://localhost:8080"],
 ): Promise<DiscoveryResult> {
   for (const url of urls) {
     const result = await discoverGateway(url);
