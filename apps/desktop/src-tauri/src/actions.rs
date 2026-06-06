@@ -274,4 +274,28 @@ mod tests {
         assert_eq!(req.title, "Test");
         assert!(matches!(req.level, Some(NotifyLevel::Info)));
     }
+
+    #[test]
+    fn test_is_safe_workspace_path_blocks_tricky_system_paths() {
+        let blocked = vec![
+            "/System/Volumes/Data/.opensymphony/workspaces/escape",
+            "/usr/local/.opensymphony/workspaces/escape",
+            "/etc/opensymphony/workspaces/escape",
+            "/private/var/folders/.opensymphony/test",
+        ];
+        for path_str in blocked {
+            assert!(
+                !is_safe_workspace_path(std::path::Path::new(path_str)),
+                "Path {path_str} should be blocked by system prefix check"
+            );
+        }
+    }
+
+    #[test]
+    fn test_canonicalize_nonexistent_path_error_kind() {
+        let path = std::path::Path::new("/definitely/does/not/exist/12345");
+        let result = path.canonicalize();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
 }
