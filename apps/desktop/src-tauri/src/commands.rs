@@ -62,8 +62,7 @@ fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
 }
 
 /// Error returned when a daemon executable path fails validation.
-#[derive(Error, Debug, Serialize)]
-#[serde(rename_all = "snake_case", tag = "error")]
+#[derive(Error, Debug)]
 enum DaemonPathError {
     #[error("daemon executable path does not exist")]
     NotFound,
@@ -75,6 +74,18 @@ enum DaemonPathError {
     WorldWritable,
     #[error("daemon executable path cannot be inspected: {detail}")]
     AccessDenied { detail: String },
+}
+
+impl DaemonPathError {
+    fn kind(&self) -> &'static str {
+        match self {
+            DaemonPathError::NotFound => "not_found",
+            DaemonPathError::NotAFile => "not_a_file",
+            DaemonPathError::NotExecutable => "not_executable",
+            DaemonPathError::WorldWritable => "world_writable",
+            DaemonPathError::AccessDenied { .. } => "access_denied",
+        }
+    }
 }
 
 // ─── Error type ─────────────────────────────────────────────────────────────
@@ -101,8 +112,8 @@ pub enum DesktopError {
     #[error("daemon unavailable")]
     DaemonUnavailable,
     /// Daemon executable path validation failed with a specific reason.
-    #[error("daemon path error: {detail}")]
-    DaemonPath { detail: String },
+    #[error("daemon path error ({kind}): {detail}")]
+    DaemonPath { kind: String, detail: String },
     /// Generic internal error with a human-readable message.
     #[error("internal error: {message}")]
     Internal { message: String },
@@ -482,6 +493,7 @@ pub async fn start_daemon(
     if let Err(err) = validate_executable_path(&exec_path) {
         warn!(?err, path = ?exec_path, "daemon executable path validation failed");
         return Err(DesktopError::DaemonPath {
+            kind: err.kind().to_string(),
             detail: err.to_string(),
         });
     }

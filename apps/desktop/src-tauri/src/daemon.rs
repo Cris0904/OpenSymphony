@@ -304,8 +304,13 @@ impl DaemonHandle {
                     false
                 }
                 Err(e) => {
-                    warn!(pid = ?self.pid, error = %e, "failed to check daemon process status");
-                    false
+                    if Self::is_child_already_reaped_error(&e) {
+                        info!(pid = ?self.pid, error = %e, "daemon process was already reaped");
+                        false
+                    } else {
+                        warn!(pid = ?self.pid, error = %e, "failed to check daemon process status");
+                        true
+                    }
                 }
             }
         } else {
@@ -466,21 +471,33 @@ impl DaemonHandle {
         }
     }
 
+    fn is_child_already_reaped_error(error: &std::io::Error) -> bool {
+        #[cfg(unix)]
+        {
+            error.raw_os_error() == Some(libc::ECHILD)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = error;
+            false
+        }
+    }
+
     fn reap_child_in_background(mut child: Child, pid: Option<u32>) {
-        let name = pid
-            .map(|pid| format!("opensymphony-daemon-reaper-{pid}"))
-            .unwrap_or_else(|| "opensymphony-daemon-reaper".to_string());
-        if let Err(e) = std::thread::Builder::new().name(name).spawn(move || {
-            let status = child.wait();
-            match status {
-                Ok(status) => {
-                    info!(pid = ?pid, status = ?status, "daemon process reaped in background");
+        if let Err(e) = std::thread::Builder::new()
+            .name("os-reaper".to_string())
+            .spawn(move || {
+                let status = child.wait();
+                match status {
+                    Ok(status) => {
+                        info!(pid = ?pid, status = ?status, "daemon process reaped in background");
+                    }
+                    Err(e) => {
+                        warn!(pid = ?pid, error = %e, "background daemon reap failed");
+                    }
                 }
-                Err(e) => {
-                    warn!(pid = ?pid, error = %e, "background daemon reap failed");
-                }
-            }
-        }) {
+            })
+        {
             warn!(pid = ?pid, error = %e, "failed to spawn daemon reaper thread");
         }
     }
