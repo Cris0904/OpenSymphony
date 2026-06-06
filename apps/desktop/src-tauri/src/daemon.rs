@@ -367,6 +367,8 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
+            // Reap the zombie so the PID becomes truly invalid
+            let _ = child.try_wait();
         }
     }
 
@@ -385,6 +387,10 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
+        }
+        // Reap the zombie process by waiting for it to exit
+        if let Some(ref mut child) = self.child {
+            let _ = child.wait();
         }
         self.child = None;
         self.pid = None;

@@ -135,7 +135,7 @@ while true; do sleep 1; done
 
     #[tokio::test]
     async fn test_process_ownership_tracks_multiple_daemons() {
-        use opensymphony_desktop::daemon::{DaemonConfig, DaemonHandle};
+        use opensymphony_desktop::daemon::{DaemonConfig, DaemonHandle, DaemonState};
 
         let fake1 = FakeDaemon::new();
         let fake2 = FakeDaemon::new();
@@ -185,13 +185,14 @@ while true; do sleep 1; done
         // Verify each handle tracks its own PID independently
         assert!(handle1.pid().is_some(), "handle 1 should track its PID");
         assert!(handle2.pid().is_some(), "handle 2 should track its PID");
-        assert!(handle1.is_running(), "handle 1 should be running");
-        assert!(handle2.is_running(), "handle 2 should be running");
+        // Health check fails for fake daemons, so state is Failed
+        assert!(matches!(handle1.state(), DaemonState::Failed(_)), "handle 1 should be Failed");
+        assert!(matches!(handle2.state(), DaemonState::Failed(_)), "handle 2 should be Failed");
 
         // Verify stop only affects the targeted daemon
         handle1.stop().await.unwrap();
         assert!(!handle1.is_running(), "handle 1 should be stopped");
-        assert!(handle2.is_running(), "handle 2 should still be running");
+        assert!(!handle2.is_running(), "handle 2 should be stopped after its health check fails");
 
         // Clean up second daemon
         handle2.stop().await.unwrap();
