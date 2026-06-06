@@ -229,15 +229,19 @@ pub async fn attach_gateway(
     _state: tauri::State<'_, GatewayConnection>,
     req: AttachGatewayRequest,
 ) -> CommandResult<AttachGatewayResponse> {
-    // Validate URL
-    if !req.base_url.starts_with("http://") && !req.base_url.starts_with("https://") {
+    // Validate URL using proper parser
+    let parsed = url::Url::parse(&req.base_url).map_err(|e| DesktopError::GatewayError {
+        message: format!("Invalid gateway URL: {}", e),
+    })?;
+
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(DesktopError::GatewayError {
-            message: "Invalid gateway URL".to_string(),
+            message: "Gateway URL must use http or https scheme".to_string(),
         });
     }
 
     // Determine profile based on URL
-    let is_loopback = req.base_url.contains("127.0.0.1") || req.base_url.contains("localhost");
+    let is_loopback = parsed.host_str() == Some("127.0.0.1") || parsed.host_str() == Some("localhost");
     let profile = if is_loopback {
         "loopback_http"
     } else {
@@ -648,16 +652,33 @@ pub async fn subscribe_terminal(
     Ok(())
 }
 
+/// Active subscriptions tracked for cleanup.
+/// COE-409 will wire this to actual gateway subscription management.
+#[derive(Debug, Default, Clone)]
+pub struct SubscriptionState {
+    pub event_subscribers: std::sync::atomic::AtomicUsize,
+    pub terminal_subscribers: std::sync::atomic::AtomicUsize,
+}
+
 /// Unsubscribe from the gateway event stream.
 /// Clean up the channel and release resources.
 #[command]
-pub async fn unsubscribe_events() -> CommandResult<()> {
+pub async fn unsubscribe_events(
+    _state: tauri::State<'_, SubscriptionState>,
+) -> CommandResult<()> {
+    let prev = _state.event_subscribers.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    tracing::debug!("unsubscribe_events: {} remaining subscribers", prev.saturating_sub(1));
     Ok(())
 }
 
 /// Unsubscribe from terminal frame streaming.
 #[command]
-pub async fn unsubscribe_terminal(_run_id: String) -> CommandResult<()> {
+pub async fn unsubscribe_terminal(
+    _run_id: String,
+    _state: tauri::State<'_, SubscriptionState>,
+) -> CommandResult<()> {
+    let prev = _state.terminal_subscribers.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    tracing::debug!("unsubscribe_terminal({}): {} remaining subscribers", _run_id, prev.saturating_sub(1));
     Ok(())
 }
 

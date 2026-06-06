@@ -2368,6 +2368,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-shell",
  "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]
