@@ -552,53 +552,69 @@ pub async fn attach_gateway(
 /// Get dashboard snapshot from gateway.
 #[command]
 pub async fn dashboard_snapshot(
-    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
 ) -> CommandResult<serde_json::Value> {
-    // Stub: will be wired to actual gateway in COE-404
+    // Read attached gateway URL to prove state is not dead (COE-404 will wire
+    // actual gateway calls using this value).
+    let conn = state.read().map_err(|e| DesktopError::Gateway {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
     Ok(serde_json::json!({
         "schema_version": {"major": 1, "minor": 0, "patch": 0},
         "projects": [],
         "runs": [],
         "events": [],
+        "base_url": conn.base_url.clone(),
     }))
 }
 
 /// Get task graph for a project.
 #[command]
 pub async fn task_graph(
-    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     project_id: String,
 ) -> CommandResult<serde_json::Value> {
+    let conn = state.read().map_err(|e| DesktopError::Gateway {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
     Ok(serde_json::json!({
         "schema_version": {"major": 1, "minor": 0, "patch": 0},
         "project_id": project_id,
         "nodes": [],
         "root_ids": [],
+        "base_url": conn.base_url.clone(),
     }))
 }
 
 /// Get run details.
 #[command]
 pub async fn run_detail(
-    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     run_id: String,
 ) -> CommandResult<serde_json::Value> {
+    let conn = state.read().map_err(|e| DesktopError::Gateway {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
     Ok(serde_json::json!({
         "schema_version": {"major": 1, "minor": 0, "patch": 0},
         "run_id": run_id,
         "status": "idle",
         "events": [],
+        "base_url": conn.base_url.clone(),
     }))
 }
 
 /// Get run events with cursor support.
 #[command]
 pub async fn run_events(
-    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     run_id: String,
     cursor: Option<u64>,
     page_size: Option<u64>,
 ) -> CommandResult<serde_json::Value> {
+    let conn = state.read().map_err(|e| DesktopError::Gateway {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
     Ok(serde_json::json!({
         "schema_version": {"major": 1, "minor": 0, "patch": 0},
         "run_id": run_id,
@@ -606,22 +622,27 @@ pub async fn run_events(
         "page_size": page_size.unwrap_or(100),
         "events": [],
         "has_more": false,
+        "base_url": conn.base_url.clone(),
     }))
 }
 
 /// Get terminal snapshot.
 #[command]
 pub async fn terminal_snapshot(
-    _state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
     run_id: String,
     terminal_id: String,
 ) -> CommandResult<serde_json::Value> {
+    let conn = state.read().map_err(|e| DesktopError::Gateway {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
     Ok(serde_json::json!({
         "schema_version": {"major": 1, "minor": 0, "patch": 0},
         "run_id": run_id,
         "terminal_id": terminal_id,
         "content": "",
         "cursor": 0,
+        "base_url": conn.base_url.clone(),
     }))
 }
 
@@ -833,10 +854,18 @@ pub async fn unsubscribe_events(_state: tauri::State<'_, SubscriptionState>) -> 
     let prev = _state
         .event_subscribers
         .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    eprintln!(
-        "unsubscribe_events: {} remaining subscribers",
-        prev.saturating_sub(1)
-    );
+    // Prevent underflow: if counter was already 0, restore it and log a no-op.
+    if prev == 0 {
+        _state
+            .event_subscribers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("unsubscribe_events: already zero subscribers, no-op");
+    } else {
+        eprintln!(
+            "unsubscribe_events: {} remaining subscribers",
+            prev - 1
+        );
+    }
     Ok(())
 }
 
@@ -849,10 +878,18 @@ pub async fn unsubscribe_terminal(
     let prev = _state
         .terminal_subscribers
         .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    eprintln!(
-        "unsubscribe_terminal({}): {} remaining subscribers",
-        _run_id,
-        prev.saturating_sub(1)
-    );
+    // Prevent underflow: if counter was already 0, restore it and log a no-op.
+    if prev == 0 {
+        _state
+            .terminal_subscribers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!("unsubscribe_terminal({}): already zero subscribers, no-op", _run_id);
+    } else {
+        eprintln!(
+            "unsubscribe_terminal({}): {} remaining subscribers",
+            _run_id,
+            prev - 1
+        );
+    }
     Ok(())
 }
