@@ -230,8 +230,10 @@ fn action_receipt_correlation_is_preserved() {
     let dispatch_json = serde_json::to_string(&dispatched).expect("test data");
     let complete_json = serde_json::to_string(&completed).expect("test data");
 
-    let dispatch_parsed: serde_json::Value = serde_json::from_str(&dispatch_json).expect("test data");
-    let complete_parsed: serde_json::Value = serde_json::from_str(&complete_json).expect("test data");
+    let dispatch_parsed: serde_json::Value =
+        serde_json::from_str(&dispatch_json).expect("test data");
+    let complete_parsed: serde_json::Value =
+        serde_json::from_str(&complete_json).expect("test data");
 
     assert_eq!(
         dispatch_parsed["payload"]["correlation_id"],
@@ -328,7 +330,8 @@ fn backpressure_recovery_is_consistent() {
     let ws_parsed: serde_json::Value = serde_json::from_str(ws_error_str).expect("test data");
     assert!(ws_parsed["recoverable"].as_bool().expect("test data"));
 
-    let tauri_parsed: serde_json::Value = serde_json::from_str(&http_error_json).expect("test data");
+    let tauri_parsed: serde_json::Value =
+        serde_json::from_str(&http_error_json).expect("test data");
     assert!(tauri_parsed["recoverable"].as_bool().expect("test data"));
 }
 
