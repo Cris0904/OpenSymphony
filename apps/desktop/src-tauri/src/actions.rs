@@ -118,9 +118,23 @@ pub async fn reveal_workspace(
 
 fn is_safe_workspace_path(path: &std::path::Path) -> bool {
     if let Some(home) = dirs::home_dir() {
-        // Canonicalize home itself first to handle symlinks in home path
+        // Canonicalize home first to resolve symlinks, then build base
         let canon_home = home.canonicalize().unwrap_or(home);
         let canon_base = canon_home.join(".opensymphony");
+        // Canonicalize input path to handle .. components and symlinks
+        if let Ok(canon_path) = path.canonicalize() {
+            if canon_path.starts_with(&canon_base) {
+                return true;
+            }
+            // Path exists but isn't under .opensymphony - block it
+            return false;
+        }
+        // Path doesn't exist - check for escape attempts via .. components
+        // before falling back to string prefix check
+        if path.components().any(|c| c.as_os_str() == "..") {
+            // Reject paths with .. that can't be canonicalized (may escape workspace)
+            return false;
+        }
         if path.starts_with(&canon_base) {
             return true;
         }
@@ -130,6 +144,10 @@ fn is_safe_workspace_path(path: &std::path::Path) -> bool {
         && !s.starts_with("/usr")
         && !s.starts_with("/etc")
         && !s.starts_with("/private/var")
+        && !s.starts_with("/var")
+        && !s.starts_with("/tmp")
+        && !s.starts_with("/bin")
+        && !s.starts_with("/sbin")
 }
 
 #[derive(Debug, Deserialize)]
@@ -297,5 +315,70 @@ mod tests {
         let result = path.canonicalize();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn test_is_safe_workspace_path_allows_opensymphony_subdirs() {
+        // Various valid workspace paths under .opensymphony should pass
+        let valid = vec![
+            "/home/user/.opensymphony/workspaces/test",
+            "/home/user/.opensymphony/workspaces/deep/nested/path",
+            "/home/user/.opensymphony/workspaces/test-123",
+        ];
+        for path_str in valid {
+            assert!(
+                is_safe_workspace_path(std::path::Path::new(path_str)),
+                "Path {path_str} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_safe_workspace_path_blocks_path_traversal_attempts() {
+        // Paths that try to escape via .. or mimic .opensymphony elsewhere should be blocked
+        let blocked = vec![
+            "/home/user/.opensymphony/../../../etc/passwd",
+            "/var/.opensymphony/workspaces/test",
+            "/tmp/.opensymphony/workspaces/test",
+            "/home/user/.opensymphony/workspaces/../../../etc/shadow",
+        ];
+        for path_str in blocked {
+            assert!(
+                !is_safe_workspace_path(std::path::Path::new(path_str)),
+                "Path {path_str} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn test_notify_all_levels_deserialize() {
+        // Verify all valid notification levels work
+        for level in &["info", "warning", "error"] {
+            let json = format!(r#"{{"title":"T","body":"B","level":"{}"}}"#, level);
+            let result: Result<NotifyRequest, _> = serde_json::from_str(&json);
+            assert!(result.is_ok(), "Level '{}' should deserialize", level);
+        }
+        // Missing level should still work (defaults to None)
+        let json = r#"{"title":"T","body":"B"}"#;
+        let req: NotifyRequest = serde_json::from_str(json).unwrap();
+        assert!(req.level.is_none());
+    }
+
+    #[test]
+    fn test_open_linear_link_request_url_encoding() {
+        // Verify URL encoding handles special characters in issue IDs
+        let req = OpenLinearLinkRequest {
+            issue_id: "COE-409".into(),
+        };
+        let encoded = urlencoding::encode(&req.issue_id);
+        let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, encoded);
+        assert_eq!(url, "https://linear.app/trilogy-ai-coe/issue/COE-409");
+        
+        // Test with special characters that need encoding
+        let req_special = OpenLinearLinkRequest {
+            issue_id: "COE-409/test".into(),
+        };
+        let encoded_special = urlencoding::encode(&req_special.issue_id);
+        assert!(encoded_special.to_string().contains("%2F"), "Slash should be URL-encoded");
     }
 }
