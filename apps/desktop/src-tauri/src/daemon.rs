@@ -384,8 +384,8 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // Reap the zombie immediately after SIGKILL. Since the process
-            // is already dead, wait() returns without blocking.
+            // Wait to reap the zombie. After SIGKILL the process is guaranteed
+            // to be dead, so this returns immediately without blocking.
             let _ = child.wait();
         }
         self.child = None;
