@@ -16,6 +16,10 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::warn;
 
+const DEFAULT_GATEWAY_HTTP_URL: &str = "http://127.0.0.1:8000";
+const DEFAULT_GATEWAY_HTTP_LOCALHOST_URL: &str = "http://localhost:8000";
+const DEFAULT_GATEWAY_WS_URL: &str = "ws://127.0.0.1:8000";
+
 // ─── Executable validation ─────────────────────────────────────────────────
 
 /// Validate that a daemon executable path is safe to run.
@@ -294,7 +298,7 @@ pub async fn probe_gateway(gateway_url: String) -> CommandResult<DiscoveryResult
 /// Discover gateway on default loopback address.
 #[command]
 pub async fn discover_default_gateway() -> CommandResult<DiscoveryResult> {
-    let default_urls = ["http://127.0.0.1:8080", "http://localhost:8080"];
+    let default_urls = [DEFAULT_GATEWAY_HTTP_URL, DEFAULT_GATEWAY_HTTP_LOCALHOST_URL];
 
     for url in &default_urls {
         let result = probe_gateway(url.to_string()).await?;
@@ -364,7 +368,7 @@ pub async fn start_daemon(
         auto_restart: req.auto_restart.unwrap_or(true),
         gateway_url: req
             .gateway_url
-            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string()),
+            .unwrap_or_else(|| DEFAULT_GATEWAY_HTTP_URL.to_string()),
         skip_health_check: false,
     };
 
@@ -468,7 +472,7 @@ pub struct ProcessStatus {
 // 4. Loopback HTTP/WebSocket - compatibility baseline
 
 /// Gateway connection state managed by the Tauri app.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GatewayConnection {
     pub base_url: String,
     pub auth_token: Option<String>,
@@ -478,7 +482,7 @@ pub struct GatewayConnection {
 impl Default for GatewayConnection {
     fn default() -> Self {
         Self {
-            base_url: "http://127.0.0.1:8000".to_string(),
+            base_url: DEFAULT_GATEWAY_HTTP_URL.to_string(),
             auth_token: None,
             connected: false,
         }
@@ -507,12 +511,12 @@ pub async fn attach_gateway(
     req: AttachGatewayRequest,
 ) -> CommandResult<AttachGatewayResponse> {
     // Validate URL using proper parser
-    let parsed = url::Url::parse(&req.base_url).map_err(|e| DesktopError::GatewayError {
+    let parsed = url::Url::parse(&req.base_url).map_err(|e| DesktopError::Gateway {
         message: format!("Invalid gateway URL: {}", e),
     })?;
 
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(DesktopError::GatewayError {
+        return Err(DesktopError::Gateway {
             message: "Gateway URL must use http or https scheme".to_string(),
         });
     }
@@ -521,9 +525,7 @@ pub async fn attach_gateway(
     let is_loopback = match parsed.host() {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
         Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
-        Some(url::Host::Domain(domain)) => {
-            domain.eq_ignore_ascii_case("localhost")
-        }
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
         None => false,
     };
     let profile = if is_loopback {
@@ -533,7 +535,7 @@ pub async fn attach_gateway(
     };
 
     // Mutate connection state to record the attachment
-    let mut conn = state.write().map_err(|e| DesktopError::GatewayError {
+    let mut conn = state.write().map_err(|e| DesktopError::Gateway {
         message: format!("Failed to acquire connection state lock: {}", e),
     })?;
     conn.base_url = req.base_url.clone();
@@ -697,14 +699,14 @@ pub async fn get_connection_profiles() -> CommandResult<Vec<ConnectionProfile>> 
         ConnectionProfile {
             name: "Local Daemon".to_string(),
             profile_type: "loopback_http".to_string(),
-            base_url: "http://127.0.0.1:8000".to_string(),
+            base_url: DEFAULT_GATEWAY_HTTP_URL.to_string(),
             auth_mode: "none".to_string(),
             available: true,
         },
         ConnectionProfile {
             name: "Local Gateway (WebSocket)".to_string(),
             profile_type: "loopback_websocket".to_string(),
-            base_url: "ws://127.0.0.1:8000".to_string(),
+            base_url: DEFAULT_GATEWAY_WS_URL.to_string(),
             auth_mode: "none".to_string(),
             available: true,
         },
@@ -720,7 +722,7 @@ pub async fn get_connection_profiles() -> CommandResult<Vec<ConnectionProfile>> 
 
 // ─── Gateway Local Stream Transport (COE-410) ──────────────────────────────
 
-use opensymphony_gateway_schema::{
+use crate::opensymphony_gateway_schema::{
     capability::{
         AuthMode, FeatureCapability as GatewayFeatureCapability, GatewayCapabilities,
         TransportCapability as GatewayTransportCapability,
@@ -820,7 +822,7 @@ pub async fn gateway_connection_info() -> CommandResult<GatewayConnectionInfo> {
     Ok(GatewayConnectionInfo {
         status: GatewayHealthStatus::Healthy,
         profile: "loopback_http".to_string(),
-        base_uri: "http://localhost:8080".to_string(),
+        base_uri: DEFAULT_GATEWAY_HTTP_URL.to_string(),
         transports: vec![
             "tauri_channel".to_string(),
             "loopback_http".to_string(),

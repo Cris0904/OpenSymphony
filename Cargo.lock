@@ -1945,7 +1945,6 @@ dependencies = [
  "ftui",
  "futures-util",
  "liquid",
- "opensymphony-gateway-schema",
  "reqwest",
  "reqwest-eventsource",
  "rustix 1.1.4",
@@ -1964,20 +1963,6 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width",
  "url",
- "uuid",
-]
-
-[[package]]
-name = "opensymphony-gateway-schema"
-version = "1.7.3"
-dependencies = [
- "chrono",
- "futures-util",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "tokio-tungstenite",
  "uuid",
 ]
 

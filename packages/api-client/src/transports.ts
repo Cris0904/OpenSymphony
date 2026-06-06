@@ -737,7 +737,6 @@ export interface TauriRuntime {
 
 export class TauriChannelTransport implements GatewayTransport {
   readonly baseUri: string;
-  private readonly authToken?: string;
   private eventChannel?: TauriChannel<GatewayEnvelope>;
   private terminalChannels: Map<string, TauriChannel<GatewayEnvelope>> = new Map();
   private isClosed = false;
@@ -745,7 +744,6 @@ export class TauriChannelTransport implements GatewayTransport {
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
-    this.authToken = config.authToken;
   }
 
   private tauri(): TauriRuntime {
@@ -763,14 +761,11 @@ export class TauriChannelTransport implements GatewayTransport {
   }
 
   private async invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-    return this.tauri().invoke(command, {
-      ...args,
-      auth_token: this.authToken,
-    });
+    return this.tauri().invoke(command, args ?? {});
   }
 
   async health(): Promise<GatewayCapabilities> {
-    return this.invoke<GatewayCapabilities>("health", {});
+    return this.invoke<GatewayCapabilities>("gateway_capabilities", {});
   }
 
   async snapshot(): Promise<DashboardSnapshot> {

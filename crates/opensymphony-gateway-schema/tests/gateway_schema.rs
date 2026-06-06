@@ -1,5 +1,5 @@
 use chrono::Utc;
-use opensymphony_gateway_schema::{
+use opensymphony::opensymphony_gateway_schema::{
     action::{ActionDispatch, ActionKind, ActionTarget},
     approval::{ActionReceipt, ActionReceiptStatus, ApprovalKind, ApprovalRequest, ApprovalStatus},
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},

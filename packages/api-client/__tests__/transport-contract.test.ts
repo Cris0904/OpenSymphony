@@ -353,6 +353,38 @@ describe("TransportFactory", () => {
   });
 });
 
+// ─── Tauri Channel Transport Tests ─────────────────────────────────────────
+
+describe("TauriChannelTransport", () => {
+  const globalWithTauri = globalThis as Record<string, unknown>;
+  const originalTauri = globalWithTauri.__TAURI__;
+
+  afterEach(() => {
+    if (originalTauri === undefined) {
+      delete globalWithTauri.__TAURI__;
+    } else {
+      globalWithTauri.__TAURI__ = originalTauri;
+    }
+    jest.restoreAllMocks();
+  });
+
+  it("uses the registered gateway_capabilities command without auth injection", async () => {
+    const invoke = jest.fn().mockResolvedValue(FIXTURE_CAPABILITIES);
+    globalWithTauri.__TAURI__ = {
+      invoke,
+      core: { Channel: jest.fn() },
+    };
+
+    const transport = new TauriChannelTransport({
+      baseUri: "tauri://local",
+      authToken: "secret-token",
+    });
+
+    await expect(transport.health()).resolves.toEqual(FIXTURE_CAPABILITIES);
+    expect(invoke).toHaveBeenCalledWith("gateway_capabilities", {});
+  });
+});
+
 // ─── HTTP Transport Tests ──────────────────────────────────────────────────
 
 describe("HttpGatewayTransport", () => {
