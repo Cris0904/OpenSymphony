@@ -62,6 +62,12 @@ impl SettingsManager {
         Ok(Self { settings, path })
     }
 
+    #[cfg(test)]
+    pub fn with_path(path: &std::path::Path) -> Result<Self, DesktopError> {
+        let settings = Mutex::new(AppSettings::load_or_default(&path.to_path_buf()));
+        Ok(Self { settings, path: path.to_path_buf() })
+    }
+
     pub fn get(&self, key: &str) -> Option<SettingValue> {
         self.settings.lock().unwrap().values.get(key).cloned()
     }
@@ -111,7 +117,7 @@ pub struct GetSettingRequest {
     pub key: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", content = "value")]
 pub enum SettingValue {
     Text(String),
@@ -157,11 +163,66 @@ mod tests {
         let t = SettingValue::Text("hello".into());
         let j = serde_json::to_string(&t).unwrap();
         assert!(j.contains("Text"));
+        let t = SettingValue::Number(42.0);
+        let j = serde_json::to_string(&t).unwrap();
+        assert!(j.contains("42"));
+        let t = SettingValue::Flag(true);
+        let j = serde_json::to_string(&t).unwrap();
+        assert!(j.contains("true"));
     }
 
     #[test]
     fn test_app_settings_default() {
         let s = AppSettings::default();
         assert!(s.values.is_empty());
+    }
+
+    #[test]
+    fn test_settings_manager_round_trip() {
+        let tmp = std::env::temp_dir().join(format!("settings_test_{}.json", std::process::id()));
+        let mgr = SettingsManager::with_path(&tmp).unwrap();
+        
+        mgr.set("test_key", SettingValue::Text("test_value".into())).unwrap();
+        assert_eq!(mgr.get("test_key"), Some(SettingValue::Text("test_value".into())));
+        
+        mgr.set("number_key", SettingValue::Number(123.0)).unwrap();
+        assert_eq!(mgr.get("number_key"), Some(SettingValue::Number(123.0)));
+        
+        mgr.set("flag_key", SettingValue::Flag(true)).unwrap();
+        assert_eq!(mgr.get("flag_key"), Some(SettingValue::Flag(true)));
+        
+        // Verify persistence by loading from file
+        let mgr2 = SettingsManager::with_path(&tmp).unwrap();
+        assert_eq!(mgr2.get("test_key"), Some(SettingValue::Text("test_value".into())));
+        assert_eq!(mgr2.get("number_key"), Some(SettingValue::Number(123.0)));
+        assert_eq!(mgr2.get("flag_key"), Some(SettingValue::Flag(true)));
+        
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_settings_atomic_write() {
+        let tmp = std::env::temp_dir().join(format!("atomic_test_{}.json", std::process::id()));
+        let mgr = SettingsManager::with_path(&tmp).unwrap();
+        
+        mgr.set("key1", SettingValue::Text("value1".into())).unwrap();
+        
+        // Verify file exists and contains the data
+        assert!(tmp.exists());
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        assert!(content.contains("key1"));
+        
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_settings_load_or_default() {
+        let tmp = std::env::temp_dir().join(format!("default_test_{}.json", std::process::id()));
+        
+        // When file doesn't exist, should create with defaults
+        let mgr = SettingsManager::with_path(&tmp).unwrap();
+        assert!(mgr.get("nonexistent").is_none());
+        
+        std::fs::remove_file(&tmp).ok();
     }
 }

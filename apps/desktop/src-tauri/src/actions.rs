@@ -49,12 +49,13 @@ pub async fn open_repository_folder(
     req: OpenRepositoryFolderRequest,
 ) -> CommandResult<OpenRepositoryFolderResponse> {
     let p = std::path::Path::new(&req.path);
-    if !p.exists() {
-        return Err(DesktopError::NotFound);
-    }
     // Canonicalize FIRST to resolve symlinks before safety check (prevent TOCTOU bypass)
-    let canon = p.canonicalize().map_err(|e| DesktopError::Internal {
-        message: format!("failed to canonicalize: {e}"),
+    // canonicalize() returns io::Error for non-existent paths naturally
+    let canon = p.canonicalize().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => DesktopError::NotFound,
+        _ => DesktopError::Internal {
+            message: format!("failed to canonicalize: {e}"),
+        },
     })?;
     if !is_safe_workspace_path(&canon) {
         return Err(DesktopError::PermissionDenied);
@@ -88,11 +89,12 @@ pub async fn reveal_workspace(
         return Err(DesktopError::PermissionDenied);
     }
     let p = std::path::Path::new(&req.path);
-    if !p.exists() {
-        return Err(DesktopError::NotFound);
-    }
-    let canon = p.canonicalize().map_err(|e| DesktopError::Internal {
-        message: format!("failed to canonicalize: {e}"),
+    // canonicalize() returns io::Error for non-existent paths naturally
+    let canon = p.canonicalize().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => DesktopError::NotFound,
+        _ => DesktopError::Internal {
+            message: format!("failed to canonicalize: {e}"),
+        },
     })?;
     let home = dirs::home_dir().ok_or_else(|| DesktopError::Internal {
         message: "could not determine home directory".into(),
@@ -122,7 +124,6 @@ fn is_safe_workspace_path(path: &std::path::Path) -> bool {
         && !s.starts_with("/usr")
         && !s.starts_with("/etc")
         && !s.starts_with("/private/var")
-        && path.exists()
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,15 +155,15 @@ pub struct OpenLinearLinkRequest {
     pub issue_id: String,
 }
 
+// Configurable Linear workspace base URL (override at build time if needed)
+const LINEAR_WORKSPACE_BASE: &str = "https://linear.app/trilogy-ai-coe";
+
 #[command]
 pub async fn open_linear_link(
     app: tauri::AppHandle,
     req: OpenLinearLinkRequest,
 ) -> CommandResult<()> {
-    let url = format!(
-        "https://linear.app/trilogy-ai-coe/issue/{}",
-        req.issue_id
-    );
+    let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, req.issue_id);
     app.opener().open_url(&url, None::<&str>).map_err(|e| DesktopError::Internal {
         message: format!("failed to open link: {e}"),
     })
@@ -215,6 +216,10 @@ mod tests {
         assert!(matches!(i, NotifyLevel::Info));
         let w: NotifyLevel = serde_json::from_str(r#""warning""#).unwrap();
         assert!(matches!(w, NotifyLevel::Warning));
+        let e: NotifyLevel = serde_json::from_str(r#""error""#).unwrap();
+        assert!(matches!(e, NotifyLevel::Error));
+        // Invalid level should fail
+        assert!(serde_json::from_str::<NotifyLevel>(r#""critical""#).is_err());
     }
 
     #[test]
@@ -227,5 +232,41 @@ mod tests {
     fn test_linear_link_request() {
         let r = OpenLinearLinkRequest { issue_id: "COE-409".into() };
         assert_eq!(r.issue_id, "COE-409");
+    }
+
+    #[test]
+    fn test_linear_url_constant() {
+        assert!(LINEAR_WORKSPACE_BASE.starts_with("https://linear.app/"));
+        let url = format!("{}/issue/{}", LINEAR_WORKSPACE_BASE, "COE-123");
+        assert_eq!(url, "https://linear.app/trilogy-ai-coe/issue/COE-123");
+    }
+
+    #[test]
+    fn test_safety_workspace_path_allows_home() {
+        let path = std::path::Path::new("/home/user/.opensymphony/workspaces/test");
+        assert!(is_safe_workspace_path(path));
+    }
+
+    #[test]
+    fn test_safety_workspace_path_blocks_system() {
+        let path = std::path::Path::new("/System/Volumes/Data");
+        assert!(!is_safe_workspace_path(path));
+        let path = std::path::Path::new("/usr/bin/something");
+        assert!(!is_safe_workspace_path(path));
+        let path = std::path::Path::new("/etc/passwd");
+        assert!(!is_safe_workspace_path(path));
+        let path = std::path::Path::new("/private/var/folders");
+        assert!(!is_safe_workspace_path(path));
+    }
+
+    #[test]
+    fn test_notify_request_structure() {
+        let req = NotifyRequest {
+            title: "Test".into(),
+            body: "Body".into(),
+            level: Some(NotifyLevel::Info),
+        };
+        assert_eq!(req.title, "Test");
+        assert!(matches!(req.level, Some(NotifyLevel::Info)));
     }
 }

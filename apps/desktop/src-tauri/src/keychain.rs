@@ -38,7 +38,7 @@ pub fn redact_value(key: &str) -> Option<String> {
     match get_secret(key) {
         Ok(Some(_)) => Some(REDACTED.into()),
         Ok(None) => None,
-        Err(_) => Some("error".into()),
+        Err(_) => None, // Don't leak error vs missing-key distinction
     }
 }
 
@@ -123,5 +123,23 @@ mod tests {
             display: "none".into(),
         };
         assert!(!s.configured);
+    }
+
+    #[test]
+    fn test_redact_value_does_not_leak_errors() {
+        // Missing key should return None (not error information)
+        let result = redact_value("nonexistent_key_for_testing_12345");
+        assert!(result.is_none(), "redact_value should not leak error state for missing keys");
+    }
+
+    #[test]
+    fn test_credential_status_response_structure() {
+        // Verify response structure doesn't leak error info
+        let resp = CredentialStatusResponse {
+            configured: false,
+            display: "none".into(),
+        };
+        assert!(!resp.configured);
+        assert_eq!(resp.display, "none");
     }
 }
