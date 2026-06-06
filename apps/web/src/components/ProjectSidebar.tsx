@@ -20,6 +20,8 @@ interface SidebarItem {
   badge?: { text: string; color: string };
   children?: SidebarItem[];
   action?: () => void;
+  // Track which project this item belongs to for navigation context.
+  projectContext?: string;
 }
 
 // Placeholder data - in production this would come from the gateway API.
@@ -38,23 +40,28 @@ const sidebarData: SidebarItem[] = [
       {
         id: "project-1",
         label: "OpenSymphony-bootstrap",
+        projectContext: "project-1",
         children: [
           {
             id: "milestone-1",
             label: "M7: Shared Client And Desktop Alpha",
+            projectContext: "project-1",
             children: [
               {
                 id: "issue-1",
                 label: "COE-402 App Shell, Dashboard, Task Graph...",
                 badge: { text: "In Progress", color: "var(--color-accent)" },
+                projectContext: "project-1",
                 children: [
                   {
                     id: "sub-issue-1",
                     label: "COE-402 Sub-task: Layout Components",
+                    projectContext: "project-1",
                   },
                   {
                     id: "sub-issue-2",
                     label: "COE-402 Sub-task: Dashboard Page",
+                    projectContext: "project-1",
                   },
                 ],
               },
@@ -62,11 +69,13 @@ const sidebarData: SidebarItem[] = [
                 id: "issue-2",
                 label: "COE-411 Task Graph Editor and Runtime Overlay",
                 badge: { text: "Todo", color: "var(--color-fg-muted)" },
+                projectContext: "project-1",
               },
               {
                 id: "issue-3",
                 label: "COE-414 Diff, Validation, Approval, and Run Action Views",
                 badge: { text: "Todo", color: "var(--color-fg-muted)" },
+                projectContext: "project-1",
               },
             ],
           },
@@ -88,7 +97,7 @@ const sidebarData: SidebarItem[] = [
   },
 ];
 
-export function ProjectSidebar({ navigate, currentProjectId = "project-1" }: ProjectSidebarProps): React.ReactElement {
+export function ProjectSidebar({ navigate }: ProjectSidebarProps): React.ReactElement {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(["projects", "milestone-1"]));
 
   const toggleExpand = (id: string) => {
@@ -136,7 +145,6 @@ export function ProjectSidebar({ navigate, currentProjectId = "project-1" }: Pro
             expandedIds={expandedIds}
             onToggle={toggleExpand}
             navigate={navigate}
-            currentProjectId={currentProjectId}
           />
         ))}
       </nav>
@@ -151,14 +159,12 @@ function SidebarTreeNode({
   expandedIds,
   onToggle,
   navigate,
-  currentProjectId,
 }: {
   item: SidebarItem;
   depth: number;
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   navigate: (page: Page) => void;
-  currentProjectId: string;
 }): React.ReactElement | null {
   const isExpanded = expandedIds.has(item.id);
   const hasChildren = item.children && item.children.length > 0;
@@ -176,8 +182,9 @@ function SidebarTreeNode({
     } else if (item.id.startsWith("project-")) {
       navigate({ kind: "project", projectId: item.id });
     } else if (item.id.startsWith("issue-") || item.id.startsWith("sub-issue-")) {
-      // Navigate to task-graph for the current project context.
-      navigate({ kind: "task-graph", projectId: currentProjectId });
+      // Navigate to task-graph using the project context from the item hierarchy.
+      const projectId = item.projectContext ?? "project-1";
+      navigate({ kind: "task-graph", projectId });
     } else if (item.id.startsWith("run-")) {
       navigate({ kind: "run", runId: item.id });
     }
@@ -245,7 +252,6 @@ function SidebarTreeNode({
               expandedIds={expandedIds}
               onToggle={onToggle}
               navigate={navigate}
-              currentProjectId={currentProjectId}
             />
           ))}
         </div>

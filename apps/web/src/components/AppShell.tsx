@@ -232,10 +232,19 @@ export function AppShell(): React.ReactElement {
           onClose={() => setPaletteOpen(false)}
           navigate={navigate}
           currentPage={page}
+          currentProjectId={getCurrentProjectId(page)}
         />
       )}
     </div>
   );
+}
+
+/** Extract current project ID from page state for navigation. */
+function getCurrentProjectId(page: Page): string {
+  if (page.kind === "project" || page.kind === "task-graph") {
+    return page.projectId;
+  }
+  return "all";
 }
 
 /** Breadcrumb navigation showing current location. */

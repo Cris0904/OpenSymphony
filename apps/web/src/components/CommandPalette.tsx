@@ -12,6 +12,7 @@ interface CommandPaletteProps {
   onClose: () => void;
   navigate: (page: Page) => void;
   currentPage: Page;
+  currentProjectId?: string;
 }
 
 interface Command {
@@ -25,6 +26,7 @@ interface Command {
 export function CommandPalette({
   onClose,
   navigate,
+  currentProjectId = "all",
 }: CommandPaletteProps): React.ReactElement {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -56,14 +58,14 @@ export function CommandPalette({
       id: "projects",
       label: "View Projects",
       shortcut: "G P",
-      action: () => { navigate({ kind: "project", projectId: "all" }); onClose(); },
+      action: () => { navigate({ kind: "project", projectId: currentProjectId }); onClose(); },
       category: "Navigation",
     },
     {
       id: "task-graph",
       label: "View Task Graph",
       shortcut: "G T",
-      action: () => { navigate({ kind: "task-graph", projectId: "all" }); onClose(); },
+      action: () => { navigate({ kind: "task-graph", projectId: currentProjectId }); onClose(); },
       category: "Navigation",
     },
     {
