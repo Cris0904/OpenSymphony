@@ -88,7 +88,7 @@ const sidebarData: SidebarItem[] = [
   },
 ];
 
-export function ProjectSidebar({ navigate, currentProjectId = "all" }: ProjectSidebarProps): React.ReactElement {
+export function ProjectSidebar({ navigate, currentProjectId = "project-1" }: ProjectSidebarProps): React.ReactElement {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(["projects", "milestone-1"]));
 
   const toggleExpand = (id: string) => {
