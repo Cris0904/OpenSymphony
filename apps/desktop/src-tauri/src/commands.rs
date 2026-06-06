@@ -257,10 +257,12 @@ pub struct ProfileResponse {
 #[command]
 pub async fn store_profile(_req: ProfileRequest) -> CommandResult<ProfileResponse> {
     // Real implementation persists to local storage
+    // Use serde_json for consistent snake_case serialization
+    let kind_str = serde_json::to_string(&_req.kind).unwrap_or_else(|_| "\"unknown\"".to_string());
     Ok(ProfileResponse {
         id: _req.id.unwrap_or_else(|| "new-profile".to_string()),
         label: _req.label,
-        kind: format!("{:?}", _req.kind),
+        kind: kind_str.trim_matches('"').to_string(),
         gateway_url: _req.gateway_url,
         managed: matches!(_req.kind, ProfileKind::SupervisedLocalDaemon | ProfileKind::EmbeddedHost),
         daemon_path: _req.daemon_path,
@@ -301,13 +303,21 @@ pub async fn probe_gateway(gateway_url: String) -> CommandResult<DiscoveryResult
     let health_url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
     let capabilities_url = format!("{}/api/v1/capabilities", gateway_url.trim_end_matches('/'));
 
+    // Use a client with a timeout to avoid blocking the async runtime
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| DesktopError::Internal {
+            message: format!("Failed to build HTTP client: {}", e),
+        })?;
+
     // Probe health
-    match reqwest::get(&health_url).await {
+    match client.get(&health_url).send().await {
         Ok(response) if response.status().is_success() => {
             let _health_latency = start.elapsed().as_millis() as u64;
             
             // Probe capabilities
-            match reqwest::get(&capabilities_url).await {
+            match client.get(&capabilities_url).send().await {
                 Ok(cap_response) if cap_response.status().is_success() => {
                     let capabilities: Option<serde_json::Value> = cap_response.json().await.ok();
                     let total_latency = start.elapsed().as_millis() as u64;
@@ -487,10 +497,12 @@ pub async fn stop_daemon(state: State<'_, DesktopState>) -> CommandResult<serde_
 pub async fn daemon_status(state: State<'_, DesktopState>) -> CommandResult<ProcessStatus> {
     let handle_guard = state.daemon_handle.lock().await;
     if let Some(ref handle) = *handle_guard {
+        // Use serde_json serialization for consistent snake_case format
+        let state_str = serde_json::to_string(handle.state()).unwrap_or_else(|_| "unknown".to_string());
         Ok(ProcessStatus {
             pid: handle.pid(),
             running: handle.is_running(),
-            state: format!("{:?}", handle.state()),
+            state: state_str.trim_matches('"').to_string(),
             supervised: state.daemon_supervised.load(Ordering::SeqCst),
         })
     } else {

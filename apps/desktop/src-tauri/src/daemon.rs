@@ -31,6 +31,7 @@ pub struct DaemonConfig {
 
 /// Current state of the supervised daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DaemonState {
     /// Daemon is not running.
     Stopped,
