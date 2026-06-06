@@ -1,2 +1,2 @@
-import { WebSocket } from 'ws';
+const { WebSocket } = require('ws');
 Object.assign(globalThis, { WebSocket });
