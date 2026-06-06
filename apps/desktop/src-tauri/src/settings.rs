@@ -92,15 +92,12 @@ fn global_manager() -> &'static SettingsManager {
     M.get_or_init(|| {
         SettingsManager::new().unwrap_or_else(|e| {
             eprintln!("Warning: settings unavailable: {e}");
-            // Cross-platform null path fallback
-            let null_path = if cfg!(windows) {
-                PathBuf::from("NUL")
-            } else {
-                PathBuf::from("/dev/null")
-            };
+            // Safe fallback: use a temp directory file instead of /dev/null
+            // to avoid overwriting character devices via atomic rename
+            let fallback_path = std::env::temp_dir().join("opensymphony-settings-fallback.json");
             SettingsManager {
                 settings: Mutex::new(AppSettings::default()),
-                path: null_path,
+                path: fallback_path,
             }
         })
     })
