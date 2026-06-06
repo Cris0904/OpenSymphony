@@ -236,12 +236,37 @@ impl DaemonHandle {
     }
 
     /// Check if the daemon is currently running.
+    ///
+    /// Verifies both internal state and OS-level process liveness to detect
+    /// crashes or external kills.
     pub fn is_running(&self) -> bool {
-        self.pid.is_some()
-            && matches!(
+        if self.pid.is_none()
+            || !matches!(
                 self.state,
                 DaemonState::Running | DaemonState::Starting | DaemonState::Unhealthy
             )
+        {
+            return false;
+        }
+        self.is_process_alive()
+    }
+
+    /// Check if the OS process is still alive.
+    #[cfg(unix)]
+    fn is_process_alive(&self) -> bool {
+        if let Some(pid) = self.pid {
+            // kill(pid, 0) checks process existence without sending a signal
+            let result = unsafe { libc::kill(pid as i32, 0) };
+            result == 0
+        } else {
+            false
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn is_process_alive(&self) -> bool {
+        // Windows would use OpenProcess/GetExitCodeProcess
+        self.pid.is_some()
     }
 
     /// Get the current state of the daemon.
