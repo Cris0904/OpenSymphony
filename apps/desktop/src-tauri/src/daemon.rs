@@ -462,8 +462,10 @@ mod tests {
 
         // Start the daemon
         let result = handle.start().await;
-        // The fake daemon won't have a health endpoint, so it should fail
-        assert!(!result.success || result.pid.is_some());
+        // The fake daemon won't have a health endpoint, so it should fail health check
+        assert!(!result.success);
+        // But the process was spawned before health check failure
+        assert!(result.pid.is_some());
 
         // Clean up
         let _ = handle.stop().await;

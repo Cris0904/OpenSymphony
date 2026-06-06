@@ -20,7 +20,8 @@ use tracing::warn;
 /// Validate that a daemon executable path is safe to run.
 ///
 /// Rejects paths that don't exist, aren't regular files, or lack execute
-/// permission on Unix systems.
+/// permission on Unix systems. Also rejects world-writable and group-writable
+/// paths to prevent tampering by other local users.
 ///
 /// In production deployments, this should be restricted to bundled
 /// executables within the app's resource directory.
@@ -34,12 +35,24 @@ fn validate_executable_path(path: &PathBuf) -> Result<(), DaemonPathError> {
         return Err(DaemonPathError::NotAFile);
     }
 
-    // On Unix, verify execute permission
+    // On Unix, verify execute permission and reject writable-by-others paths
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = metadata.permissions();
-        if perms.mode() & 0o111 == 0 {
+        let mode = perms.mode();
+
+        // Reject world-writable paths (prevents tampering by any local user)
+        if mode & 0o002 != 0 {
+            return Err(DaemonPathError::WorldWritable);
+        }
+
+        // Reject group-writable paths (prevents tampering by group members)
+        if mode & 0o020 != 0 {
+            return Err(DaemonPathError::GroupWritable);
+        }
+
+        if mode & 0o111 == 0 {
             return Err(DaemonPathError::NotExecutable);
         }
     }
@@ -54,6 +67,8 @@ enum DaemonPathError {
     NotFound,
     NotAFile,
     NotExecutable,
+    WorldWritable,
+    GroupWritable,
     AccessDenied { detail: String },
 }
 

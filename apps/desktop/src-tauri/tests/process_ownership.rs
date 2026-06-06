@@ -105,7 +105,7 @@ while true; do sleep 1; done
         let script = fake.script_path();
 
         let config = DaemonConfig {
-            executable: script,
+            executable: script.clone(),
             args: vec![],
             env: vec![],
             startup_timeout: Duration::from_secs(2),
@@ -113,44 +113,89 @@ while true; do sleep 1; done
             gateway_url: "http://127.0.0.1:8080".to_string(),
         };
 
-        {
+        let pid = {
             let mut handle = DaemonHandle::new(config);
-            let _result = handle.start().await;
+            let result = handle.start().await;
+            let pid = result.pid.expect("process should have been spawned");
+            assert!(result.pid.is_some(), "daemon should have a PID after spawn");
             // Handle will be dropped here, triggering cleanup
-        }
+            pid
+        };
 
-        // Give the OS a moment to clean up
-        std::thread::sleep(Duration::from_millis(100));
+        // Give the OS a moment to clean up after drop
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Verify the process was actually killed
+        #[cfg(unix)]
+        {
+            let result = unsafe { libc::kill(pid as i32, 0) };
+            assert!(result != 0, "process {} should no longer exist after drop", pid);
+        }
     }
 
-    #[test]
-    fn test_process_ownership_tracks_multiple_daemons() {
-        // Verify that ownership tracking works correctly for multiple daemon instances
+    #[tokio::test]
+    async fn test_process_ownership_tracks_multiple_daemons() {
         use opensymphony_desktop::daemon::{DaemonConfig, DaemonHandle};
 
+        let fake1 = FakeDaemon::new();
+        let fake2 = FakeDaemon::new();
+        let script1 = fake1.script_path();
+        let script2 = fake2.script_path();
+
         let config1 = DaemonConfig {
-            executable: PathBuf::from("/bin/true"),
-            args: vec!["1".to_string()],
+            executable: script1.clone(),
+            args: vec![],
             env: vec![],
-            startup_timeout: Duration::from_secs(1),
+            startup_timeout: Duration::from_secs(2),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8081".to_string(),
         };
 
         let config2 = DaemonConfig {
-            executable: PathBuf::from("/bin/true"),
-            args: vec!["2".to_string()],
+            executable: script2.clone(),
+            args: vec![],
             env: vec![],
-            startup_timeout: Duration::from_secs(1),
+            startup_timeout: Duration::from_secs(2),
             auto_restart: false,
             gateway_url: "http://127.0.0.1:8082".to_string(),
         };
 
-        let handle1 = DaemonHandle::new(config1);
-        let handle2 = DaemonHandle::new(config2);
+        let mut handle1 = DaemonHandle::new(config1);
+        let mut handle2 = DaemonHandle::new(config2);
 
         // Both handles start unowned
         assert!(handle1.pid().is_none());
         assert!(handle2.pid().is_none());
+
+        // Start both daemons
+        let result1 = handle1.start().await;
+        let result2 = handle2.start().await;
+
+        // Verify both processes were spawned and have PIDs
+        assert!(result1.pid.is_some(), "daemon 1 should have a PID after spawn");
+        assert!(result2.pid.is_some(), "daemon 2 should have a PID after spawn");
+
+        // Verify PIDs are unique - each daemon tracks its own process
+        assert_ne!(
+            result1.pid.unwrap(),
+            result2.pid.unwrap(),
+            "each daemon should have a unique PID"
+        );
+
+        // Verify each handle tracks its own PID independently
+        assert!(handle1.pid().is_some(), "handle 1 should track its PID");
+        assert!(handle2.pid().is_some(), "handle 2 should track its PID");
+        assert!(handle1.is_running(), "handle 1 should be running");
+        assert!(handle2.is_running(), "handle 2 should be running");
+
+        // Verify stop only affects the targeted daemon
+        handle1.stop().await.unwrap();
+        assert!(!handle1.is_running(), "handle 1 should be stopped");
+        assert!(handle2.is_running(), "handle 2 should still be running");
+
+        // Clean up second daemon
+        handle2.stop().await.unwrap();
+        assert!(!handle1.is_running(), "handle 1 should still be stopped");
+        assert!(!handle2.is_running(), "handle 2 should be stopped");
     }
 }
