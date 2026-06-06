@@ -38,6 +38,9 @@ export function AppShell(): React.ReactElement {
   const resizing = useRef(false);
   const { registerZone, focusNext, focusPrev } = useFocusManager();
 
+  // Stable close handler for CommandPalette to avoid re-registering keydown listeners.
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
   // Listen for hash changes.
   useEffect(() => {
     const onHashChange = () => {
@@ -229,7 +232,7 @@ export function AppShell(): React.ReactElement {
       {/* Command palette */}
       {paletteOpen && (
         <CommandPalette
-          onClose={() => setPaletteOpen(false)}
+          onClose={closePalette}
           navigate={navigate}
           currentPage={page}
           currentProjectId={getCurrentProjectId(page)}
@@ -240,11 +243,11 @@ export function AppShell(): React.ReactElement {
 }
 
 /** Extract current project ID from page state for navigation. */
-function getCurrentProjectId(page: Page): string {
+function getCurrentProjectId(page: Page): string | undefined {
   if (page.kind === "project" || page.kind === "task-graph") {
     return page.projectId;
   }
-  return "all";
+  return undefined;
 }
 
 /** Breadcrumb navigation showing current location. */

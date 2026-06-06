@@ -21,6 +21,7 @@ interface Command {
   shortcut?: string;
   action: () => void;
   category: string;
+  requiresProject?: boolean;
 }
 
 export function CommandPalette({
@@ -58,15 +59,17 @@ export function CommandPalette({
       id: "projects",
       label: "View Projects",
       shortcut: "G P",
-      action: () => { navigate({ kind: "project", projectId: currentProjectId }); onClose(); },
+      action: () => { navigate({ kind: "project", projectId: currentProjectId ?? "all" }); onClose(); },
       category: "Navigation",
+      requiresProject: true,
     },
     {
       id: "task-graph",
       label: "View Task Graph",
       shortcut: "G T",
-      action: () => { navigate({ kind: "task-graph", projectId: currentProjectId }); onClose(); },
+      action: () => { navigate({ kind: "task-graph", projectId: currentProjectId ?? "all" }); onClose(); },
       category: "Navigation",
+      requiresProject: true,
     },
     {
       id: "active-runs",
@@ -89,12 +92,13 @@ export function CommandPalette({
     },
   ];
 
-  // Filter commands by query.
+  // Filter commands by query and project availability.
   const filtered = commands.filter(
     (cmd) =>
-      query === "" ||
+      (!cmd.requiresProject || currentProjectId !== undefined) &&
+      (query === "" ||
       cmd.label.toLowerCase().includes(query.toLowerCase()) ||
-      cmd.category.toLowerCase().includes(query.toLowerCase()),
+      cmd.category.toLowerCase().includes(query.toLowerCase())),
   );
 
   // Group by category.
