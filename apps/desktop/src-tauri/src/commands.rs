@@ -255,18 +255,18 @@ pub async fn attach_gateway(
 pub struct GatewayCapabilitiesResponse {
     pub schema_version: String,
     pub auth_modes: Vec<String>,
-    pub transports: Vec<TransportCapability>,
-    pub features: Vec<FeatureCapability>,
+    pub transports: Vec<ProfileTransportCapability>,
+    pub features: Vec<ProfileFeatureCapability>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TransportCapability {
+pub struct ProfileTransportCapability {
     pub transport: String,
     pub supported: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FeatureCapability {
+pub struct ProfileFeatureCapability {
     pub feature: String,
     pub enabled: bool,
 }
@@ -281,25 +281,25 @@ pub async fn gateway_health(
         schema_version: "v1".to_string(),
         auth_modes: vec!["none".to_string()],
         transports: vec![
-            TransportCapability {
+            ProfileTransportCapability {
                 transport: "loopback_http".to_string(),
                 supported: true,
             },
-            TransportCapability {
+            ProfileTransportCapability {
                 transport: "loopback_websocket".to_string(),
                 supported: true,
             },
-            TransportCapability {
+            ProfileTransportCapability {
                 transport: "tauri_channel".to_string(),
                 supported: true,
             },
         ],
         features: vec![
-            FeatureCapability {
+            ProfileFeatureCapability {
                 feature: "event_journal".to_string(),
                 enabled: true,
             },
-            FeatureCapability {
+            ProfileFeatureCapability {
                 feature: "cursor_replay".to_string(),
                 enabled: true,
             },
@@ -480,15 +480,15 @@ pub struct GatewayCapabilities {
     pub schema_version: SchemaVersion,
     pub gateway_version: String,
     pub supported_api_versions: Vec<String>,
-    pub transports: Vec<TransportCapability>,
-    pub features: Vec<FeatureCapability>,
+    pub transports: Vec<GatewayTransportCapability>,
+    pub features: Vec<GatewayFeatureCapability>,
     pub auth_modes: Vec<String>,
     pub max_event_page_size: usize,
     pub max_terminal_frame_batch: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransportCapability {
+pub struct GatewayTransportCapability {
     pub transport: String,
     pub modes: Vec<String>,
     pub supported_encodings: Vec<String>,
@@ -496,7 +496,7 @@ pub struct TransportCapability {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeatureCapability {
+pub struct GatewayFeatureCapability {
     pub feature: String,
     pub available: bool,
     pub requires_auth: bool,
@@ -560,19 +560,19 @@ pub async fn gateway_capabilities() -> CommandResult<GatewayCapabilities> {
         gateway_version: env!("CARGO_PKG_VERSION").to_string(),
         supported_api_versions: vec!["1.0.0".to_string()],
         transports: vec![
-            TransportCapability {
+            GatewayTransportCapability {
                 transport: "tauri_channel".to_string(),
                 modes: vec!["json".to_string()],
                 supported_encodings: vec!["utf-8".to_string()],
                 bidirectional: true,
             },
-            TransportCapability {
+            GatewayTransportCapability {
                 transport: "loopback_http".to_string(),
                 modes: vec!["json".to_string()],
                 supported_encodings: vec!["utf-8".to_string()],
                 bidirectional: false,
             },
-            TransportCapability {
+            GatewayTransportCapability {
                 transport: "loopback_websocket".to_string(),
                 modes: vec!["json".to_string(), "binary".to_string()],
                 supported_encodings: vec!["utf-8".to_string(), "base64".to_string()],
@@ -580,12 +580,12 @@ pub async fn gateway_capabilities() -> CommandResult<GatewayCapabilities> {
             },
         ],
         features: vec![
-            FeatureCapability {
+            GatewayFeatureCapability {
                 feature: "task_graph".to_string(),
                 available: true,
                 requires_auth: false,
             },
-            FeatureCapability {
+            GatewayFeatureCapability {
                 feature: "terminal_stream".to_string(),
                 available: true,
                 requires_auth: false,
@@ -599,7 +599,7 @@ pub async fn gateway_capabilities() -> CommandResult<GatewayCapabilities> {
 
 /// Query the local gateway health and connection info.
 #[command]
-pub async fn gateway_health() -> CommandResult<GatewayConnectionInfo> {
+pub async fn gateway_connection_info() -> CommandResult<GatewayConnectionInfo> {
     // COE-404 will implement actual gateway discovery.
     // For now, report that the local gateway is available via fallback.
     Ok(GatewayConnectionInfo {

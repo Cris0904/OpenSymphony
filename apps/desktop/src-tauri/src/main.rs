@@ -29,7 +29,7 @@ fn main() {
             commands::daemon_status,
             // COE-410: Gateway local stream transport commands
             commands::gateway_capabilities,
-            commands::gateway_health,
+            commands::gateway_connection_info,
             commands::subscribe_events,
             commands::subscribe_terminal,
             commands::unsubscribe_events,
