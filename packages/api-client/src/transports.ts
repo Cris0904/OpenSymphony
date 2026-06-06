@@ -873,6 +873,7 @@ export class TauriChannelTransport implements GatewayTransport {
     const args: Record<string, unknown> = { tx: channel };
     if (fromCursor) {
       args.cursor = fromCursor.sequence;
+      args.partition = fromCursor.partition;
     }
     // Pass the frontend-created channel as `tx` to the Rust backend.
     // The backend receives this as `tauri::ipc::Channel<GatewayEnvelope>`.

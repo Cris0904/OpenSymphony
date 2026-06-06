@@ -55,7 +55,6 @@ pub fn run() {
             commands::stop_daemon,
             // COE-410: Gateway local stream transport commands
             commands::attach_gateway,
-            commands::gateway_health,
             commands::gateway_capabilities,
             commands::gateway_connection_info,
             commands::subscribe_events,

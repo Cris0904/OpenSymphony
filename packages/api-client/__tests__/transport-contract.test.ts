@@ -427,6 +427,7 @@ describe("TauriChannelTransport", () => {
     expect(invoke).toHaveBeenCalledWith("subscribe_events", {
       tx: channels[0],
       cursor: 42,
+      partition: "events",
     });
 
     await transport.close();

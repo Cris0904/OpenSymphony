@@ -549,14 +549,6 @@ pub async fn attach_gateway(
     })
 }
 
-/// Query gateway capabilities.
-/// Returns the canonical gateway schema capabilities so the frontend can
-/// select the best available transport profile without duplicating type logic.
-#[command]
-pub async fn gateway_health() -> CommandResult<GatewayCapabilities> {
-    gateway_capabilities().await
-}
-
 /// Get dashboard snapshot from gateway.
 #[command]
 pub async fn dashboard_snapshot(
@@ -687,6 +679,8 @@ use crate::opensymphony_gateway_schema::{
 pub struct SubscribeEventsRequest {
     /// Optional cursor to resume from (sequence number).
     pub cursor: Option<u64>,
+    /// Optional cursor partition to resume within.
+    pub partition: Option<String>,
 }
 
 /// Request to subscribe to terminal frames for a specific run.
