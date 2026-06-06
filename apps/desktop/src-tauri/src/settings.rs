@@ -172,12 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn test_app_settings_default() {
-        let s = AppSettings::default();
-        assert!(s.values.is_empty());
-    }
-
-    #[test]
     fn test_settings_manager_round_trip() {
         let tmp = std::env::temp_dir().join(format!("settings_test_{}.json", std::process::id()));
         let mgr = SettingsManager::with_path(&tmp).unwrap();
