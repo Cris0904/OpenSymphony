@@ -366,9 +366,9 @@ impl DaemonHandle {
 
     /// Internal helper to kill just the process without updating state fields.
     ///
-    /// Sends SIGKILL and calls `wait()` to reap the zombie.
-    /// `wait()` returns immediately after SIGKILL (which is uncatchable),
-    /// so this is effectively non-blocking while still ensuring zombie reaping.
+    /// Sends SIGKILL and polls with `try_wait()` to verify the process exits.
+    /// Uses a short retry loop (max 100 ms) so it remains safe for `Drop` and
+    /// async contexts while ensuring the process is actually reaped.
     fn kill_process_only(&mut self) {
         if let Some(ref mut child) = self.child {
             #[cfg(unix)]
@@ -384,9 +384,17 @@ impl DaemonHandle {
                     .output();
             }
             let _ = child.kill();
-            // wait() after SIGKILL is effectively non-blocking since SIGKILL
-            // cannot be caught or ignored - the process exits immediately.
-            let _ = child.wait();
+
+            // Poll briefly so SIGKILL propagates and the child is reaped.
+            // 100 ms max keeps this safe for Drop and async callers.
+            let deadline = Instant::now() + Duration::from_millis(100);
+            while Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break, // Process reaped.
+                    Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                    Err(_) => break,
+                }
+            }
         }
         self.child = None;
     }
