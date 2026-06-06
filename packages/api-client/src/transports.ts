@@ -464,20 +464,24 @@ export class WebSocketTransport implements GatewayTransport {
     );
   }
 
-  private async ensureConnected(): Promise<void> {
+  private async ensureConnected(
+    fromCursor?: { sequence: number; partition: string },
+  ): Promise<void> {
     if (this.isClosed) {
       return;
     }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return;
     }
-    this.connecting ??= this.connectWebSocket().finally(() => {
+    this.connecting ??= this.connectWebSocket(fromCursor).finally(() => {
       this.connecting = undefined;
     });
     await this.connecting;
   }
 
-  private async connectWebSocket(): Promise<void> {
+  private async connectWebSocket(
+    fromCursor?: { sequence: number; partition: string },
+  ): Promise<void> {
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.onerror = null;
@@ -487,7 +491,13 @@ export class WebSocketTransport implements GatewayTransport {
 
     const WS_CONNECT_TIMEOUT_MS = 10_000;
     return new Promise((resolve, reject) => {
-      const url = this.wsUrl("/api/v1/streams/events");
+      let url = this.wsUrl("/api/v1/streams/events");
+      if (fromCursor) {
+        const urlObj = new URL(url);
+        urlObj.searchParams.set("cursor_sequence", String(fromCursor.sequence));
+        urlObj.searchParams.set("cursor_partition", fromCursor.partition);
+        url = urlObj.toString();
+      }
       const ws = new WebSocket(url);
       this.ws = ws;
       let hasOpened = false;
