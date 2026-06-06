@@ -407,22 +407,21 @@ export class TerminalViewer {
    * Updates visible frames to show the most recent content.
    */
   private jumpToLatest(): void {
-    // Get the latest visible frames and update DOM
-    const buffer = this.renderer.getBuffer();
     this.renderer.jumpToLatest();
 
-    // Clear and rebuild visible lines from buffer
+    // Clear existing DOM elements
+    this.scrollContainer.innerHTML = "";
     this.lineElements = [];
-    const updatedBuffer = this.renderer.getBuffer();
 
-    // Re-render visible frames
+    // Rebuild from visible frames in the buffer
+    const updatedBuffer = this.renderer.getBuffer();
     for (let i = 0; i < updatedBuffer.visibleFrames.length; i++) {
       const frame = updatedBuffer.visibleFrames[i];
       const lineElement = this.createLineElement(frame);
       this.lineElements.push(lineElement);
+      this.scrollContainer.appendChild(lineElement);
     }
 
-    this.updateScrollContainer();
     this.updateStatus(updatedBuffer);
     this.scrollToBottom();
   }
