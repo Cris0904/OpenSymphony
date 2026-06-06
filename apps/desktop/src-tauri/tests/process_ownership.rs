@@ -125,14 +125,22 @@ while true; do sleep 1; done
             pid
         };
 
-        // Give the OS a moment to clean up after drop
-        std::thread::sleep(Duration::from_millis(200));
-
-        // Verify the process was actually killed
+        // Give the OS a moment to clean up after drop.
+        // Retry for up to 2 seconds to allow SIGKILL propagation and zombie reaping.
         #[cfg(unix)]
         {
-            let result = unsafe { libc::kill(pid as i32, 0) };
-            assert!(result != 0, "process {} should no longer exist after drop", pid);
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let result = unsafe { libc::kill(pid as i32, 0) };
+                if result != 0 {
+                    // Process no longer exists - cleanup successful
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    panic!("process {} still exists after drop and 2s grace period", pid);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     }
 
