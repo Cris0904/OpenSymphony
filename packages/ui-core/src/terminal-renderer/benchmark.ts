@@ -82,9 +82,14 @@ export async function runBenchmark(
   totalProcessed = 0;
   startTime = performance.now();
 
-  // Test phase
-  const testFrames = frames.slice(mergedConfig.warmupFrames);
+  // Test phase — cap by testFrames and maxDurationMs
+  const maxTest = mergedConfig.testFrames;
+  const allTestFrames = frames.slice(mergedConfig.warmupFrames);
+  const testFrames = allTestFrames.slice(0, maxTest);
+  const deadline = startTime + mergedConfig.maxDurationMs;
   for (const frame of testFrames) {
+    if (performance.now() > deadline) break;
+
     renderer.queueFrame(frame.content, frame.encoding, frame);
 
     // Sample metrics periodically

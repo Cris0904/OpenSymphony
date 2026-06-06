@@ -434,10 +434,12 @@ export class TerminalViewer {
     // Clear previous search highlights
     this.clearSearchHighlights();
 
+    // Reset search state for new query
+    this.searchResults = [];
+    this.currentSearchIndex = 0;
+    this.pendingFocusFrameIndex = undefined;
+
     if (!this.searchTerm) {
-      this.searchResults = [];
-      this.currentSearchIndex = 0;
-      this.pendingFocusFrameIndex = undefined;
       return;
     }
 
