@@ -21,6 +21,9 @@ export interface RenderMetrics {
   uiBlocked: boolean;
 }
 
+/** Handle type differences between browser and Node.js rAF return types. */
+type RafHandle = number | ReturnType<typeof setTimeout>;
+
 export interface RendererConfig {
   maxBufferCapacity: number;
   renderIntervalMs: number;
@@ -45,7 +48,7 @@ export class TerminalRenderer {
     encoding: TerminalEncoding;
     frame: TerminalFrame;
   }> = [];
-  private rafId: number | null = null;
+  private rafId: RafHandle | null = null;
   private lastRenderTime = 0;
   private metrics: RenderMetrics;
   private renderCallback?: (frames: DecodedFrame[], buffer: ScrollbackBuffer) => void;
@@ -155,8 +158,7 @@ export class TerminalRenderer {
     const raf = typeof requestAnimationFrame !== "undefined"
       ? requestAnimationFrame
       : (callback: (time: number) => void) => setTimeout(() => callback(performance.now()), 0);
-    
-    this.rafId = raf(this.renderLoop) as unknown as number;
+    this.rafId = raf(this.renderLoop);
   }
 
   /**
@@ -198,7 +200,7 @@ export class TerminalRenderer {
     this.buffer = createScrollbackBuffer(this.config.maxBufferCapacity);
     if (this.rafId) {
       const cancelRaf = typeof cancelAnimationFrame !== "undefined"
-        ? cancelAnimationFrame
+        ? (h: RafHandle) => cancelAnimationFrame(h as number)
         : clearTimeout;
       cancelRaf(this.rafId);
       this.rafId = null;
