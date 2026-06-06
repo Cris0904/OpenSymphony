@@ -8,7 +8,7 @@ use crate::types::{CommandResult, DesktopError};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tauri::State;
 use tauri::command;
@@ -489,6 +489,26 @@ impl Default for GatewayConnection {
     }
 }
 
+fn gateway_profile_for_url(base_url: &str) -> &'static str {
+    let Ok(parsed) = url::Url::parse(base_url) else {
+        return "loopback_http";
+    };
+
+    let is_loopback = match parsed.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    };
+
+    match parsed.scheme() {
+        "ws" | "wss" if is_loopback => "loopback_websocket",
+        "ws" | "wss" => "websocket",
+        _ if is_loopback => "loopback_http",
+        _ => "websocket",
+    }
+}
+
 /// Request to attach to a local gateway instance.
 #[derive(Debug, Deserialize)]
 pub struct AttachGatewayRequest {
@@ -521,18 +541,7 @@ pub async fn attach_gateway(
         });
     }
 
-    // Determine profile based on URL
-    let is_loopback = match parsed.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
-        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        None => false,
-    };
-    let profile = if is_loopback {
-        "loopback_http"
-    } else {
-        "websocket"
-    };
+    let profile = gateway_profile_for_url(parsed.as_str());
 
     // Mutate connection state to record the attachment
     let mut conn = state.write().map_err(|e| DesktopError::Gateway {
@@ -782,13 +791,25 @@ pub async fn gateway_capabilities() -> CommandResult<GatewayCapabilities> {
 
 /// Query the local gateway health and connection info.
 #[command]
-pub async fn gateway_connection_info() -> CommandResult<GatewayConnectionInfo> {
-    // COE-404 will implement actual gateway discovery.
-    // For now, report that the local gateway is available via fallback.
+pub async fn gateway_connection_info(
+    state: tauri::State<'_, std::sync::RwLock<GatewayConnection>>,
+) -> CommandResult<GatewayConnectionInfo> {
+    let conn = state.read().map_err(|e| DesktopError::Gateway {
+        message: format!("Failed to acquire connection state lock: {}", e),
+    })?;
+    let status = if conn.connected {
+        GatewayHealthStatus::Healthy
+    } else {
+        GatewayHealthStatus::Degraded
+    };
+    let base_uri = conn.base_url.clone();
+    let profile = gateway_profile_for_url(&base_uri).to_string();
+    drop(conn);
+
     Ok(GatewayConnectionInfo {
-        status: GatewayHealthStatus::Healthy,
-        profile: "loopback_http".to_string(),
-        base_uri: DEFAULT_GATEWAY_HTTP_URL.to_string(),
+        status,
+        profile,
+        base_uri,
         transports: vec![
             "tauri_channel".to_string(),
             "loopback_http".to_string(),
@@ -843,29 +864,27 @@ pub async fn subscribe_terminal(
 /// COE-409 will wire this to actual gateway subscription management.
 #[derive(Debug, Default)]
 pub struct SubscriptionState {
-    pub event_subscribers: std::sync::atomic::AtomicUsize,
-    pub terminal_subscribers: std::sync::atomic::AtomicUsize,
+    pub event_subscribers: AtomicUsize,
+    pub terminal_subscribers: AtomicUsize,
+}
+
+fn decrement_subscription_count(counter: &AtomicUsize) -> usize {
+    let prev = counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_sub(1))
+        })
+        .unwrap_or(0);
+    prev.saturating_sub(1)
 }
 
 /// Unsubscribe from the gateway event stream.
 /// Clean up the channel and release resources.
 #[command]
 pub async fn unsubscribe_events(_state: tauri::State<'_, SubscriptionState>) -> CommandResult<()> {
-    let prev = _state
-        .event_subscribers
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    // Prevent underflow: if counter was already 0, restore it and log a no-op.
-    if prev == 0 {
-        _state
-            .event_subscribers
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        eprintln!("unsubscribe_events: already zero subscribers, no-op");
-    } else {
-        eprintln!(
-            "unsubscribe_events: {} remaining subscribers",
-            prev - 1
-        );
-    }
+    eprintln!(
+        "unsubscribe_events: {} remaining subscribers",
+        decrement_subscription_count(&_state.event_subscribers)
+    );
     Ok(())
 }
 
@@ -875,21 +894,44 @@ pub async fn unsubscribe_terminal(
     _run_id: String,
     _state: tauri::State<'_, SubscriptionState>,
 ) -> CommandResult<()> {
-    let prev = _state
-        .terminal_subscribers
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    // Prevent underflow: if counter was already 0, restore it and log a no-op.
-    if prev == 0 {
-        _state
-            .terminal_subscribers
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        eprintln!("unsubscribe_terminal({}): already zero subscribers, no-op", _run_id);
-    } else {
-        eprintln!(
-            "unsubscribe_terminal({}): {} remaining subscribers",
-            _run_id,
-            prev - 1
-        );
-    }
+    eprintln!(
+        "unsubscribe_terminal({}): {} remaining subscribers",
+        _run_id,
+        decrement_subscription_count(&_state.terminal_subscribers)
+    );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decrement_subscription_count_saturates_at_zero() {
+        let counter = AtomicUsize::new(0);
+
+        assert_eq!(decrement_subscription_count(&counter), 0);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+
+        counter.store(2, Ordering::Relaxed);
+        assert_eq!(decrement_subscription_count(&counter), 1);
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        assert_eq!(decrement_subscription_count(&counter), 0);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+        assert_eq!(decrement_subscription_count(&counter), 0);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn gateway_profile_for_url_matches_loopback_and_remote_urls() {
+        assert_eq!(
+            gateway_profile_for_url("http://127.0.0.1:8000"),
+            "loopback_http"
+        );
+        assert_eq!(
+            gateway_profile_for_url("ws://localhost:8000"),
+            "loopback_websocket"
+        );
+        assert_eq!(gateway_profile_for_url("https://example.com"), "websocket");
+    }
 }
