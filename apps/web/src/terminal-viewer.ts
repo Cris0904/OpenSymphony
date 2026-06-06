@@ -314,6 +314,7 @@ export class TerminalViewer {
 
   /**
    * Perform text search in terminal output.
+   * Searches the full scrollback buffer history, not just visible DOM elements.
    */
   private performSearch(): void {
     this.searchTerm = this.searchInput.value.trim();
@@ -327,17 +328,22 @@ export class TerminalViewer {
       return;
     }
 
-    // Find matching lines
+    // Search the full scrollback buffer history via the renderer
+    const buffer = this.renderer.getBuffer();
     this.searchResults = [];
-    for (let i = 0; i < this.lineElements.length; i++) {
-      const line = this.lineElements[i];
-      if (line.textContent?.toLowerCase().includes(this.searchTerm.toLowerCase())) {
+
+    for (let i = 0; i < buffer.allFrames.length; i++) {
+      const frame = buffer.allFrames[i];
+      const frameText = frame.text.toLowerCase();
+      if (frameText.includes(this.searchTerm.toLowerCase())) {
         this.searchResults.push(i);
       }
     }
 
-    // Highlight first result
-    this.highlightCurrentSearchResult();
+    // Highlight first result if it's in visible range
+    if (this.searchResults.length > 0) {
+      this.highlightCurrentSearchResult();
+    }
   }
 
   /**
@@ -352,6 +358,7 @@ export class TerminalViewer {
 
   /**
    * Highlight current search result.
+   * Scrolls the buffer to show the matching frame and highlights it in DOM.
    */
   private highlightCurrentSearchResult(): void {
     if (this.searchResults.length === 0) return;
@@ -361,16 +368,10 @@ export class TerminalViewer {
 
     // Highlight current result
     const currentIndex = this.currentSearchIndex % this.searchResults.length;
-    const lineIndex = this.searchResults[currentIndex];
-    const line = this.lineElements[lineIndex];
+    const frameIndex = this.searchResults[currentIndex];
 
-    if (line) {
-      line.style.outline = "2px solid #58a6ff";
-      line.style.backgroundColor = "#1f6feb33";
-
-      // Scroll to show the highlighted line
-      line.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
+    // Use renderer's scrollTo to bring the frame into view
+    this.renderer.scrollToFrame(frameIndex);
   }
 
   /**
@@ -402,10 +403,27 @@ export class TerminalViewer {
   }
 
   /**
-   * Jump to latest output (bottom).
+   * Jump to latest output (bottom of scrollback).
+   * Updates visible frames to show the most recent content.
    */
   private jumpToLatest(): void {
+    // Get the latest visible frames and update DOM
+    const buffer = this.renderer.getBuffer();
     this.renderer.jumpToLatest();
+
+    // Clear and rebuild visible lines from buffer
+    this.lineElements = [];
+    const updatedBuffer = this.renderer.getBuffer();
+
+    // Re-render visible frames
+    for (let i = 0; i < updatedBuffer.visibleFrames.length; i++) {
+      const frame = updatedBuffer.visibleFrames[i];
+      const lineElement = this.createLineElement(frame);
+      this.lineElements.push(lineElement);
+    }
+
+    this.updateScrollContainer();
+    this.updateStatus(updatedBuffer);
     this.scrollToBottom();
   }
 

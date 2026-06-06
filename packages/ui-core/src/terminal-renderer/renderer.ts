@@ -10,7 +10,7 @@ import type { TerminalFrame, TerminalEncoding } from "@opensymphony/gateway-sche
 import type { DecodedFrame } from "./decoder.js";
 import type { ScrollbackBuffer } from "./scrollback.js";
 import { decodeBatch } from "./decoder.js";
-import { appendFrames, createScrollbackBuffer, jumpToLatest } from "./scrollback.js";
+import { appendFrames, createScrollbackBuffer, jumpToLatest, scrollTo } from "./scrollback.js";
 
 export interface RenderMetrics {
   fps: number;
@@ -187,6 +187,17 @@ export class TerminalRenderer {
    */
   jumpToLatest(): void {
     this.buffer = jumpToLatest(this.buffer);
+    if (this.renderCallback) {
+      this.renderCallback([], this.buffer);
+    }
+  }
+
+  /**
+   * Scroll to a specific frame index.
+   * Updates the visible frames in the buffer and triggers a render callback.
+   */
+  scrollToFrame(targetIndex: number): void {
+    this.buffer = scrollTo(this.buffer, targetIndex);
     if (this.renderCallback) {
       this.renderCallback([], this.buffer);
     }
