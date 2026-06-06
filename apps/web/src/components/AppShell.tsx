@@ -92,7 +92,22 @@ export function AppShell(): React.ReactElement {
     return () => window.removeEventListener("keydown", handler);
   }, [focusNext, focusPrev]);
 
-  // Sidebar resize handlers.
+  // Sidebar resize handlers with proper cleanup on unmount.
+  const resizeHandlers = useRef<{
+    onMouseMove: ((ev: MouseEvent) => void) | null;
+    onMouseUp: (() => void) | null;
+  }>({ onMouseMove: null, onMouseUp: null });
+
+  // Clean up resize listeners on unmount.
+  useEffect(() => {
+    return () => {
+      const { onMouseMove, onMouseUp } = resizeHandlers.current;
+      if (onMouseMove) window.removeEventListener("mousemove", onMouseMove);
+      if (onMouseUp) window.removeEventListener("mouseup", onMouseUp);
+      resizing.current = false;
+    };
+  }, []);
+
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     resizing.current = true;
@@ -108,10 +123,14 @@ export function AppShell(): React.ReactElement {
 
     const onMouseUp = () => {
       resizing.current = false;
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
+      const handlers = resizeHandlers.current;
+      if (handlers.onMouseMove) window.removeEventListener("mousemove", handlers.onMouseMove);
+      if (handlers.onMouseUp) window.removeEventListener("mouseup", handlers.onMouseUp);
+      handlers.onMouseMove = null;
+      handlers.onMouseUp = null;
     };
 
+    resizeHandlers.current = { onMouseMove, onMouseUp };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
   }, [sidebarWidth]);
@@ -125,6 +144,18 @@ export function AppShell(): React.ReactElement {
       main.cleanup();
     };
   }, [registerZone]);
+
+  // Inject shared pulse animation style for run status indicators (client-side only).
+  useEffect(() => {
+    if (document.querySelector('style[data-pulse]')) return;
+    const styleEl = document.createElement("style");
+    styleEl.setAttribute("data-pulse", "true");
+    styleEl.textContent = `@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`;
+    document.head.appendChild(styleEl);
+    return () => {
+      styleEl.remove();
+    };
+  }, []);
 
   return (
     <div

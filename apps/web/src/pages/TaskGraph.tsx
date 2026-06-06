@@ -6,7 +6,7 @@
  * dependency information.
  */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import type {
   TaskGraphNode,
   TaskGraphSnapshot,
@@ -216,22 +216,6 @@ export function TaskGraph({ projectId, navigate }: TaskGraphProps): React.ReactE
   const graph = fixtureTaskGraph;
   const nodeMap = new Map(graph.nodes.map((n) => [n.node_id, n]));
 
-  // Inject pulse animation style safely (client-side only).
-  useEffect(() => {
-    if (document.querySelector('style[data-pulse]')) return;
-    const styleEl = document.createElement("style");
-    styleEl.setAttribute("data-pulse", "true");
-    styleEl.textContent = `
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}`;
-    document.head.appendChild(styleEl);
-    return () => {
-      styleEl.remove();
-    };
-  }, []);
-
   // Build hierarchical tree from flat node list.
   const rootNodes = graph.root_ids
     .map((id) => nodeMap.get(id))
@@ -250,7 +234,7 @@ export function TaskGraph({ projectId, navigate }: TaskGraphProps): React.ReactE
       </header>
 
       {/* Filters */}
-      <FilterBar />
+      <FilterBar onFilterChange={() => { /* Filtering deferred to COE-411 task graph editor */ }} />
 
       {/* Graph tree */}
       <div
@@ -508,28 +492,53 @@ function RuntimeBadge({
   );
 }
 
-/** Filter bar for task graph. */
-function FilterBar(): React.ReactElement {
+type FilterValue = "all" | "in_progress" | "todo" | "done" | "blocked";
+
+interface FilterBarProps {
+  onFilterChange: (filter: FilterValue) => void;
+}
+
+/** Filter bar for task graph with interactive state. */
+function FilterBar({ onFilterChange }: FilterBarProps): React.ReactElement {
+  const [activeFilter, setActiveFilter] = useState<FilterValue>("all");
+
+  const filters: { label: string; value: FilterValue }[] = [
+    { label: "All", value: "all" },
+    { label: "In Progress", value: "in_progress" },
+    { label: "Todo", value: "todo" },
+    { label: "Done", value: "done" },
+    { label: "Blocked", value: "blocked" },
+  ];
+
+  const handleFilterClick = (filter: FilterValue) => {
+    setActiveFilter(filter);
+    onFilterChange(filter);
+  };
+
   return (
     <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
-      {["All", "In Progress", "Todo", "Done", "Blocked"].map((filter) => (
-        <button
-          key={filter}
-          style={{
-            padding: "var(--space-1) var(--space-3)",
-            background: filter === "All" ? "var(--color-accent)" : "var(--color-bg-tertiary)",
-            border: "none",
-            borderRadius: "var(--radius-md)",
-            color: filter === "All" ? "#fff" : "var(--color-fg-default)",
-            cursor: "pointer",
-            fontSize: "12px",
-            fontWeight: filter === "All" ? 500 : 400,
-          }}
-          tabIndex={0}
-        >
-          {filter}
-        </button>
-      ))}
+      {filters.map(({ label, value }) => {
+        const isActive = value === activeFilter;
+        return (
+          <button
+            key={value}
+            onClick={() => handleFilterClick(value)}
+            style={{
+              padding: "var(--space-1) var(--space-3)",
+              background: isActive ? "var(--color-accent)" : "var(--color-bg-tertiary)",
+              border: "none",
+              borderRadius: "var(--radius-md)",
+              color: isActive ? "#fff" : "var(--color-fg-default)",
+              cursor: "pointer",
+              fontSize: "12px",
+              fontWeight: isActive ? 500 : 400,
+            }}
+            tabIndex={0}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }

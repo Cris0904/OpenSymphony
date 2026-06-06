@@ -151,22 +151,26 @@ export function ProjectSidebar({ navigate }: ProjectSidebarProps): React.ReactEl
   );
 }
 
-/** Recursive sidebar tree node. */
+/** Recursive sidebar tree node with project context propagation. */
 function SidebarTreeNode({
   item,
   depth,
   expandedIds,
   onToggle,
   navigate,
+  parentProjectId,
 }: {
   item: SidebarItem;
   depth: number;
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
   navigate: (page: Page) => void;
+  parentProjectId?: string;
 }): React.ReactElement | null {
   const isExpanded = expandedIds.has(item.id);
   const hasChildren = item.children && item.children.length > 0;
+  // Resolve project ID: use item's own context if available, otherwise inherit from parent.
+  const resolvedProjectId = item.projectContext ?? parentProjectId;
 
   const handleClick = () => {
     if (hasChildren) {
@@ -181,9 +185,10 @@ function SidebarTreeNode({
     } else if (item.id.startsWith("project-")) {
       navigate({ kind: "project", projectId: item.id });
     } else if (item.id.startsWith("issue-") || item.id.startsWith("sub-issue-")) {
-      // TODO: Extract real project ID from parent hierarchy when multiple projects are supported.
-      const projectId = item.projectContext ?? "project-1";
-      navigate({ kind: "task-graph", projectId });
+      // Use resolved project ID from hierarchy; only navigate if available.
+      if (resolvedProjectId) {
+        navigate({ kind: "task-graph", projectId: resolvedProjectId });
+      }
     } else if (item.id.startsWith("run-")) {
       navigate({ kind: "run", runId: item.id });
     }
@@ -251,6 +256,7 @@ function SidebarTreeNode({
               expandedIds={expandedIds}
               onToggle={onToggle}
               navigate={navigate}
+              parentProjectId={resolvedProjectId}
             />
           ))}
         </div>
