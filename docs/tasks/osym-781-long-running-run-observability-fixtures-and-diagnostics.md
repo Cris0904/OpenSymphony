@@ -84,7 +84,8 @@ All 49 tests pass.
 
 ## Test Plan
 
-- [x] Reducer tests for long-running active, quiet, degraded, stalled, and detached states.
-- [x] Timeline fixture tests for waiting-on-prior-turn and stall-probe sequences.
-- [x] UI fixture tests for retry queue with and without active underlying harness session.
-- [x] Gateway schema roundtrip tests for all new types.
+- [x] Reducer tests for long-running active, quiet, degraded, stalled, and detached states (liveness reducer tests + computeSafeActions parameterized tests in `packages/state/__tests__/reducer.test.ts`).
+- [x] Gateway schema roundtrip tests for all new types (7 new tests, 49 total passing in `crates/opensymphony-gateway-schema/tests/gateway_schema.rs`).
+- [x] Operations documentation covers harness/scheduler disagreement diagnosis and recovery.
+- [ ] Timeline fixture tests for waiting-on-prior-turn and stall-probe sequences (deferred: requires event-stream replay fixtures).
+- [ ] UI fixture tests for retry queue with and without active underlying harness session (deferred: requires UI component test harness).

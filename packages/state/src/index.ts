@@ -38,12 +38,6 @@ export interface RunSlice {
   runs: Map<string, RunDetail>;
   loading: boolean;
   error: string | null;
-}
-
-export interface RunSlice {
-  runs: Map<string, RunDetail>;
-  loading: boolean;
-  error: string | null;
   /** Per-run liveness tracking state. */
   liveness: Map<string, RunLivenessState>;
 }
