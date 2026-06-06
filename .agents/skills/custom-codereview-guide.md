@@ -13,6 +13,49 @@ description: |
 - Treat behavior changes as incomplete unless the PR includes concrete verification or evidence.
 - Call out risky data migrations, auth changes, concurrency hazards, and production operability regressions explicitly.
 
+## COE-410 Desktop Local Stream Optimization — Review Context
+
+The following items have been flagged by prior AI review rounds but are **already resolved** in the current branch. Do not re-flag them:
+
+### Already Resolved Items (DO NOT flag)
+
+1. **Tauri channel API contract** — RESOLVED. `TauriChannelTransport` correctly implements the Tauri v2 frontend pattern:
+   - Frontend creates `Channel` via `tauri.core.Channel<GatewayEnvelope>(callback)`
+   - Passes channel as `tx` argument to `invoke("subscribe_events", { tx: channel })`
+   - Backend receives `tx: tauri::ipc::Channel<GatewayEnvelope>` — verified by Rust command signatures
+   - See `packages/api-client/src/transports.ts` lines 802-814 and 847-860
+
+2. **Generator cancellation** — RESOLVED. `TauriChannelTransport` has `isClosed` flag and `pendingGeneratorCancellers` Set.
+   - `close()` resolves all pending generator promises with `{ done: true }`
+   - Generators check `while (!this.isClosed)` in their loop
+   - See `packages/api-client/src/transports.ts` lines 818-840 and 864-886
+
+3. **GatewayEnvelope redefinition** — RESOLVED. `commands.rs` imports `GatewayEnvelope` from `opensymphony_gateway_schema::envelope::GatewayEnvelope`.
+   - No local redefinition exists; all DTO types imported from the schema crate
+   - See `apps/desktop/src-tauri/src/commands.rs` lines 859-865
+
+4. **SSE multi-line payloads** — RESOLVED. `HttpGatewayTransport` accumulates `data:` lines with newlines, parsing on `\n\n` boundary per SSE spec.
+   - See `packages/api-client/src/transports.ts` lines 152-251
+
+5. **WebSocket terminal frame dispatch** — RESOLVED. `WebSocketTransport.handleMessage()` dispatches to both `eventSubscribers` and `terminalSubscribers` based on `envelope.entity_ref.kind`.
+   - See `packages/api-client/src/transports.ts` lines 590-650
+
+6. **WebSocket connect timeout** — RESOLVED. `connectWebSocket()` has `WS_CONNECT_TIMEOUT_MS = 10_000` with `setTimeout` that rejects the promise on timeout.
+   - See `packages/api-client/src/transports.ts` lines 520-560
+
+7. **Attach gateway loopback check** — RESOLVED. `attach_gateway` checks `127.0.0.1`, `localhost`, `::1`, and `0.0.0.0`.
+   - See `apps/desktop/src-tauri/src/commands.rs` lines 666-670
+
+8. **Cargo.lock** — RESOLVED. Desktop `Cargo.lock` is committed and restored in commit `d1ec424`.
+
+### What TO Review for COE-410
+
+- New transport correctness: `TauriChannelTransport`, `WebSocketTransport`, `HttpGatewayTransport`
+- Rust command handlers in `apps/desktop/src-tauri/src/commands.rs` for gateway connectivity
+- Transport equivalence tests in `tests/transport_equivalence.rs` and `packages/api-client/__tests__/transport-contract.test.ts`
+- Stream benchmarks in `tests/stream_benchmarks.rs`
+- Type exports in `packages/api-client/src/index.ts` and `packages/api-client/src/transports.ts`
+
 ## COE-398 Tauri Desktop Shell — Review Context
 
 PR #93: `feat: add Tauri desktop shell and security capabilities`
