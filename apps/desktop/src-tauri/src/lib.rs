@@ -17,6 +17,7 @@ pub mod types;
 
 pub fn run() {
     let desktop_state = commands::DesktopState::new();
+    let subscription_state = commands::SubscriptionState::default();
 
     if let Err(e) = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -25,6 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(desktop_state)
+        .manage(subscription_state)
         .setup(|app| {
             if let Some(_window) = app.get_webview_window("main") {
                 // Window exists; future setup hooks can attach here.
@@ -55,6 +57,12 @@ pub fn run() {
             commands::stop_daemon,
             // COE-410: Gateway local stream transport commands
             commands::attach_gateway,
+            commands::dashboard_snapshot,
+            commands::task_graph,
+            commands::run_detail,
+            commands::run_events,
+            commands::terminal_snapshot,
+            commands::get_connection_profiles,
             commands::gateway_capabilities,
             commands::gateway_connection_info,
             commands::subscribe_events,

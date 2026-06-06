@@ -386,6 +386,7 @@ export class WebSocketTransport implements GatewayTransport {
   private isReconnecting = false;
   private isClosed = false;
   private connecting?: Promise<void>;
+  private lastEventCursor?: { sequence: number; partition: string };
 
   constructor(config: GatewayTransportConfig) {
     this.baseUri = config.baseUri.replace(/\/+$/, "");
@@ -470,8 +471,21 @@ export class WebSocketTransport implements GatewayTransport {
     if (this.isClosed) {
       return;
     }
+    // If already connected but the cursor has changed, we need to reconnect
+    // to establish the new subscription point on the server.
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return;
+      if (
+        fromCursor &&
+        (!this.lastEventCursor ||
+          this.lastEventCursor.sequence !== fromCursor.sequence ||
+          this.lastEventCursor.partition !== fromCursor.partition)
+      ) {
+        // Close the existing socket so reconnect uses the new cursor
+        this.ws.close();
+        this.ws = undefined;
+      } else {
+        return;
+      }
     }
     this.connecting ??= this.connectWebSocket(fromCursor).finally(() => {
       this.connecting = undefined;
@@ -513,6 +527,12 @@ export class WebSocketTransport implements GatewayTransport {
         clearTimeout(timeoutId);
         hasOpened = true;
         this.reconnectDelayMs = 1000; // Reset reconnect delay after successful connection
+        // Record the cursor that was used for this connection
+        if (fromCursor) {
+          this.lastEventCursor = { ...fromCursor };
+        } else {
+          this.lastEventCursor = undefined;
+        }
         // Send auth if needed
         if (this.authToken) {
           ws.send(JSON.stringify({ type: "auth", token: this.authToken }));
