@@ -531,10 +531,18 @@ pub async fn stop_daemon(state: State<'_, DesktopState>) -> CommandResult<serde_
 pub async fn daemon_status(state: State<'_, DesktopState>) -> CommandResult<ProcessStatus> {
     let handle_guard = state.daemon_handle.lock().await;
     if let Some(ref handle) = *handle_guard {
+        let is_running = handle.is_running();
+        // Derive state string from actual liveness check to avoid stale
+        // enum values when the daemon crashes or is killed externally.
+        let state_str = if is_running {
+            handle.state().as_str().to_string()
+        } else {
+            "stopped".to_string()
+        };
         Ok(ProcessStatus {
             pid: handle.pid(),
-            running: handle.is_running(),
-            state: handle.state().as_str().to_string(),
+            running: is_running,
+            state: state_str,
             supervised: state.daemon_supervised.load(Ordering::SeqCst),
         })
     } else {

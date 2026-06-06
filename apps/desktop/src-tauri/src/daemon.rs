@@ -407,8 +407,13 @@ impl Drop for DaemonHandle {
                 pid = ?self.pid,
                 "daemon handle dropped, cleaning up owned process",
             );
-            // Non-blocking cleanup: just kill, never wait
-            let _ = self.kill();
+            // Non-blocking cleanup: kill without waiting to avoid blocking
+            // the thread during drop, especially in async contexts.
+            self.kill_process_only();
+            self.child = None;
+            self.pid = None;
+            self.state = DaemonState::Stopped;
+            self.owns_process = false;
         }
     }
 }
