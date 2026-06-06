@@ -7,12 +7,12 @@ use tokio::{
     sync::mpsc,
 };
 
-use opensymphony_gateway_schema::envelope::GatewayEnvelope;
-use opensymphony_gateway_schema::terminal::{
+use opensymphony::opensymphony_gateway_schema::envelope::GatewayEnvelope;
+use opensymphony::opensymphony_gateway_schema::terminal::{
     TerminalEncoding, TerminalFrame, TerminalFrameKind,
 };
-use opensymphony_gateway_schema::transport::TransportProfile;
-use opensymphony_gateway_schema::version::SchemaVersion;
+use opensymphony::opensymphony_gateway_schema::transport::TransportProfile;
+use opensymphony::opensymphony_gateway_schema::version::SchemaVersion;
 
 const BENCH_PAYLOAD: &str = concat!(
     "[2025-08-17T09:12:00Z] INFO  agent::executor > Starting turn 3\n",
@@ -320,8 +320,8 @@ fn sse_line_overhead_is_acceptable() {
 
 /// Construct a sample GatewayEnvelope for benchmarking.
 fn sample_gateway_envelope(sequence: u64) -> GatewayEnvelope {
-    use opensymphony_gateway_schema::cursor::StreamCursor;
-    use opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::cursor::StreamCursor;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
 
     GatewayEnvelope {
         schema_version: SchemaVersion::v1(),
@@ -485,8 +485,8 @@ async fn bench_tauri_channel_bounded_duration() {
 /// interactive terminal rendering.
 #[test]
 fn local_transport_envelope_roundtrip_latency() {
-    use opensymphony_gateway_schema::cursor::StreamCursor;
-    use opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::cursor::StreamCursor;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
 
     let envelope = GatewayEnvelope {
         schema_version: SchemaVersion::v1(),
@@ -547,8 +547,8 @@ fn local_transport_envelope_roundtrip_latency() {
 /// the gateway schema version and cursor semantics.
 #[test]
 fn transport_profile_envelope_compatibility() {
-    use opensymphony_gateway_schema::cursor::StreamCursor;
-    use opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::cursor::StreamCursor;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
 
     let profiles = [
         TransportProfile::InProcessChannel,
@@ -597,8 +597,8 @@ fn transport_profile_envelope_compatibility() {
 /// event journals.
 #[tokio::test]
 async fn bench_cursor_replay_performance() {
-    use opensymphony_gateway_schema::cursor::StreamCursor;
-    use opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::cursor::StreamCursor;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
 
     let total_envelopes: usize = 10_000;
     let replay_from_sequence: u64 = 5_000;
