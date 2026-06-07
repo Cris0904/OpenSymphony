@@ -226,9 +226,9 @@ fn is_run_action_safe(issue: &ControlPlaneIssueSnapshot, action: RunAction) -> b
         RunAction::Cancel => safe.cancel,
         RunAction::Rehydrate => safe.rehydrate,
         RunAction::Detach => safe.detach,
-        RunAction::Pause | RunAction::Resume => {
-            issue.runtime_state == ControlPlaneIssueRuntimeState::Running
-        }
+        // Pause and Resume are validated by their own dedicated validators
+        // (validate_pause and validate_resume) and are never routed here.
+        RunAction::Pause | RunAction::Resume => false,
     }
 }
 
