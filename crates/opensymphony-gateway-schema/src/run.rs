@@ -161,6 +161,7 @@ pub enum RunStatus {
     Unclaimed,
     Claimed,
     Running,
+    Paused,
     RetryQueued,
     Released,
 }

@@ -1535,7 +1535,7 @@ async fn get_run_detail(
     let (status, lifecycle_state) = match issue.runtime_state {
         ControlPlaneIssueRuntimeState::Idle => (RunStatus::Unclaimed, RunLifecycleState::Eligible),
         ControlPlaneIssueRuntimeState::Running => (RunStatus::Running, RunLifecycleState::Running),
-        ControlPlaneIssueRuntimeState::Paused => (RunStatus::Running, RunLifecycleState::Paused),
+        ControlPlaneIssueRuntimeState::Paused => (RunStatus::Paused, RunLifecycleState::Paused),
         ControlPlaneIssueRuntimeState::RetryQueued => {
             (RunStatus::RetryQueued, RunLifecycleState::Queued)
         }
