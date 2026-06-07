@@ -1371,6 +1371,7 @@ fn map_runtime_state_to_graph_category(
     match state {
         ControlPlaneIssueRuntimeState::Idle => TaskGraphStateCategory::Todo,
         ControlPlaneIssueRuntimeState::Running => TaskGraphStateCategory::InProgress,
+        ControlPlaneIssueRuntimeState::Paused => TaskGraphStateCategory::InProgress,
         ControlPlaneIssueRuntimeState::RetryQueued => TaskGraphStateCategory::InProgress,
         ControlPlaneIssueRuntimeState::Releasing => TaskGraphStateCategory::InProgress,
         ControlPlaneIssueRuntimeState::Completed => TaskGraphStateCategory::Done,
@@ -1508,6 +1509,7 @@ async fn get_run_detail(
     let (status, lifecycle_state) = match issue.runtime_state {
         ControlPlaneIssueRuntimeState::Idle => (RunStatus::Unclaimed, RunLifecycleState::Eligible),
         ControlPlaneIssueRuntimeState::Running => (RunStatus::Running, RunLifecycleState::Running),
+        ControlPlaneIssueRuntimeState::Paused => (RunStatus::Running, RunLifecycleState::Paused),
         ControlPlaneIssueRuntimeState::RetryQueued => {
             (RunStatus::RetryQueued, RunLifecycleState::Queued)
         }

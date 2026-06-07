@@ -313,7 +313,8 @@ fn approval_request_roundtrips() {
 
 #[test]
 fn action_receipt_roundtrips() {
-    let receipt = ActionReceipt::accepted("act-1".to_string(), "corr-1".to_string(), ActionKind::Retry);
+    let receipt =
+        ActionReceipt::accepted("act-1".to_string(), "corr-1".to_string(), ActionKind::Retry);
     let json = must_serialize(&receipt);
     let back: ActionReceipt = must_deserialize(&json);
     assert_eq!(back.status, ActionStatus::Accepted);

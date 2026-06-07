@@ -1,3 +1,4 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use super::envelope::EntityKind;
@@ -27,6 +28,8 @@ pub struct ActionReceipt {
     pub correlation_id: String,
     pub status: ActionStatus,
     pub reason: Option<String>,
+    /// Timestamp when the receipt was issued (ISO 8601 / RFC 3339).
+    pub issued_at: String,
     /// Hosted-mode permission check placeholder.
     /// `None` means local (no permission check); `Some` means the
     /// permission layer was consulted and this is the result.
@@ -63,8 +66,6 @@ pub enum ExpectedFollowup {
     ActionCompletion,
     /// Expect a journal update (comment, metadata, etc.).
     JournalUpdate,
-    /// Expect a stream connection event (connect, disconnect, reconnect).
-    StreamConnection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +171,7 @@ impl ActionReceipt {
             correlation_id: correlation_id.into(),
             status: ActionStatus::Accepted,
             reason: None,
+            issued_at: Utc::now().to_rfc3339(),
             permission: None,
             expected_followup: action_kind.expected_followups(),
         }
@@ -188,6 +190,7 @@ impl ActionReceipt {
             correlation_id: correlation_id.into(),
             status: ActionStatus::Rejected,
             reason: Some(reason.into()),
+            issued_at: Utc::now().to_rfc3339(),
             permission: None,
             expected_followup: action_kind.expected_followups(),
         }

@@ -9,9 +9,7 @@ use crate::opensymphony_domain::{
     ControlPlaneWorkerOutcome, InMemoryEventJournal, SnapshotEnvelope,
 };
 use crate::opensymphony_gateway_schema::{
-    action::{
-        ActionDispatch, ActionKind, ActionReceipt, ActionStatus, PermissionResult,
-    },
+    action::{ActionDispatch, ActionKind, ActionReceipt, ActionStatus, PermissionResult},
     envelope::{EntityKind, EntityRef},
     event_journal::{EventActor, EventKind, EventRecord},
     run::{RunAction, SafeActions},
@@ -86,19 +84,35 @@ impl ActionHandler {
         action: ActionDispatch,
         snapshot: &SnapshotEnvelope,
     ) -> ActionReceipt {
-        if let Some(ref key) = action.idempotency_key {
-            let guard = self.idempotency_guard.read().await;
-            if guard.contains(key) {
+        // When an idempotency key is present, the entire dispatch critical section
+        // (check + validation + journal append + insert) runs under a single write
+        // lock to prevent TOCTOU races under concurrent load.
+        if let Some(key) = action.idempotency_key.clone() {
+            let mut guard = self.idempotency_guard.write().await;
+            if guard.contains(&key) {
                 return ActionReceipt::rejected(
                     Uuid::new_v4().to_string(),
-                    action.correlation_id.clone(),
+                    action.correlation_id,
                     action.action_kind,
                     "duplicate idempotency key",
                 );
             }
-            drop(guard);
+            let receipt = self.dispatch_unlocked(action, snapshot).await;
+            if receipt.status == ActionStatus::Accepted {
+                guard.insert(key);
+            }
+            return receipt;
         }
 
+        self.dispatch_unlocked(action, snapshot).await
+    }
+
+    /// Core dispatch logic without idempotency locking.
+    async fn dispatch_unlocked(
+        &self,
+        action: ActionDispatch,
+        snapshot: &SnapshotEnvelope,
+    ) -> ActionReceipt {
         let permission = self.permission_checker.as_ref().map_or_else(
             || PermissionResult::local(),
             |checker| checker.check(&action),
@@ -109,7 +123,10 @@ impl ActionHandler {
                 Uuid::new_v4().to_string(),
                 action.correlation_id.clone(),
                 action.action_kind,
-                format!("permission denied: required role {}", permission.required_role),
+                format!(
+                    "permission denied: required role {}",
+                    permission.required_role
+                ),
             );
             receipt = receipt.with_permission(permission);
             return receipt;
@@ -143,18 +160,15 @@ impl ActionHandler {
             let _ = self.journal.append(event).await;
         }
 
-        if let Some(key) = action.idempotency_key {
-            if receipt.status == ActionStatus::Accepted {
-                let mut guard = self.idempotency_guard.write().await;
-                guard.insert(key);
-            }
-        }
-
         let mut receipt = receipt;
         receipt = receipt.with_permission(permission);
         receipt
     }
 
+    /// Stub: receipt lookup by action ID is not yet persisted.
+    /// TODO(COE-405): Persist action receipts to a queryable store so this
+    /// returns real data instead of `None`. Intentionally deferred to keep the
+    /// initial envelope small and auditable.
     pub async fn receipt_by_id(&self, _action_id: &str) -> Option<ActionReceipt> {
         None
     }
@@ -164,10 +178,14 @@ fn find_issue_by_id(
     snapshot: &ControlPlaneDaemonSnapshot,
     entity_id: &str,
 ) -> Option<ControlPlaneIssueSnapshot> {
-    snapshot.issues.iter().find(|issue| {
-        issue.identifier.eq_ignore_ascii_case(entity_id)
-            || issue.conversation_id_suffix.eq_ignore_ascii_case(entity_id)
-    }).cloned()
+    snapshot
+        .issues
+        .iter()
+        .find(|issue| {
+            issue.identifier.eq_ignore_ascii_case(entity_id)
+                || issue.conversation_id_suffix.eq_ignore_ascii_case(entity_id)
+        })
+        .cloned()
 }
 
 fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
@@ -177,10 +195,14 @@ fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
     let (retry, cancel, rehydrate, detach) = match issue.runtime_state {
         State::Idle => (false, false, false, false),
         State::Running => (false, true, false, true),
+        State::Paused => (false, true, false, true),
         State::RetryQueued => (false, false, false, false),
         State::Releasing => (false, false, false, false),
         State::Completed => {
-            let safe_rehydrate = matches!(issue.last_outcome, Outcome::Completed | Outcome::Failed | Outcome::Canceled);
+            let safe_rehydrate = matches!(
+                issue.last_outcome,
+                Outcome::Completed | Outcome::Failed | Outcome::Canceled
+            );
             (true, false, safe_rehydrate, false)
         }
         State::Failed => {
@@ -234,13 +256,21 @@ fn validate_retry(
         return reject(
             action,
             action_id,
-            format!("retry unsafe in state {:?} for issue {}", issue.runtime_state, issue.identifier),
+            format!(
+                "retry unsafe in state {:?} for issue {}",
+                issue.runtime_state, issue.identifier
+            ),
         );
     }
 
-    accepted(action, action_id, issue, EventKind::GatewayActionDispatched {
-        action: "retry".into(),
-    })
+    accepted(
+        action,
+        action_id,
+        issue,
+        EventKind::GatewayActionDispatched {
+            action: "retry".into(),
+        },
+    )
 }
 
 fn validate_cancel(
@@ -256,13 +286,21 @@ fn validate_cancel(
         return reject(
             action,
             action_id,
-            format!("cancel unsafe in state {:?} for issue {}", issue.runtime_state, issue.identifier),
+            format!(
+                "cancel unsafe in state {:?} for issue {}",
+                issue.runtime_state, issue.identifier
+            ),
         );
     }
 
-    accepted(action, action_id, issue, EventKind::GatewayActionDispatched {
-        action: "cancel".into(),
-    })
+    accepted(
+        action,
+        action_id,
+        issue,
+        EventKind::GatewayActionDispatched {
+            action: "cancel".into(),
+        },
+    )
 }
 
 fn validate_rehydrate(
@@ -285,9 +323,14 @@ fn validate_rehydrate(
         );
     }
 
-    accepted(action, action_id, issue, EventKind::GatewayActionDispatched {
-        action: "rehydrate".into(),
-    })
+    accepted(
+        action,
+        action_id,
+        issue,
+        EventKind::GatewayActionDispatched {
+            action: "rehydrate".into(),
+        },
+    )
 }
 
 fn validate_comment(
@@ -299,9 +342,14 @@ fn validate_comment(
         return reject(action, action_id, "target issue not found in snapshot");
     };
 
-    accepted(action, action_id, issue, EventKind::GatewayActionDispatched {
-        action: "comment".into(),
-    })
+    accepted(
+        action,
+        action_id,
+        issue,
+        EventKind::GatewayActionDispatched {
+            action: "comment".into(),
+        },
+    )
 }
 
 fn validate_pause(
@@ -317,9 +365,14 @@ fn validate_pause(
         return reject(action, action_id, "pause only valid on a running issue");
     }
 
-    accepted(action, action_id, issue, EventKind::GatewayActionDispatched {
-        action: "pause".into(),
-    })
+    accepted(
+        action,
+        action_id,
+        issue,
+        EventKind::GatewayActionDispatched {
+            action: "pause".into(),
+        },
+    )
 }
 
 fn validate_resume(
@@ -331,9 +384,18 @@ fn validate_resume(
         return reject(action, action_id, "target issue not found in snapshot");
     };
 
-    accepted(action, action_id, issue, EventKind::GatewayActionDispatched {
-        action: "resume".into(),
-    })
+    if issue.runtime_state != ControlPlaneIssueRuntimeState::Paused {
+        return reject(action, action_id, "resume only valid on a paused issue");
+    }
+
+    accepted(
+        action,
+        action_id,
+        issue,
+        EventKind::GatewayActionDispatched {
+            action: "resume".into(),
+        },
+    )
 }
 
 fn validate_generic(
@@ -367,7 +429,14 @@ fn accepted(
         action.action_kind,
     );
 
-    let event = build_audit_event(action, action_id, &kind, ActionStatus::Accepted, None, issue);
+    let event = build_audit_event(
+        action,
+        action_id,
+        &kind,
+        ActionStatus::Accepted,
+        None,
+        issue,
+    );
 
     ValidatedAction {
         action_id: action_id.to_owned(),
@@ -376,11 +445,7 @@ fn accepted(
     }
 }
 
-fn reject(
-    action: &ActionDispatch,
-    action_id: &str,
-    reason: impl Into<String>,
-) -> ValidatedAction {
+fn reject(action: &ActionDispatch, action_id: &str, reason: impl Into<String>) -> ValidatedAction {
     let reason = reason.into();
     let receipt = ActionReceipt::rejected(
         action_id.to_owned(),
@@ -396,7 +461,10 @@ fn reject(
             action: action.action_kind.to_string(),
             reason: reason.clone(),
         })
-        .summary(format!("Action {} rejected: {}", action.action_kind, reason))
+        .summary(format!(
+            "Action {} rejected: {}",
+            action.action_kind, reason
+        ))
         .payload(json!({
             "action_id": action_id,
             "action_kind": action.action_kind.to_string(),
@@ -434,7 +502,10 @@ fn build_audit_event(
             &issue.identifier,
             Some(issue.identifier.clone()),
         ))
-        .summary(format!("Action {} {} for {}", action.action_kind, status_str, issue.identifier))
+        .summary(format!(
+            "Action {} {} for {}",
+            action.action_kind, status_str, issue.identifier
+        ))
         .payload(json!({
             "action_id": action_id,
             "action_kind": action.action_kind.to_string(),

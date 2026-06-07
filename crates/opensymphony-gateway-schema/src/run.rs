@@ -12,6 +12,7 @@ pub enum RunLifecycleState {
     Queued,
     Claimed,
     Running,
+    Paused,
     Releasing,
     Completed,
     Failed,
