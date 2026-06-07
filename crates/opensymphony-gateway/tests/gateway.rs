@@ -1964,7 +1964,7 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .send()
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
-    assert_eq!(response.status(), 400);
+    assert_eq!(response.status(), 409);
     let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Rejected);
     assert!(
@@ -1994,7 +1994,7 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .send()
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
-    assert_eq!(response.status(), 400);
+    assert_eq!(response.status(), 422);
     let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Rejected);
     assert!(
@@ -2024,7 +2024,7 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .send()
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
-    assert_eq!(response.status(), 400);
+    assert_eq!(response.status(), 404);
     let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Rejected);
 

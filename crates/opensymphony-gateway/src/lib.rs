@@ -521,7 +521,33 @@ async fn dispatch_action(
 
     match receipt.status {
         ActionStatus::Accepted => (StatusCode::OK, Json(receipt)),
-        ActionStatus::Rejected => (StatusCode::BAD_REQUEST, Json(receipt)),
+        ActionStatus::Rejected => {
+            let status = dispatch_rejection_status(&receipt);
+            (status, Json(receipt))
+        }
+    }
+}
+
+/// Map rejection reasons to granular HTTP status codes so API consumers can
+/// distinguish retryable vs. non-retryable failures without parsing the receipt.
+fn dispatch_rejection_status(receipt: &ActionReceipt) -> StatusCode {
+    let Some(ref reason) = receipt.reason else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let lower = reason.to_lowercase();
+    if lower.contains("permission denied") {
+        StatusCode::FORBIDDEN
+    } else if lower.contains("duplicate idempotency key") {
+        StatusCode::CONFLICT
+    } else if lower.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if lower.contains("already active")
+        || lower.contains("unsafe in state")
+        || lower.contains("only valid on")
+    {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else {
+        StatusCode::BAD_REQUEST
     }
 }
 

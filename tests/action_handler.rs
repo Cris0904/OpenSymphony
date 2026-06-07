@@ -434,4 +434,14 @@ async fn action_handler_concurrent_idempotency_only_one_accepted() {
         "exactly one rejected receipt expected; got {:?}",
         statuses
     );
+
+    // Verify exactly one audit event was appended to the journal (no
+    // duplicate-race event from the rejected dispatch).
+    let cursor = opensymphony::opensymphony_gateway_schema::cursor::StreamCursor::new(0, "events");
+    let page = journal.query_after(&cursor, 10).await.expect("query");
+    assert_eq!(
+        page.events.len(),
+        1,
+        "journal should contain exactly one event after concurrent dispatch"
+    );
 }
