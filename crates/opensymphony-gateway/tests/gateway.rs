@@ -1948,7 +1948,7 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
     assert_eq!(response.status(), 200);
-    let body: ActionReceipt = response.json().await.unwrap();
+    let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Accepted);
     assert_eq!(body.correlation_id, "corr_001");
     assert!(
@@ -1965,12 +1965,12 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
     assert_eq!(response.status(), 400);
-    let body: ActionReceipt = response.json().await.unwrap();
+    let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Rejected);
     assert!(
         body.reason
             .as_ref()
-            .unwrap()
+            .expect("should not be None")
             .contains("duplicate idempotency key"),
         "rejected reason should mention duplicate idempotency key: {:?}",
         body.reason
@@ -1995,10 +1995,13 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
     assert_eq!(response.status(), 400);
-    let body: ActionReceipt = response.json().await.unwrap();
+    let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Rejected);
     assert!(
-        body.reason.as_ref().unwrap().contains("already active"),
+        body.reason
+            .as_ref()
+            .expect("should not be None")
+            .contains("already active"),
         "rejected reason should mention already active: {:?}",
         body.reason
     );
@@ -2022,7 +2025,7 @@ async fn gateway_dispatches_action_and_returns_receipt() {
         .await
         .expect("POST /api/v1/actions/dispatch should respond");
     assert_eq!(response.status(), 400);
-    let body: ActionReceipt = response.json().await.unwrap();
+    let body: ActionReceipt = response.json().await.expect("should not be None");
     assert_eq!(body.status, ActionStatus::Rejected);
 
     server_task.abort();

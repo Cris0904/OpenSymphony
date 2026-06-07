@@ -130,7 +130,13 @@ async fn action_handler_returns_rejected_receipt_for_unknown_issue() {
     let receipt = handler.dispatch(dispatch, &envelope).await;
     assert_eq!(receipt.status, ActionStatus::Rejected);
     assert_eq!(receipt.correlation_id, "corr_002");
-    assert!(receipt.reason.as_ref().unwrap().contains("not found"));
+    assert!(
+        receipt
+            .reason
+            .as_ref()
+            .expect("should not be None")
+            .contains("not found")
+    );
 }
 
 #[tokio::test]
@@ -145,7 +151,13 @@ async fn action_handler_rejects_retry_on_active_run() {
     let dispatch = action_dispatch(ActionKind::Retry, "COE-255", "corr_003");
     let receipt = handler.dispatch(dispatch, &envelope).await;
     assert_eq!(receipt.status, ActionStatus::Rejected);
-    assert!(receipt.reason.as_ref().unwrap().contains("already active"));
+    assert!(
+        receipt
+            .reason
+            .as_ref()
+            .expect("should not be None")
+            .contains("already active")
+    );
 }
 
 #[tokio::test]
@@ -179,7 +191,7 @@ async fn action_handler_rejects_rehydrate_on_running_issue() {
         receipt
             .reason
             .as_ref()
-            .unwrap()
+            .expect("should not be None")
             .contains("Rehydrate is only available")
     );
 }
@@ -215,7 +227,7 @@ async fn action_handler_rejects_rehydrate_on_completed_with_running_outcome() {
         receipt
             .reason
             .as_ref()
-            .unwrap()
+            .expect("should not be None")
             .contains("Rehydrate is only available")
     );
 }
@@ -285,7 +297,7 @@ async fn action_handler_rejects_duplicate_idempotency_key() {
         receipt2
             .reason
             .as_ref()
-            .unwrap()
+            .expect("should not be None")
             .contains("duplicate idempotency key")
     );
 }
@@ -351,7 +363,7 @@ async fn action_handler_pause_rejected_on_non_running_issue() {
         receipt
             .reason
             .as_ref()
-            .unwrap()
+            .expect("should not be None")
             .contains("pause only valid on a running issue")
     );
 }
@@ -372,7 +384,7 @@ async fn action_handler_resume_rejected_on_non_paused_issue() {
         receipt
             .reason
             .as_ref()
-            .unwrap()
+            .expect("should not be None")
             .contains("resume only valid on a paused issue")
     );
 }
