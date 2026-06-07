@@ -15,7 +15,9 @@ use opensymphony::opensymphony_domain::{
 use opensymphony::opensymphony_gateway::{
     GatewayCapabilities, GatewayServer, control_plane_to_dashboard_snapshot,
 };
-use opensymphony::opensymphony_gateway_schema::action::{ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget};
+use opensymphony::opensymphony_gateway_schema::action::{
+    ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget,
+};
 use opensymphony::opensymphony_gateway_schema::envelope::EntityKind;
 use tokio::net::TcpListener;
 use url::Url;
@@ -1996,10 +1998,7 @@ async fn gateway_dispatches_action_and_returns_receipt() {
     let body: ActionReceipt = response.json().await.unwrap();
     assert_eq!(body.status, ActionStatus::Rejected);
     assert!(
-        body.reason
-            .as_ref()
-            .unwrap()
-            .contains("already active"),
+        body.reason.as_ref().unwrap().contains("already active"),
         "rejected reason should mention already active: {:?}",
         body.reason
     );
@@ -2028,4 +2027,3 @@ async fn gateway_dispatches_action_and_returns_receipt() {
 
     server_task.abort();
 }
-

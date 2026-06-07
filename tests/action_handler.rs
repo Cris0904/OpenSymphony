@@ -409,10 +409,7 @@ async fn action_handler_concurrent_idempotency_only_one_accepted() {
     let d1 = dispatch.clone();
     let d2 = dispatch.clone();
 
-    let (r1, r2) = tokio::join!(
-        h1.dispatch(d1, &env1),
-        h2.dispatch(d2, &env2),
-    );
+    let (r1, r2) = tokio::join!(h1.dispatch(d1, &env1), h2.dispatch(d2, &env2),);
 
     let statuses = vec![r1.status, r2.status];
     assert!(

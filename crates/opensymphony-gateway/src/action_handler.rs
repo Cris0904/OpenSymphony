@@ -113,10 +113,10 @@ impl ActionHandler {
         action: ActionDispatch,
         snapshot: &SnapshotEnvelope,
     ) -> ActionReceipt {
-        let permission = self.permission_checker.as_ref().map_or_else(
-            || PermissionResult::local(),
-            |checker| checker.check(&action),
-        );
+        let permission = self
+            .permission_checker
+            .as_ref()
+            .map_or_else(PermissionResult::local, |checker| checker.check(&action));
 
         if !permission.allowed {
             let mut receipt = ActionReceipt::rejected(
@@ -398,6 +398,14 @@ fn validate_resume(
     )
 }
 
+/// Generic action validation for actions that do not require runtime state gating.
+///
+/// Actions validated here (`TransitionIssue`, `CreateFollowup`, `ApprovalDecision`,
+/// `PublishPlan`) are inherently safe because they operate on the issue tracker or
+/// planning layer rather than the active harness runtime. They do not mutate scheduler
+/// state and are therefore accepted for any valid issue snapshot. If a future action
+/// needs runtime state gating, it should be promoted from `validate_generic` to a
+/// dedicated validator (e.g., `validate_pause`, `validate_resume`).
 fn validate_generic(
     action: &ActionDispatch,
     issue: Option<&ControlPlaneIssueSnapshot>,
