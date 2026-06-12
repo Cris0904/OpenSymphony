@@ -137,13 +137,8 @@ impl PlanCompiler {
         // step so the new diagnostic messages join the same deterministic order.
         sort_messages(&mut taxonomy_violations, &mut validation_messages);
 
-        let receipt_struct = build_publish_receipt(
-            planning_wave,
-            &compiled_milestones,
-            tasks_dir,
-            manifest,
-            &applied_hierarchy,
-        );
+        let receipt_struct =
+            build_publish_receipt(planning_wave, &compiled_milestones, tasks_dir, manifest);
         let publish_receipt_yaml =
             serde_yaml::to_string(&receipt_struct).expect("publish receipt yaml should serialize");
 
@@ -415,21 +410,29 @@ fn validate_manifest_consistency(
     }
 
     let mut compiled_task_ids: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut compiled_present_ids: std::collections::BTreeSet<&str> =
+        std::collections::BTreeSet::new();
     for milestone in compiled_milestones {
         for issue in &milestone.issues {
+            compiled_present_ids.insert(issue.task_id.0.as_str());
             if !issue.source_file.is_empty() {
                 compiled_task_ids.insert(issue.task_id.0.as_str(), issue.source_file.as_str());
             }
             for sub in &issue.sub_issues {
+                compiled_present_ids.insert(sub.task_id.0.as_str());
                 if !sub.source_file.is_empty() {
                     compiled_task_ids.insert(sub.task_id.0.as_str(), sub.source_file.as_str());
                 }
             }
         }
     }
+    let mut mismatched_ids: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for task in &manifest.tasks {
-        if let Some(compiled_file) = compiled_task_ids.get(task.id.0.as_str()) {
-            if *compiled_file != task.file.as_str() {
+        let id_key = task.id.0.as_str();
+        match compiled_task_ids.get(id_key) {
+            Some(compiled_file) if *compiled_file == task.file.as_str() => {}
+            Some(compiled_file) => {
+                mismatched_ids.insert(id_key);
                 validation_messages.push(ValidationMessage::error(
                     Some(task.id.clone()),
                     "tasks",
@@ -439,30 +442,53 @@ fn validate_manifest_consistency(
                     ),
                 ));
             }
-        } else {
-            validation_messages.push(ValidationMessage::error(
+            None if compiled_present_ids.contains(id_key) => {
+                // Compiled side has the id but we couldn't derive its task file;
+                // do not emit a duplicate "no matching entry" error here because
+                // the compiled side still counts as present. The reverse check
+                // below will determine whether the manifest needs a file fix.
+            }
+            None => validation_messages.push(ValidationMessage::error(
                 Some(task.id.clone()),
                 "tasks",
                 format!(
                     "Manifest task '{}' has no matching compiled hierarchy entry",
                     task.id.0
                 ),
-            ));
+            )),
         }
     }
-    for (task_id, compiled_file) in &compiled_task_ids {
-        let in_manifest = manifest
-            .tasks
-            .iter()
-            .any(|t| t.id.0.as_str() == *task_id && t.file.as_str() == *compiled_file);
+    for task_id in &compiled_present_ids {
+        if mismatched_ids.contains(*task_id) {
+            // Forward mismatch already covers this id; do not emit a second
+            // "missing from manifest" diagnostic for the same pair.
+            continue;
+        }
+        let compiled_file = compiled_task_ids.get(*task_id).copied().unwrap_or("");
+        let in_manifest = manifest.tasks.iter().any(|t| {
+            if !compiled_file.is_empty() {
+                t.id.0.as_str() == *task_id && t.file.as_str() == compiled_file
+            } else {
+                // Compiled source_file is empty; only id presence is meaningful.
+                t.id.0.as_str() == *task_id
+            }
+        });
         if !in_manifest {
-            validation_messages.push(ValidationMessage::error(
-                Some(TaskId(task_id.to_string())),
-                "tasks",
+            let message = if compiled_file.is_empty() {
+                format!(
+                    "Compiled task '{}' has no matching manifest tasks entry",
+                    task_id
+                )
+            } else {
                 format!(
                     "Compiled task '{}' (file '{}') is missing from manifest tasks list",
                     task_id, compiled_file
-                ),
+                )
+            };
+            validation_messages.push(ValidationMessage::error(
+                Some(TaskId((*task_id).to_string())),
+                "tasks",
+                message,
             ));
         }
     }
@@ -507,7 +533,6 @@ fn build_publish_receipt(
     compiled_milestones: &[CompiledMilestone],
     _tasks_dir: &str,
     manifest: &GeneratedManifest,
-    _hierarchy: &AppliedHierarchy,
 ) -> LinearPublishReceipt {
     let mut milestones: BTreeMap<String, MilestoneReceipt> = BTreeMap::new();
     let mut tasks: BTreeMap<TaskId, LinearPublishEntity> = BTreeMap::new();
@@ -994,6 +1019,187 @@ mod tests {
                 .validation_messages
                 .iter()
                 .any(|m| m.field == "tasks")
+        );
+    }
+
+    #[test]
+    fn compile_does_not_double_report_file_mismatch_for_same_id() {
+        // When a manifest task has a different file than the compiled hierarchy
+        // for the same id, the forward (manifest -> compiled) check emits a
+        // single mismatch diagnostic. The reverse (compiled -> manifest)
+        // check must NOT emit a second "missing from manifest" diagnostic
+        // for the same id, since the file mismatch already covers that case.
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        // Find the existing manifest task for the issue and rewrite its file.
+        for t in artifact.manifest.tasks.iter_mut() {
+            if t.id.0 == "OSYM-733" {
+                t.file = "docs/tasks/osym-733-renamed.md".to_string();
+            }
+        }
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        let osym733_tasks: usize = result
+            .validation_messages
+            .iter()
+            .filter(|m| m.field == "tasks" && m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733"))
+            .count();
+        assert_eq!(
+            osym733_tasks,
+            1,
+            "expected exactly one diagnostic for OSYM-733 file mismatch, got {}: {:?}",
+            osym733_tasks,
+            result
+                .validation_messages
+                .iter()
+                .filter(|m| m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733"))
+                .map(|m| (&m.field, m.message.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn compile_diagnoses_compiled_task_missing_from_manifest_even_when_source_file_empty() {
+        // If the compiled side has an issue with empty source_file (no
+        // manifest fallback) but the id is missing from the manifest tasks
+        // list, the cross-check must still report a missing-from-manifest
+        // diagnostic. Empty source_file should not swallow the inconsistency.
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        // Drop the issue's task_file so the compiled source_file is empty.
+        artifact.milestones[0].issues[0].task_file = None;
+        artifact.manifest.tasks.retain(|t| t.id.0 != "OSYM-733");
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        assert!(
+            result.validation_messages.iter().any(
+                |m| m.field == "tasks" && m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733")
+            ),
+            "expected diagnostic for compiled task missing from manifest, got {:?}",
+            result.validation_messages
+        );
+    }
+
+    #[test]
+    fn compile_does_not_emit_duplicate_diagnostic_when_compiled_id_present_with_empty_file() {
+        // If a manifest task has id=X and compiled hierarchy has id=X but
+        // compiled source_file is empty, the forward check must NOT emit a
+        // "no matching compiled hierarchy entry" diagnostic for that id. The
+        // compiled side still has X; only the reverse check can determine
+        // whether the manifest itself needs an update.
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        // Drop the issue's task_file so the compiled source_file is empty.
+        artifact.milestones[0].issues[0].task_file = None;
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        let spurious: usize = result
+            .validation_messages
+            .iter()
+            .filter(|m| {
+                m.field == "tasks"
+                    && m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733")
+                    && m.message.contains("no matching compiled hierarchy entry")
+            })
+            .count();
+        assert_eq!(
+            spurious,
+            0,
+            "expected no spurious 'no matching compiled hierarchy entry' diagnostic when compiled id is present with empty source_file, got: {:?}",
+            result
+                .validation_messages
+                .iter()
+                .filter(|m| m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733"))
+                .map(|m| (&m.field, m.message.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn compile_does_not_emit_duplicate_diagnostic_with_real_generator_output() {
+        // Run the new consistency check on real PlanGenerator output. The
+        // generator emits a manifest task for every issue (so the cross-check
+        // should not produce false duplicate diagnostics), and the resulting
+        // validation_messages vector should not contain both forward and
+        // reverse errors for the same id.
+        use crate::opensymphony_planning::generator::{
+            IntakeContext, PlanGenerator, PlanningSession,
+        };
+
+        let session = PlanningSession::new(
+            IntakeContext {
+                planning_wave: "rich-client-hosted-mode".to_string(),
+                project_description: "End-to-end consistency test".to_string(),
+                success_criteria: vec![
+                    "Compiler emits Linear taxonomy".to_string(),
+                    "Manifest is renderable".to_string(),
+                ],
+                requirements: vec!["Compile planning artifacts".to_string()],
+                constraints: vec!["Preserve planningWave".to_string()],
+                open_questions: vec![],
+                reference_docs: vec!["docs/hosted-client-PRD.md".to_string()],
+            },
+            "docs/tasks",
+        );
+
+        let mut generator = PlanGenerator::new(session);
+        let artifacts = generator.generate().expect("generator should succeed");
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifacts);
+
+        // Verify the cross-check has at most one diagnostic per task id (no
+        // forward + reverse duplicates for the same id).
+        let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for m in &result.validation_messages {
+            if let Some(t) = m.task_id.as_ref()
+                && m.field == "tasks"
+            {
+                *counts.entry(t.0.as_str()).or_insert(0) += 1;
+            }
+        }
+        for (id, count) in counts.iter() {
+            assert!(
+                *count <= 1,
+                "task {} emitted {} diagnostics; expected <=1, got {:?}",
+                id,
+                count,
+                result
+                    .validation_messages
+                    .iter()
+                    .filter(|m| m.task_id.as_ref().is_some_and(|t| t.0 == *id)
+                        && m.field == "tasks")
+                    .map(|m| &m.message)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn compile_drops_applied_hierarchy_arg_from_publish_receipt_builder() {
+        // The receipt builder must function without an `AppliedHierarchy`
+        // argument. This avoids carrying around a clone that the function
+        // never reads.
+        let artifact = sample_artifact("rich-client-hosted-mode");
+        let compiled_milestones: Vec<CompiledMilestone> =
+            artifact.milestones.iter().map(compile_milestone).collect();
+        let receipt_struct = build_publish_receipt(
+            &artifact.planning_wave,
+            &compiled_milestones,
+            "docs/tasks",
+            &artifact.manifest,
+        );
+        assert!(!receipt_struct.planning_wave.is_empty());
+        assert_eq!(
+            receipt_struct.tasks.len(),
+            compiled_milestones
+                .iter()
+                .map(|m| m.issues.len()
+                    + m.issues.iter().map(|i| i.sub_issues.len()).sum::<usize>())
+                .sum::<usize>()
         );
     }
 
