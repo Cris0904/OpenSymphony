@@ -129,6 +129,10 @@ pub struct RuntimeProgressSnapshot {
     pub output_tokens: u64,
     /// Delta of output tokens since the last snapshot.
     pub output_token_delta: u64,
+    /// Total cache-read tokens reported by the provider, if available.
+    pub cache_read_tokens: u64,
+    /// Delta of cache-read tokens since the last snapshot.
+    pub cache_read_token_delta: u64,
     /// Current execution status reported by the runtime, if available.
     pub execution_status: Option<String>,
     /// Stream health reported by the runtime mirror.
@@ -166,6 +170,8 @@ impl RuntimeProgressSnapshot {
             input_token_delta: 0,
             output_tokens: 0,
             output_token_delta: 0,
+            cache_read_tokens: 0,
+            cache_read_token_delta: 0,
             execution_status: None,
             stream_health: StreamHealth::Unknown,
             history_sync_status: HistorySyncStatus::Idle,
@@ -187,6 +193,7 @@ impl RuntimeProgressSnapshot {
             event_count: self.event_count,
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
+            cache_read_tokens: self.cache_read_tokens,
             execution_status: self.execution_status.clone(),
             stream_health: self.stream_health,
             history_sync_status: self.history_sync_status,
@@ -306,6 +313,7 @@ pub struct RuntimeProgressSnapshotBuilder<'a> {
     event_count: u64,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
     execution_status: Option<String>,
     stream_health: StreamHealth,
     history_sync_status: HistorySyncStatus,
@@ -329,6 +337,10 @@ impl RuntimeProgressSnapshotBuilder<'_> {
     }
     pub fn with_output_tokens(mut self, count: u64) -> Self {
         self.output_tokens = count;
+        self
+    }
+    pub fn with_cache_read_tokens(mut self, count: u64) -> Self {
+        self.cache_read_tokens = count;
         self
     }
     pub fn with_execution_status(mut self, status: Option<String>) -> Self {
@@ -380,11 +392,15 @@ impl RuntimeProgressSnapshotBuilder<'_> {
             output_token_delta: self
                 .output_tokens
                 .saturating_sub(self.previous.output_tokens),
+            cache_read_token_delta: self
+                .cache_read_tokens
+                .saturating_sub(self.previous.cache_read_tokens),
             liveness_state: self.phase.liveness_state(),
             phase: self.phase,
             event_count: self.event_count,
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
+            cache_read_tokens: self.cache_read_tokens,
             execution_status: self.execution_status,
             stream_health: self.stream_health,
             history_sync_status: self.history_sync_status,

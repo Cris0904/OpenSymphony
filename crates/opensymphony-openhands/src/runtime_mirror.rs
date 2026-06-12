@@ -332,16 +332,16 @@ impl RuntimeMirror {
         } else {
             Some(self.stall.stalled_at)
         };
-        let (input_tokens, output_tokens) = self
+        let (input_tokens, output_tokens, cache_read_tokens) = self
             .state_mirror
             .accumulated_token_usage()
-            .map(|(input, output, _)| (input, output))
-            .unwrap_or((0, 0));
+            .unwrap_or((0, 0, 0));
         RuntimeProgressSnapshot::initial(phase)
             .update_with(phase)
             .with_event_count(self.event_cache.items().len() as u64)
             .with_input_tokens(input_tokens)
             .with_output_tokens(output_tokens)
+            .with_cache_read_tokens(cache_read_tokens)
             .with_execution_status(Some(
                 self.state_mirror
                     .execution_status()

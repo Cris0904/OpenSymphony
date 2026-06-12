@@ -144,11 +144,58 @@ fn token_only_progress_slides_stall_deadline() {
     let snap_after = mirror.snapshot_at(TimestampMs::new(1_300));
     assert_eq!(snap_after.input_tokens, 200);
     assert_eq!(snap_after.output_tokens, 100);
+    assert_eq!(snap_after.cache_read_tokens, 30);
+    assert_eq!(snap_after.cache_read_token_delta, 30);
 
     mirror.apply_token_update(50, 25, 5, TimestampMs::new(1_500));
     let snap_after_2 = mirror.snapshot_at(TimestampMs::new(1_500));
     assert_eq!(snap_after_2.input_tokens, 250);
     assert_eq!(snap_after_2.output_tokens, 125);
+    assert_eq!(snap_after_2.cache_read_tokens, 35);
+    assert_eq!(snap_after_2.cache_read_token_delta, 35);
+}
+
+#[test]
+fn runtime_mirror_carries_cache_read_tokens_into_snapshot() {
+    let mut mirror = RuntimeMirror::new(
+        ConversationId::new("conv-cache-read").expect("valid id"),
+        TimestampMs::new(1_000),
+        idle_config(1_500),
+    );
+    mirror.apply_socket_ready(TimestampMs::new(1_000));
+
+    // Apply only cache-read tokens (no input/output deltas). This exercises the
+    // `apply_token_counts` short-circuit guard which must still record the
+    // cache-read delta even when input/output are zero (PR #114 review).
+    mirror.apply_token_update(0, 0, 7, TimestampMs::new(1_250));
+    let snap = mirror.snapshot_at(TimestampMs::new(1_250));
+    assert_eq!(
+        snap.cache_read_tokens, 7,
+        "snapshot must surface cache_read_tokens from apply_token_update"
+    );
+    assert_eq!(
+        snap.cache_read_token_delta, 7,
+        "cache_read_token_delta starts at zero and reflects the first push"
+    );
+
+    mirror.apply_token_update(0, 0, 3, TimestampMs::new(1_300));
+    let snap_after = mirror.snapshot_at(TimestampMs::new(1_300));
+    assert_eq!(
+        snap_after.cache_read_tokens, 10,
+        "cache_read_tokens aggregate additively across pushes"
+    );
+    assert_eq!(
+        snap_after.cache_read_token_delta, 10,
+        "cache_read_token_delta reflects the cumulative push, anchored to a 0 baseline"
+    );
+
+    // Finally apply deltas with input/output non-zero too, to confirm the
+    // builder updates all three counters without dropping cache_read.
+    mirror.apply_token_update(10, 5, 2, TimestampMs::new(1_400));
+    let snap_mixed = mirror.snapshot_at(TimestampMs::new(1_400));
+    assert_eq!(snap_mixed.input_tokens, 10);
+    assert_eq!(snap_mixed.output_tokens, 5);
+    assert_eq!(snap_mixed.cache_read_tokens, 12);
 }
 
 #[test]
