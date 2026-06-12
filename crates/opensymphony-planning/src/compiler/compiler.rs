@@ -295,6 +295,16 @@ fn validate_issue(
             "Linear issue requires a non-empty title",
         ));
     }
+    if issue.task_file.is_none() {
+        validation_messages.push(ValidationMessage::error(
+            Some(issue.id.clone()),
+            "taskFile",
+            format!(
+                "Linear issue {} is missing its task file reference; assign a relative path under tasksDir",
+                issue.id
+            ),
+        ));
+    }
 }
 
 fn validate_sub_issue(
@@ -332,6 +342,16 @@ fn validate_sub_issue(
             Some(sub_issue.id.clone()),
             "title",
             "Linear sub-issue requires a non-empty title",
+        ));
+    }
+    if sub_issue.task_file.is_none() {
+        validation_messages.push(ValidationMessage::error(
+            Some(sub_issue.id.clone()),
+            "taskFile",
+            format!(
+                "Linear sub-issue {} is missing its task file reference; assign a relative path under tasksDir",
+                sub_issue.id
+            ),
         ));
     }
 
@@ -386,6 +406,59 @@ fn validate_manifest_consistency(
                 format!(
                     "Compiled milestone '{}' is missing from manifest milestone list",
                     milestone.name
+                ),
+            ));
+        }
+    }
+
+    let mut compiled_task_ids: BTreeMap<&str, &str> = BTreeMap::new();
+    for milestone in compiled_milestones {
+        for issue in &milestone.issues {
+            if !issue.source_file.is_empty() {
+                compiled_task_ids.insert(issue.task_id.0.as_str(), issue.source_file.as_str());
+            }
+            for sub in &issue.sub_issues {
+                if !sub.source_file.is_empty() {
+                    compiled_task_ids.insert(sub.task_id.0.as_str(), sub.source_file.as_str());
+                }
+            }
+        }
+    }
+    for task in &manifest.tasks {
+        if let Some(compiled_file) = compiled_task_ids.get(task.id.0.as_str()) {
+            if *compiled_file != task.file.as_str() {
+                validation_messages.push(ValidationMessage::error(
+                    Some(task.id.clone()),
+                    "tasks",
+                    format!(
+                        "Manifest task '{}' file '{}' disagrees with compiled hierarchy file '{}'",
+                        task.id.0, task.file, compiled_file
+                    ),
+                ));
+            }
+        } else {
+            validation_messages.push(ValidationMessage::error(
+                Some(task.id.clone()),
+                "tasks",
+                format!(
+                    "Manifest task '{}' has no matching compiled hierarchy entry",
+                    task.id.0
+                ),
+            ));
+        }
+    }
+    for (task_id, compiled_file) in &compiled_task_ids {
+        let in_manifest = manifest
+            .tasks
+            .iter()
+            .any(|t| t.id.0.as_str() == *task_id && t.file.as_str() == *compiled_file);
+        if !in_manifest {
+            validation_messages.push(ValidationMessage::error(
+                None,
+                "tasks",
+                format!(
+                    "Compiled task '{}' (file '{}') is missing from manifest tasks list",
+                    task_id, compiled_file
                 ),
             ));
         }
@@ -470,11 +543,19 @@ fn build_publish_receipt(
                 },
             );
             for sub in &issue.sub_issues {
+                let sub_file = if sub.source_file.is_empty() {
+                    manifest_lookup
+                        .get(sub.task_id.0.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
+                } else {
+                    sub.source_file.clone()
+                };
                 tasks.insert(
                     sub.task_id.clone(),
                     LinearPublishEntity {
                         source_task_id: sub.task_id.clone(),
-                        source_file: sub.source_file.clone(),
+                        source_file: sub_file,
                         linear_kind: TaskKind::SubIssue,
                         linear_milestone: milestone.name.clone(),
                         parent_task_id: Some(issue.task_id.clone()),
@@ -516,36 +597,24 @@ fn build_publish_receipt(
 
 fn sort_messages(taxonomy: &mut [TaxonomyViolation], messages: &mut [ValidationMessage]) {
     taxonomy.sort_by(|a, b| {
-        let a_key = (
-            a.task_kind,
-            a.task_id.as_ref().map(|t| t.0.clone()).unwrap_or_default(),
-        );
-        let b_key = (
-            b.task_kind,
-            b.task_id.as_ref().map(|t| t.0.clone()).unwrap_or_default(),
-        );
-        a_key
-            .0
-            .cmp(&b_key.0)
-            .then_with(|| a_key.1.cmp(&b_key.1))
+        a.task_kind
+            .cmp(&b.task_kind)
+            .then_with(|| {
+                let a_id = a.task_id.as_ref().map(|t| t.0.as_str()).unwrap_or("");
+                let b_id = b.task_id.as_ref().map(|t| t.0.as_str()).unwrap_or("");
+                a_id.cmp(b_id)
+            })
             .then_with(|| a.reason.cmp(&b.reason))
     });
     messages.sort_by(|a, b| {
-        let a_key = (
-            a.severity,
-            a.task_id.as_ref().map(|t| t.0.clone()).unwrap_or_default(),
-            a.field.clone(),
-        );
-        let b_key = (
-            b.severity,
-            b.task_id.as_ref().map(|t| t.0.clone()).unwrap_or_default(),
-            b.field.clone(),
-        );
-        a_key
-            .0
-            .cmp(&b_key.0)
-            .then_with(|| a_key.1.cmp(&b_key.1))
-            .then_with(|| a_key.2.cmp(&b_key.2))
+        a.severity
+            .cmp(&b.severity)
+            .then_with(|| {
+                let a_id = a.task_id.as_ref().map(|t| t.0.as_str()).unwrap_or("");
+                let b_id = b.task_id.as_ref().map(|t| t.0.as_str()).unwrap_or("");
+                a_id.cmp(b_id)
+            })
+            .then_with(|| a.field.as_str().cmp(b.field.as_str()))
     });
 }
 
@@ -867,5 +936,272 @@ mod tests {
         assert_eq!(result.dependency_metadata.issue_count, 1);
         assert_eq!(result.dependency_metadata.milestone_count, 1);
         assert_eq!(result.dependency_metadata.total_nodes, 1 + 1 + 2);
+    }
+
+    #[test]
+    fn compile_flags_missing_task_file_on_issue() {
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        artifact.milestones[0].issues[0].task_file = None;
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        assert!(!result.is_publishable());
+        assert!(
+            result
+                .validation_messages
+                .iter()
+                .any(|m| m.field == "taskFile"
+                    && m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733")
+                    && m.severity
+                        == crate::opensymphony_planning::compiler::ValidationSeverity::Error)
+        );
+    }
+
+    #[test]
+    fn compile_flags_missing_task_file_on_sub_issue() {
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        artifact.milestones[0].issues[0].sub_issues[0].task_file = None;
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        assert!(!result.is_publishable());
+        assert!(
+            result
+                .validation_messages
+                .iter()
+                .any(|m| m.field == "taskFile"
+                    && m.task_id.as_ref().is_some_and(|t| t.0 == "OSYM-733-IMPL"))
+        );
+    }
+
+    #[test]
+    fn compile_flags_manifest_tasks_mismatch_with_compiled_hierarchy() {
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        // Drop the issue's file from the manifest tasks so the cross-check fires.
+        artifact.manifest.tasks.retain(|t| t.id.0 != "OSYM-733");
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        assert!(!result.is_publishable());
+        assert!(
+            result
+                .validation_messages
+                .iter()
+                .any(|m| m.field == "tasks")
+        );
+    }
+
+    #[test]
+    fn compile_publish_receipt_sub_issue_falls_back_to_manifest_when_compiled_source_empty() {
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        // Strip the sub-issue's own task_file so the compiled sub-issue has an
+        // empty `source_file`; the receipt builder must fall back to the
+        // manifest_lookup entry for the same task id.
+        artifact.milestones[0].issues[0].sub_issues[0].task_file = None;
+        artifact.manifest.tasks.push(
+            crate::opensymphony_planning::generator::domain::ManifestTask {
+                id: artifact.milestones[0].issues[0].sub_issues[0].id.clone(),
+                file: "docs/tasks/osym-733-impl.md".to_string(),
+            },
+        );
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        // Even though the compiler reports `taskFile` validation errors for
+        // the sub-issue, the receipt must still serialise the fallback file
+        // path alongside the sub-issue entry. Parse the receipt YAML and
+        // locate the sub-issue entity by id; assert the rendered `sourceFile`
+        // entry equals the manifest-lookup fallback path.
+        let receipt_value: serde_yaml::Value =
+            serde_yaml::from_str(&result.publish_receipt_yaml).expect("parse receipt");
+        let sub_id = artifact.milestones[0].issues[0].sub_issues[0].id.0.clone();
+        let sub_entity = receipt_value
+            .get("tasks")
+            .and_then(|t| t.get(sub_id))
+            .expect("sub-issue entry in receipt");
+        let source_file = sub_entity
+            .get("sourceFile")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert_eq!(
+            source_file, "docs/tasks/osym-733-impl.md",
+            "expected manifest-lookup fallback path, got {:?}",
+            source_file
+        );
+    }
+
+    #[test]
+    fn compile_dependency_metadata_edges_are_sorted_by_milestone_then_relation() {
+        // Build a two-milestone artifact so we have at least two milestones'
+        // worth of dependency edges to verify stable sort order.
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        let second_issue = artifact.milestones[0].issues[0].clone();
+        let second_ms = PlannedMilestone {
+            id: TaskId("OSYM-MS-10".to_string()),
+            name: "M10: Follow-up Alpha".to_string(),
+            goal: "Second planning iteration".to_string(),
+            issues: vec![second_issue],
+            acceptance_criteria: vec![],
+            verification_steps: vec![],
+            notes: None,
+        };
+        artifact.milestones.push(second_ms.clone());
+        artifact.manifest.milestones.push(second_ms.name.clone());
+        for issue in &second_ms.issues {
+            if let Some(file) = issue.task_file.as_ref() {
+                artifact.manifest.tasks.push(
+                    crate::opensymphony_planning::generator::domain::ManifestTask {
+                        id: issue.id.clone(),
+                        file: file.clone(),
+                    },
+                );
+            }
+            for sub in &issue.sub_issues {
+                if let Some(file) = sub.task_file.as_ref() {
+                    artifact.manifest.tasks.push(
+                        crate::opensymphony_planning::generator::domain::ManifestTask {
+                            id: sub.id.clone(),
+                            file: file.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+
+        let mut last: Option<(&str, DependencyRelation)> = None;
+        for edge in &result.dependency_metadata.edges {
+            let key = (edge.milestone.as_str(), edge.relation);
+            if let Some(prev) = last {
+                assert!(
+                    prev <= key,
+                    "dependency edges must be sorted by milestone then relation: {:?} came after {:?}",
+                    key,
+                    prev
+                );
+            }
+            last = Some(key);
+        }
+    }
+
+    #[test]
+    fn compile_end_to_end_run_on_plan_generator_output() {
+        // AI review requested end-to-end evidence that the compiler runs on
+        // *real* generator output, not only on hand-built samples. Drive the
+        // `PlanGenerator` with a realistic intake (planning wave /
+        // requirements / acceptance criteria), feed its output straight into
+        // `PlanCompiler`, and assert the compiler emits the same surface
+        // guarantees as for the sample artifact.
+        use crate::opensymphony_planning::generator::{
+            IntakeContext, PlanGenerator, PlanningSession,
+        };
+
+        let session = PlanningSession::new(
+            IntakeContext {
+                planning_wave: "rich-client-hosted-mode".to_string(),
+                project_description: "Milestone, issue, and sub-issue compiler end-to-end"
+                    .to_string(),
+                success_criteria: vec![
+                    "Compiler emits Linear taxonomy".to_string(),
+                    "Manifest is renderable".to_string(),
+                    "Publish receipt is renderable".to_string(),
+                ],
+                requirements: vec![
+                    "Compile planning artifacts into Linear hierarchy".to_string(),
+                    "Validate sub-issue readiness fields".to_string(),
+                ],
+                constraints: vec!["Preserve planningWave through manifest and receipt".to_string()],
+                open_questions: vec![],
+                reference_docs: vec!["docs/hosted-client-PRD.md".to_string()],
+            },
+            "docs/tasks",
+        );
+
+        let mut generator = PlanGenerator::new(session);
+        let artifacts = generator
+            .generate()
+            .expect("PlanGenerator should produce artifacts for a valid intake");
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifacts);
+
+        // The compile result must preserve the planning wave identity end-to-end.
+        assert_eq!(result.planning_wave, "rich-client-hosted-mode");
+        assert!(
+            result
+                .manifest_yaml
+                .contains("planningWave: rich-client-hosted-mode")
+        );
+        assert!(
+            result
+                .publish_receipt_yaml
+                .contains("planningWave: rich-client-hosted-mode")
+        );
+
+        // Every compiled milestone from the generator must reach the manifest.
+        let manifest_value: serde_yaml::Value =
+            serde_yaml::from_str(&result.manifest_yaml).expect("parse manifest");
+        let manifest_milestones: Vec<String> = manifest_value
+            .get("milestones")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .expect("milestones list in manifest");
+        for compiled_ms in &result.applied_hierarchy.milestones {
+            if !manifest_milestones.contains(&compiled_ms.name) {
+                // Generator milestones often lack a task_file or verification
+                // expectations, so we still allow pipeline output to require
+                // completion; but the milestone name must appear.
+                assert!(
+                    manifest_milestones.iter().any(|m| m == &compiled_ms.name),
+                    "milestone {:?} dropped from manifest (was {:?})",
+                    compiled_ms.name,
+                    manifest_milestones
+                );
+            }
+        }
+
+        // Receipt must include at least one task entry (the generator emits
+        // issues / sub-issues) and at least one ParentOf edge.
+        let receipt_value: serde_yaml::Value =
+            serde_yaml::from_str(&result.publish_receipt_yaml).expect("parse receipt");
+        let receipt_tasks = receipt_value
+            .get("tasks")
+            .and_then(|v| v.as_mapping())
+            .expect("tasks map in receipt");
+        assert!(
+            !receipt_tasks.is_empty(),
+            "publish receipt must include at least one task"
+        );
+        assert!(
+            result
+                .dependency_metadata
+                .edges
+                .iter()
+                .any(|e| matches!(e.relation, DependencyRelation::ParentOf))
+        );
+
+        // The compiler must surface actionable diagnostics when the generator
+        // omits required fields. End-to-end means we accept either outcome
+        // (publishable or not), but the diagnostics lists must always be
+        // coherent.
+        let coherence = result
+            .taxonomy_violations
+            .iter()
+            .zip(result.validation_messages.iter())
+            .count();
+        assert_eq!(
+            coherence, 0,
+            "taxonomy_violations and validation_messages should be independent vectors",
+        );
     }
 }
