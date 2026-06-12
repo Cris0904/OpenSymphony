@@ -92,6 +92,11 @@ impl RuntimeMirror {
         config: MirrorConfig,
     ) -> Self {
         let idle_timeout = config.idle_timeout_ms.unwrap_or(QUIET_SAFE_IDLE_FLOOR);
+        // Quiet must be a *strict precursor* to Stalled: when quiet_window_ms
+        // >= idle_timeout_ms the Quiet band collapses to zero width and the
+        // phase precedence logic below can no longer surface Quiet. Clamp the
+        // operator-supplied value so the precedence invariant holds.
+        let config = clamp_quiet_window(config, idle_timeout);
         let stall =
             StallMetadata::with_runtime_cap(started_at, idle_timeout, config.total_runtime_cap_ms);
         Self {
@@ -227,15 +232,12 @@ impl RuntimeMirror {
     }
 
     /// Observe a token usage bump (typically derived from an LLM completion log).
-    pub fn apply_token_update(
-        &mut self,
-        _input_tokens: u64,
-        _output_tokens: u64,
-        now: TimestampMs,
-    ) {
-        // Token counts are sourced through `state_mirror.accumulated_token_usage`
-        // which reads from applied events; the *progress* signal still slides
-        // the deadline forward here.
+    /// Counts are deltas since the last call and they are merged into the
+    /// state mirror's raw statistics blob so subsequent snapshots reflect
+    /// the new totals.
+    pub fn apply_token_update(&mut self, input_tokens: u64, output_tokens: u64, now: TimestampMs) {
+        self.state_mirror
+            .apply_token_counts(input_tokens, output_tokens, 0);
         self.slide_deadline(now);
     }
 
@@ -291,25 +293,39 @@ impl RuntimeMirror {
         }
     }
 
-    /// Build the current snapshot.
+    /// Build the current snapshot at `now`.
+    ///
+    /// The caller-supplied timestamp is required because the mirror cannot
+    /// read wall-clock time on its own; using `last_logical_event_at` here
+    /// would mask `Quiet`/`Stalled`/`Degraded` transitions that depend on
+    /// the elapsed-since-last-activity comparison that
+    /// [`RuntimeMirror::phase_at`] performs.
+    pub fn snapshot_at(&self, now: TimestampMs) -> RuntimeProgressSnapshot {
+        Self::build_snapshot(self, now)
+    }
+
+    /// Backwards-compatible shorthand for [`RuntimeMirror::snapshot_at`] that
+    /// pins `now` to the timestamp of the last observed activity. **This
+    /// always reports `RunningTurn` / `WaitingOnPriorTurn`** because the
+    /// elapsed-since-last-activity delta collapses to zero — prefer
+    /// [`RuntimeMirror::snapshot_at`] whenever silence matters.
     pub fn snapshot(&self) -> RuntimeProgressSnapshot {
         let at = self.last_logical_event_at.unwrap_or(self.started_at);
+        Self::build_snapshot(self, at)
+    }
+
+    fn build_snapshot(&self, at: TimestampMs) -> RuntimeProgressSnapshot {
         let phase = self.phase_at(at);
         let stall_deadline_at = if self.stall.stalled_at.as_u64() == 0 {
             None
         } else {
             Some(self.stall.stalled_at)
         };
-        let input_tokens = self
+        let (input_tokens, output_tokens) = self
             .state_mirror
             .accumulated_token_usage()
-            .map(|(input, _, _)| input)
-            .unwrap_or(0);
-        let output_tokens = self
-            .state_mirror
-            .accumulated_token_usage()
-            .map(|(_, output, _)| output)
-            .unwrap_or(0);
+            .map(|(input, output, _)| (input, output))
+            .unwrap_or((0, 0));
         RuntimeProgressSnapshot::initial(phase)
             .update_with(phase)
             .with_event_count(self.event_cache.items().len() as u64)
@@ -453,6 +469,26 @@ impl RuntimeMirror {
 }
 
 const QUIET_SAFE_IDLE_FLOOR: DurationMs = DurationMs::new(86_400_000);
+
+/// Clamp `quiet_window_ms` so it is strictly less than `idle_timeout_ms` and
+/// remain zero-width by default when no idle timeout was supplied. The
+/// returned config matches the input on every other field.
+fn clamp_quiet_window(mut config: MirrorConfig, idle_timeout: DurationMs) -> MirrorConfig {
+    let Some(quiet) = config.quiet_window_ms else {
+        return config;
+    };
+    if quiet.as_u64() < idle_timeout.as_u64() {
+        return config;
+    }
+    // Reserve at least 1 ms so the Quiet band is non-empty; if even 1 ms is
+    // too aggressive (idle_timeout already at 0), suppress Quiet entirely.
+    let clamped = idle_timeout
+        .as_u64()
+        .saturating_sub(1)
+        .max(if quiet.as_u64() == 0 { 0 } else { 1 });
+    config.quiet_window_ms = Some(DurationMs::new(clamped));
+    config
+}
 
 fn timestamp_for_event(event: &EventEnvelope) -> TimestampMs {
     TimestampMs::new(event.timestamp.timestamp_millis().max(0) as u64)

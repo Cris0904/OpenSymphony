@@ -70,6 +70,36 @@ fn progress_based_idle_detection_keeps_long_running_turn_active() {
 }
 
 #[test]
+fn snapshot_at_reports_quiet_and_stalled_phases_when_supplied_now() {
+    let mut mirror = RuntimeMirror::new(
+        ConversationId::new("conv-snapshot").expect("valid id"),
+        TimestampMs::new(1_000),
+        idle_config(2_000),
+    );
+    mirror.apply_socket_ready(TimestampMs::new(1_000));
+    mirror.apply_event(&runtime_event("evt-1", "MessageEvent", 1_000));
+
+    // Baseline snapshot pins to last activity — must report RunningTurn.
+    let baseline = mirror.snapshot();
+    assert!(matches!(baseline.phase, RuntimeLivenessPhase::RunningTurn));
+
+    // 1.3 s of silence — well before idle timeout. snapshot_at(now) reports Quiet.
+    let quiet_snap = mirror.snapshot_at(TimestampMs::new(2_300));
+    assert!(
+        matches!(quiet_snap.phase, RuntimeLivenessPhase::Quiet),
+        "expected Quiet, got {:?}",
+        quiet_snap.phase
+    );
+
+    // 2.5 s of silence — past idle timeout. snapshot_at(now) reports Stalled.
+    let stalled_snap = mirror.snapshot_at(TimestampMs::new(3_500));
+    assert!(matches!(stalled_snap.phase, RuntimeLivenessPhase::Stalled));
+    // Token counts must come from a single accumulator call.
+    assert_eq!(stalled_snap.input_tokens, 0);
+    assert_eq!(stalled_snap.output_tokens, 0);
+}
+
+#[test]
 fn silence_progresses_quiet_then_stalled() {
     let mut mirror = RuntimeMirror::new(
         ConversationId::new("conv-silence").expect("valid id"),
@@ -107,6 +137,41 @@ fn token_only_progress_slides_stall_deadline() {
     assert!(
         slid_deadline.as_u64() >= baseline_deadline.as_u64(),
         "token-only progress should never slide the deadline backward"
+    );
+
+    // The token-update must also record the counts into the conversation
+    // statistics blob so the snapshot exposes them (PR #114 review).
+    let snap_after = mirror.snapshot_at(TimestampMs::new(1_300));
+    assert_eq!(snap_after.input_tokens, 200);
+    assert_eq!(snap_after.output_tokens, 100);
+
+    mirror.apply_token_update(50, 25, TimestampMs::new(1_500));
+    let snap_after_2 = mirror.snapshot_at(TimestampMs::new(1_500));
+    assert_eq!(snap_after_2.input_tokens, 250);
+    assert_eq!(snap_after_2.output_tokens, 125);
+}
+
+#[test]
+fn quiet_window_ge_idle_timeout_is_clamped_to_keep_quiet_band_nonempty() {
+    let mut mirror = RuntimeMirror::new(
+        ConversationId::new("conv-clamp").expect("valid id"),
+        TimestampMs::new(1_000),
+        MirrorConfig {
+            idle_timeout_ms: Some(DurationMs::new(2_000)),
+            quiet_window_ms: Some(DurationMs::new(5_000)),
+            ..MirrorConfig::default()
+        },
+    );
+    mirror.apply_socket_ready(TimestampMs::new(1_000));
+    mirror.apply_event(&runtime_event("evt-1", "MessageEvent", 1_000));
+    let snap = mirror.snapshot_at(TimestampMs::new(3_100));
+    assert!(
+        matches!(
+            snap.phase,
+            RuntimeLivenessPhase::Quiet | RuntimeLivenessPhase::Stalled
+        ),
+        "with idle_timeout=2s and quiet_window clamped to <idle_timeout, 2.1s of silence should land in the quiet or stalled band, got {:?}",
+        snap.phase
     );
 }
 

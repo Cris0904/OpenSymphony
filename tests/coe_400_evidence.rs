@@ -111,14 +111,15 @@ async fn end_to_end_evidence_collects_typed_envelopes_and_mirror_snapshots() {
     );
 
     let mut typed_kinds: Vec<String> = Vec::new();
-    let mut last_snapshot = mirror.snapshot();
+    let mut last_snapshot = mirror.snapshot_at(TimestampMs::new(0));
+    let now_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let observed_now = now_ms.clone();
 
     let drain = async {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while std::time::Instant::now() < deadline {
-            if let Some(Ok(Some(event))) = timeout(Duration::from_millis(500), stream.next_event())
-                .await
-                .ok()
+            if let Ok(Ok(Some(event))) =
+                timeout(Duration::from_millis(500), stream.next_event()).await
             {
                 let normalized = normalize(&event).expect("normalize");
                 match normalized.record.kind.clone() {
@@ -134,8 +135,10 @@ async fn end_to_end_evidence_collects_typed_envelopes_and_mirror_snapshots() {
                     !normalized.raw_payload.is_null(),
                     "raw_payload must always be present"
                 );
+                let now = Utc::now().timestamp_millis().max(0) as u64;
+                observed_now.store(now, std::sync::atomic::Ordering::SeqCst);
                 mirror.apply_event(&event);
-                last_snapshot = mirror.snapshot();
+                last_snapshot = mirror.snapshot_at(TimestampMs::new(now));
             }
         }
     };
