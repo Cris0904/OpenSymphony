@@ -32,9 +32,9 @@ use tokio::time::timeout;
 use opensymphony_domain::{ConversationId, DurationMs, RuntimeLivenessPhase, TimestampMs};
 use opensymphony_gateway_schema::event_journal::EventKind;
 use opensymphony_openhands::{
-    ConversationCreateRequest, EventEnvelope, MirrorConfig, NormalizationContext,
-    NormalizationError, NormalizedEvent, OpenHandsClient, RuntimeMirror, RuntimeStreamConfig,
-    SendMessageRequest, TransportConfig, normalize_event,
+    ConversationCreateRequest, EventEnvelope, MirrorConfig, NormalizationContext, NormalizedEvent,
+    OpenHandsClient, RuntimeMirror, RuntimeStreamConfig, SendMessageRequest, TransportConfig,
+    normalize_event,
 };
 use opensymphony_testkit::FakeOpenHandsServer;
 
@@ -42,7 +42,7 @@ fn harness_id() -> &'static str {
     "openhands-agent-server-v1"
 }
 
-fn normalize(envelope: &EventEnvelope) -> Result<NormalizedEvent, NormalizationError> {
+fn normalize(envelope: &EventEnvelope) -> NormalizedEvent {
     let context = NormalizationContext::new(
         harness_id(),
         ConversationId::new("conv-evidence").expect("valid id"),
@@ -121,7 +121,7 @@ async fn end_to_end_evidence_collects_typed_envelopes_and_mirror_snapshots() {
             if let Ok(Ok(Some(event))) =
                 timeout(Duration::from_millis(500), stream.next_event()).await
             {
-                let normalized = normalize(&event).expect("normalize");
+                let normalized = normalize(&event);
                 match normalized.record.kind.clone() {
                     EventKind::HarnessConversationStateUpdate => {
                         typed_kinds.push("HarnessConversationStateUpdate".to_string());
@@ -176,7 +176,7 @@ async fn end_to_end_evidence_collects_typed_envelopes_and_mirror_snapshots() {
         "FutureOpenHandsEvent",
         json!({ "future": true, "details": "raw" }),
     );
-    let unknown_normalized = normalize(&unknown_envelope).expect("normalize unknown");
+    let unknown_normalized = normalize(&unknown_envelope);
     assert!(matches!(
         unknown_normalized.record.kind,
         EventKind::Unknown { .. }
@@ -222,7 +222,7 @@ async fn runtime_mirror_quiet_window_alive_then_transitions_to_stalled() {
         "ConversationStateUpdateEvent",
         json!({ "execution_status": "running" }),
     );
-    let _ = normalize(&envelope).expect("normalize");
+    let _ = normalize(&envelope);
     mirror.apply_event(&envelope);
     mirror.apply_status_change("running", TimestampMs::new(1_000));
     mirror.apply_socket_ready(TimestampMs::new(1_000));

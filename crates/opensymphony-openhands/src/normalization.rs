@@ -142,15 +142,22 @@ pub struct NormalizedEvent {
 
 /// Convert an OpenHands event envelope into a normalized OpenSymphony envelope.
 ///
-/// [`normalize_event`] is total: every (well-formed or malformed) envelope
-/// produces a [`NormalizedEvent`]. Envelopes whose `source` is empty (no
-/// upstream actor signal at all) are routed through the `Unknown` envelope
-/// path with a synthetic `harness` actor and a `source_missing` summary so
-/// the journal still sees the raw payload instead of failing the run.
+/// `normalize_event` is **total**: every (well-formed or malformed) envelope
+/// produces a [`NormalizedEvent`] without panicking or returning `Err`. The
+/// caller-side input validation lives on [`NormalizationContext::new`], which
+/// is the only point at which a [`NormalizationError`] can surface — at that
+/// step the caller has already opted into a recoverable error path (empty
+/// harness id or conversation id) and can supply a fixed context before
+/// re-invoking the normalizer.
+///
+/// Envelopes whose `source` is empty (no upstream actor signal at all) are
+/// routed through the `Unknown` envelope path with a synthetic `harness`
+/// actor and a `source_missing` summary so the journal still sees the raw
+/// payload instead of failing the run.
 pub fn normalize_event(
     envelope: &EventEnvelope,
     context: &NormalizationContext,
-) -> Result<NormalizedEvent, NormalizationError> {
+) -> NormalizedEvent {
     if envelope.source.is_empty() {
         // Total fallback: route to the Unknown envelope machinery directly so
         // the run keeps going and the raw payload is still preserved through
@@ -165,7 +172,7 @@ pub fn normalize_event(
         // Override the summary so consumers can tell that this came in with
         // no actor signal at all (as opposed to a genuine unknown kind).
         record.summary = format!("source_missing envelope kind={}", envelope.kind);
-        return Ok(build_normalized_event(envelope, context, record));
+        return build_normalized_event(envelope, context, record);
     }
 
     let known = KnownEvent::from_envelope(envelope);
@@ -179,7 +186,7 @@ pub fn normalize_event(
         KnownEvent::Unknown(unknown) => normalize_unknown(envelope, &unknown),
     };
 
-    Ok(build_normalized_event(envelope, context, result))
+    build_normalized_event(envelope, context, result)
 }
 
 /// Encode a typed OpenHands state-update event into OpenSymphony
@@ -561,7 +568,7 @@ mod tests {
             }),
         );
         let ctx = context();
-        let normalized = normalize_event(&envelope, &ctx).expect("normalize");
+        let normalized = normalize_event(&envelope, &ctx);
         assert!(matches!(
             normalized.record.kind,
             EventKind::HarnessConversationStateUpdate
@@ -591,7 +598,7 @@ mod tests {
                 ]
             }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         match normalized.record.kind.clone() {
             EventKind::HarnessEventNormalized { source_kind } => {
                 assert_eq!(source_kind, "MessageEvent");
@@ -623,7 +630,7 @@ mod tests {
                 }
             }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert!(matches!(normalized.record.kind, EventKind::HarnessToolCall));
         let payload = normalized
             .record
@@ -654,7 +661,7 @@ mod tests {
                 }
             }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert!(matches!(
             normalized.record.kind,
             EventKind::HarnessToolResult
@@ -679,7 +686,7 @@ mod tests {
                 "usage": { "prompt_tokens": 100, "completion_tokens": 200 }
             }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         let payload = normalized
             .record
             .payload
@@ -699,7 +706,7 @@ mod tests {
             "ConversationErrorEvent",
             json!({ "message": "OOM in tool" }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert!(normalized.record.summary.contains("OOM in tool"));
         assert!(matches!(
             normalized.record.kind,
@@ -716,7 +723,7 @@ mod tests {
             "FutureOpenHandsEvent",
             json!({ "future": true, "details": "raw" }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         match normalized.record.kind.clone() {
             EventKind::Unknown { raw_kind } => assert_eq!(raw_kind, "FutureOpenHandsEvent"),
             other => panic!("unexpected kind {other:?}"),
@@ -744,7 +751,7 @@ mod tests {
         );
         envelope.key = Some("unknown_key".to_string());
         envelope.value = Some(json!({ "structured": true }));
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         match normalized.record.kind.clone() {
             EventKind::Unknown { raw_kind } => {
                 assert_eq!(raw_kind, "ForwardStateDelta");
@@ -772,7 +779,7 @@ mod tests {
         );
         envelope.key = None;
         envelope.value = None;
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         // Must produce a normalized event without raising; unknown at minimum.
         match normalized.record.kind {
             EventKind::Unknown { .. } | EventKind::HarnessEventNormalized { .. } => {}
@@ -790,7 +797,7 @@ mod tests {
             json!({ "execution_status": "running" }),
         );
         let (ctx, corr) = context_with_correlation();
-        let normalized = normalize_event(&envelope, &ctx).expect("normalize");
+        let normalized = normalize_event(&envelope, &ctx);
         assert_eq!(normalized.record.correlation_id, Some(corr));
     }
 
@@ -806,7 +813,7 @@ mod tests {
                 "content": [{ "type": "text", "text": "hi" }]
             }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert_eq!(normalized.record.actor.kind_label(), "user");
     }
 
@@ -819,7 +826,7 @@ mod tests {
             "ConversationStateUpdateEvent",
             json!({ "execution_status": "running" }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert_eq!(normalized.record.actor.kind_label(), "system");
         assert_eq!(normalized.record.actor.actor_id(), "runtime");
     }
@@ -833,7 +840,7 @@ mod tests {
             "PersistedEvent",
             Value::Null,
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert_eq!(normalized.record.actor.kind_label(), "harness");
         assert_eq!(
             normalized.record.actor.actor_id(),
@@ -850,8 +857,7 @@ mod tests {
             "Anything",
             json!({ "lost": true }),
         );
-        let normalized = normalize_event(&envelope, &context())
-            .expect("normalize_event is total — empty source must not error");
+        let normalized = normalize_event(&envelope, &context());
         match normalized.record.kind {
             EventKind::Unknown { raw_kind } => assert_eq!(raw_kind, "Anything"),
             other => panic!("expected Unknown, got {other:?}"),
@@ -883,7 +889,7 @@ mod tests {
             "ConversationStateUpdateEvent",
             json!({ "execution_status": "running" }),
         );
-        let normalized = normalize_event(&envelope, &context()).expect("normalize");
+        let normalized = normalize_event(&envelope, &context());
         assert!(matches!(
             normalized.record.kind,
             EventKind::HarnessConversationStateUpdate
