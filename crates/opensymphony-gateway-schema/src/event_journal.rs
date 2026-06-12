@@ -115,6 +115,19 @@ pub enum EventKind {
     StreamDisconnected { client_id: String },
     StreamReconnected { client_id: String },
 
+    // Task graph mutation events (mirrors `/api/v1/taskgraph/*`).
+    // Each variant carries the Linear node id so callers can correlate the
+    // mutation back to the cached task graph entry plus the gateway
+    // `correlation_id` propagated by the envelope.
+    TaskGraphMilestoneCreated { milestone_id: String },
+    TaskGraphMilestoneUpdated { milestone_id: String },
+    TaskGraphIssueCreated { issue_id: String, parent_identifier: Option<String> },
+    TaskGraphIssueUpdated { issue_id: String },
+    TaskGraphSubIssueCreated { sub_issue_id: String, parent_identifier: String },
+    TaskGraphSubIssueUpdated { sub_issue_id: String },
+    TaskGraphRelationCreated { relation_id: String, relation_type: String },
+    TaskGraphCommentCreated { comment_id: String, issue_id: String },
+
     // Catch-all for unknown future events
     Unknown { raw_kind: String },
 }
@@ -151,6 +164,14 @@ impl EventKind {
             Self::StreamConnected { .. } => "stream.connected".into(),
             Self::StreamDisconnected { .. } => "stream.disconnected".into(),
             Self::StreamReconnected { .. } => "stream.reconnected".into(),
+            Self::TaskGraphMilestoneCreated { .. } => "task_graph.milestone_created".into(),
+            Self::TaskGraphMilestoneUpdated { .. } => "task_graph.milestone_updated".into(),
+            Self::TaskGraphIssueCreated { .. } => "task_graph.issue_created".into(),
+            Self::TaskGraphIssueUpdated { .. } => "task_graph.issue_updated".into(),
+            Self::TaskGraphSubIssueCreated { .. } => "task_graph.sub_issue_created".into(),
+            Self::TaskGraphSubIssueUpdated { .. } => "task_graph.sub_issue_updated".into(),
+            Self::TaskGraphRelationCreated { .. } => "task_graph.relation_created".into(),
+            Self::TaskGraphCommentCreated { .. } => "task_graph.comment_created".into(),
             Self::Unknown { raw_kind } => raw_kind.clone(),
         }
     }
