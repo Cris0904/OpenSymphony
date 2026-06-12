@@ -249,10 +249,13 @@ impl RuntimeMirror {
         self.slide_deadline(now);
     }
 
-    /// Mark the run as terminal (finished, error, or stuck per OpenHands semantics).
-    pub fn apply_terminal(&mut self, summary: &str, now: TimestampMs) {
+    /// Mark the run as terminal with the actual OpenHands execution status
+    /// (`finished`, `error`, `stuck`, etc). The status is forwarded to the
+    /// state mirror so downstream liveness and diagnostic phases observe the
+    /// real reason — never collapse to a hardcoded `finished`.
+    pub fn apply_terminal(&mut self, status: &str, summary: &str, now: TimestampMs) {
         self.state_mirror
-            .apply_conversation_execution_status(&synthetic_conversation("finished"));
+            .apply_conversation_execution_status(&synthetic_conversation(status));
         self.attach_state_change(summary);
         self.slide_deadline(now);
     }
@@ -764,6 +767,22 @@ mod tests {
         let snap = mirror.snapshot();
         assert!(matches!(snap.phase, RuntimeLivenessPhase::Terminal));
         assert!(matches!(snap.liveness_state, LivenessState::Terminal));
+    }
+
+    #[test]
+    fn apply_terminal_propagates_supplied_status_not_hardcoded_finished() {
+        let mut mirror = mirror_with_config(2_000);
+        mirror.apply_initial_conversation_snapshot(&conversation_with_status("running"));
+        mirror.apply_socket_ready(TimestampMs::new(1_000));
+        mirror.apply_event(&runtime_event("evt-1", "MessageEvent", 1_500));
+        mirror.apply_terminal("error", "openhands tripwire", TimestampMs::new(1_900));
+        let snap = mirror.snapshot();
+        assert_eq!(
+            snap.execution_status.as_deref(),
+            Some("error"),
+            "apply_terminal must forward the actual terminal status into the state mirror"
+        );
+        assert!(matches!(snap.phase, RuntimeLivenessPhase::Terminal));
     }
 
     #[test]
