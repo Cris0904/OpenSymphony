@@ -88,6 +88,13 @@ const EXPECTED_PATHS: ReadonlyArray<{
  * is the only authoritative list of routable endpoints. We extract just
  * that block so unrelated `.route(...)` calls inside helper functions
  * don't accidentally satisfy the contract check.
+ *
+ * The scan tracks brace depth while skipping characters that appear
+ * inside line comments, Rust block comments, regular strings, byte
+ * strings, char literals, and raw strings. Without these skips a
+ * router that contains a format! macro or a comment with an opening
+ * brace would terminate the block at the wrong brace and silently
+ * turn legitimate routes into `missing`.
  */
 function extractRouterBlock(source: string): string {
   const startMarker = "pub fn router(&self) -> Router";
@@ -97,12 +104,77 @@ function extractRouterBlock(source: string): string {
       "Could not locate `pub fn router(&self) -> Router` in gateway lib.rs",
     );
   }
-  // The router block ends when the function's brace matching closes.
+
   let depth = 0;
   let started = false;
   let endIdx = -1;
-  for (let i = startIdx; i < source.length; i++) {
+  let i = startIdx;
+  while (i < source.length) {
     const ch = source[i];
+    const next = source[i + 1];
+
+    if (ch === "/" && next === "/") {
+      // Line comment: skip to next newline.
+      while (i < source.length && source[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      // Block comment: skip until closing `*/`.
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        i++;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === '"') {
+      // Plain string: skip until matching unescaped `"`.
+      i++;
+      while (i < source.length && source[i] !== '"') {
+        if (source[i] === "\\") i += 2;
+        else i++;
+      }
+      i++;
+      continue;
+    }
+    if (ch === "b" && next === '"') {
+      // Byte string: same as plain string but with the `b` prefix.
+      i += 2;
+      while (i < source.length && source[i] !== '"') {
+        if (source[i] === "\\") i += 2;
+        else i++;
+      }
+      i++;
+      continue;
+    }
+    if (ch === "'") {
+      // Char literal: take the next character, accounting for `\` escapes.
+      i++;
+      if (source[i] === "\\") i += 2;
+      else i++;
+      if (source[i] === "'") i++;
+      continue;
+    }
+    if (ch === "r") {
+      // Raw string: r"...", r#"..."#, r##"..."## up to 255 hashes.
+      let j = i + 1;
+      let hashCount = 0;
+      while (j < source.length && source[j] === "#") {
+        hashCount++;
+        j++;
+      }
+      if (source[j] === '"') {
+        const close = '"' + "#".repeat(hashCount);
+        i = j + 1;
+        const closeIdx = source.indexOf(close, i);
+        if (closeIdx === -1) {
+          throw new Error("Unterminated raw string in gateway lib.rs");
+        }
+        i = closeIdx + close.length;
+        continue;
+      }
+    }
+
     if (ch === "{") {
       depth++;
       started = true;
@@ -113,7 +185,9 @@ function extractRouterBlock(source: string): string {
         break;
       }
     }
+    i++;
   }
+
   if (endIdx < 0) {
     throw new Error("Could not find end of router block in gateway lib.rs");
   }
@@ -184,5 +258,39 @@ describe("api-client -> Rust gateway route contract", () => {
     }
 
     expect(unrouted).toEqual([]);
+  });
+
+  it("skips Rust strings, comments, char literals, and raw strings when extracting the router block", () => {
+    // Adversarial fixtures to prove the brace tracker does not terminate
+    // early on characters that appear inside Rust string / comment
+    // literals. Regression coverage for the comment that originally used
+    // a naive character-level extractor.
+    const adversarialSnippets = [
+      `.route("/api/v1/${"{run_id}"}/logs", get(logs))`,
+      `.route("/api/v1/runs/{id}", get(run)) // see also {nested}`,
+      `.route("/api/v1/proof", get(proof)) /* keep {this_brace} */`,
+      `.route(b"/api/v1/binary", get(bytes))`,
+      `.route("/api/v1/single", get(charlie)) // char "'" lives in a string`,
+      `.route(r##"/api/v1/raw/{still_a_route}"##, get(raw_path))`,
+    ];
+
+    for (const snippet of adversarialSnippets) {
+      const source = [
+        "impl GatewayRouter {",
+        "    pub fn router(&self) -> Router {",
+        snippet,
+        "    }",
+        "}",
+      ].join("\n");
+      const block = extractRouterBlock(source);
+      // All braces inside the snippet body belong to the array + map
+      // literals, none to the router function body. Therefore the
+      // extracted block must terminate at the actual function closing
+      // brace, not at any `}` introduced by a string literal above.
+      expect(block).toContain("Router {");
+      expect(block.trim().endsWith("}")).toBe(true);
+      // Make sure every adversarial route snippet survived extraction.
+      expect(block).toContain(snippet.replace(/\\/g, ""));
+    }
   });
 });

@@ -186,9 +186,21 @@ async function flushUntil(
     if (predicate()) return;
     await flushAsync();
   }
+  throw new Error(
+    `flushUntil timed out after ${maxIterations} iterations waiting for predicate`,
+  );
 }
 
 describe("OpenSymphonyApp mount", () => {
+  it("flushUntil rejects with a clear timeout message instead of returning silently", async () => {
+    // Regression coverage for the reviewer finding that exhausted
+    // flushUntil iterations used to resolve silently, which masked the
+    // real failure inside a later null assertion.
+    await expect(flushUntil(() => false, 4)).rejects.toThrow(
+      /timed out after 4 iterations/,
+    );
+  });
+
   it("mounts the shared app shell with the marker attribute", async () => {
     const root = document.createElement("div");
     document.body.appendChild(root);
@@ -259,7 +271,7 @@ describe("OpenSymphonyApp mount", () => {
     expect(root.querySelector(".os-run-head strong")?.textContent).toBe("COE-449");
     expect(root.querySelector(".os-pill")?.textContent).toBe("running");
 
-    handle.destroy();
+    await handle.destroy();
   });
 
   it("enables loopback fallback fixtures when the gateway health probe fails", async () => {
@@ -285,7 +297,7 @@ describe("OpenSymphonyApp mount", () => {
     expect(root.textContent).toContain("Fixture");
     expect(root.textContent).toContain("desktop-alpha");
 
-    handle.destroy();
+    await handle.destroy();
   });
 
   it("disables profile save when no profile controller is provided", async () => {
@@ -302,7 +314,7 @@ describe("OpenSymphonyApp mount", () => {
     expect(save).not.toBeNull();
     expect(save.disabled).toBe(true);
 
-    handle.destroy();
+    await handle.destroy();
   });
 
   it("routes a saved profile through ProfileController and refreshes the active gateway URL", async () => {
@@ -368,7 +380,7 @@ describe("OpenSymphonyApp mount", () => {
     expect(lastConnect).toBe(newUrl);
     expect(save.disabled).toBe(false);
 
-    handle.destroy();
+    await handle.destroy();
   });
 
   it("renders the profile panel and provided initial profile when no controller is set", async () => {
@@ -387,6 +399,6 @@ describe("OpenSymphonyApp mount", () => {
     expect(select).not.toBeNull();
     // Without a profile controller the shell uses the default UI profile.
     expect(select.options.length).toBeGreaterThan(0);
-    handle.destroy();
+    await handle.destroy();
   });
 });
