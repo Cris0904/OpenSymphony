@@ -13,14 +13,10 @@ use chrono::Utc;
 use opensymphony::opensymphony_control::SnapshotStore;
 use opensymphony::opensymphony_domain::{
     ControlPlaneAgentServerStatus as AgentServerStatus,
-    ControlPlaneDaemonSnapshot as DaemonSnapshot,
-    ControlPlaneDaemonState as DaemonState,
-    ControlPlaneDaemonStatus as DaemonStatus,
-    ControlPlaneIssueRuntimeState as IssueRuntimeState,
-    ControlPlaneIssueSnapshot as IssueSnapshot,
-    ControlPlaneMetricsSnapshot as MetricsSnapshot,
-    ControlPlaneRecentEvent as RecentEvent,
-    ControlPlaneRecentEventKind as RecentEventKind,
+    ControlPlaneDaemonSnapshot as DaemonSnapshot, ControlPlaneDaemonState as DaemonState,
+    ControlPlaneDaemonStatus as DaemonStatus, ControlPlaneIssueRuntimeState as IssueRuntimeState,
+    ControlPlaneIssueSnapshot as IssueSnapshot, ControlPlaneMetricsSnapshot as MetricsSnapshot,
+    ControlPlaneRecentEvent as RecentEvent, ControlPlaneRecentEventKind as RecentEventKind,
     ControlPlaneWorkerOutcome as WorkerOutcome,
 };
 use opensymphony::opensymphony_gateway::{
@@ -38,7 +34,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use uuid::Uuid;
 
 #[path = "support/mod.rs"]
@@ -117,7 +113,9 @@ struct FakeLinearClient {
 
 impl FakeLinearClient {
     fn new() -> Self {
-        Self { calls: RecordedCalls::default() }
+        Self {
+            calls: RecordedCalls::default(),
+        }
     }
 }
 
@@ -128,7 +126,11 @@ impl LinearMutationClient for FakeLinearClient {
         request: TaskGraphMilestoneRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphMilestoneResponse, MutationError> {
-        self.calls.milestone.lock().unwrap().push((request.clone(), correlation_id.to_string()));
+        self.calls
+            .milestone
+            .lock()
+            .unwrap()
+            .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphMilestoneResponse {
             receipt: ActionReceipt::accepted(
                 Uuid::new_v4().to_string(),
@@ -146,7 +148,11 @@ impl LinearMutationClient for FakeLinearClient {
         request: TaskGraphIssueRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphIssueResponse, MutationError> {
-        self.calls.issue.lock().unwrap().push((request.clone(), correlation_id.to_string()));
+        self.calls
+            .issue
+            .lock()
+            .unwrap()
+            .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphIssueResponse {
             receipt: ActionReceipt::accepted(
                 Uuid::new_v4().to_string(),
@@ -165,7 +171,11 @@ impl LinearMutationClient for FakeLinearClient {
         request: TaskGraphSubIssueRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphSubIssueResponse, MutationError> {
-        self.calls.sub_issue.lock().unwrap().push((request.clone(), correlation_id.to_string()));
+        self.calls
+            .sub_issue
+            .lock()
+            .unwrap()
+            .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphSubIssueResponse {
             receipt: ActionReceipt::accepted(
                 Uuid::new_v4().to_string(),
@@ -184,7 +194,11 @@ impl LinearMutationClient for FakeLinearClient {
         request: TaskGraphRelationRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphRelationResponse, MutationError> {
-        self.calls.relation.lock().unwrap().push((request.clone(), correlation_id.to_string()));
+        self.calls
+            .relation
+            .lock()
+            .unwrap()
+            .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphRelationResponse {
             receipt: ActionReceipt::accepted(
                 Uuid::new_v4().to_string(),
@@ -202,7 +216,11 @@ impl LinearMutationClient for FakeLinearClient {
         request: TaskGraphEvidenceRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphEvidenceResponse, MutationError> {
-        self.calls.evidence.lock().unwrap().push((request.clone(), correlation_id.to_string()));
+        self.calls
+            .evidence
+            .lock()
+            .unwrap()
+            .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphEvidenceResponse {
             receipt: ActionReceipt::accepted(
                 Uuid::new_v4().to_string(),
@@ -220,9 +238,8 @@ async fn start_test_server(client: Arc<FakeLinearClient>) -> (JoinHandle<()>, So
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = SnapshotStore::new(fixture_snapshot(0));
-    let server = GatewayServer::new(store).with_linear_mutations(Some(
-        client as Arc<dyn LinearMutationClient>,
-    ));
+    let server = GatewayServer::new(store)
+        .with_linear_mutations(Some(client as Arc<dyn LinearMutationClient>));
     let handle = tokio::spawn(async move {
         let _ = server.serve(listener).await;
     });
@@ -259,10 +276,11 @@ async fn milestones_create_returns_accepted_receipt_with_correlation_id() {
     assert_eq!(body.milestone_id.as_deref(), Some("ms_fake"));
     assert_eq!(body.receipt.status, ActionStatus::Accepted);
     assert_eq!(body.receipt.correlation_id, "corr-milestone-create");
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.milestone.lock().unwrap();
     assert_eq!(calls.len(), 1);
@@ -297,10 +315,11 @@ async fn milestones_update_forwards_existing_id_to_fake_client() {
     assert_eq!(resp.status(), 200);
     let body: TaskGraphMilestoneResponse = resp.json().await.unwrap();
     assert_eq!(body.receipt.correlation_id, "corr-milestone-update");
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.milestone.lock().unwrap();
     let (forwarded, cid) = &calls[0];
@@ -343,10 +362,11 @@ async fn issues_create_forwards_request_and_returns_receipt() {
     assert_eq!(body.issue_id.as_deref(), Some("iss_fake"));
     assert_eq!(body.receipt.status, ActionStatus::Accepted);
     assert_eq!(body.receipt.correlation_id, "corr-issue-create");
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.issue.lock().unwrap();
     let (forwarded, cid) = &calls[0];
@@ -388,10 +408,11 @@ async fn issues_update_forwards_issue_id_to_fake_client() {
     assert_eq!(resp.status(), 200);
     let body: TaskGraphIssueResponse = resp.json().await.unwrap();
     assert_eq!(body.receipt.correlation_id, "corr-issue-update");
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.issue.lock().unwrap();
     let (forwarded, cid) = &calls[0];
@@ -435,10 +456,11 @@ async fn sub_issue_create_forwards_parent_identifier_and_returns_receipt() {
     let body: TaskGraphSubIssueResponse = resp.json().await.unwrap();
     assert_eq!(body.sub_issue_id.as_deref(), Some("sub_fake"));
     assert_eq!(body.receipt.status, ActionStatus::Accepted);
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.sub_issue.lock().unwrap();
     assert_eq!(calls.len(), 1);
@@ -472,10 +494,11 @@ async fn relations_create_preserves_dependency_metadata() {
     assert_eq!(body.related_issue_id.as_deref(), Some("COE-411"));
     assert_eq!(body.relation_type.as_deref(), Some("blocks"));
     assert_eq!(body.receipt.correlation_id, "corr-relation");
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.relation.lock().unwrap();
     assert_eq!(calls.len(), 1);
@@ -506,10 +529,11 @@ async fn evidence_create_returns_comment_receipt_with_taskgraph_followup() {
     let body: TaskGraphEvidenceResponse = resp.json().await.unwrap();
     assert_eq!(body.comment_id.as_deref(), Some("c_fake"));
     assert_eq!(body.receipt.status, ActionStatus::Accepted);
-    assert!(body
-        .receipt
-        .expected_followup
-        .contains(&ExpectedFollowup::TaskGraphUpdate));
+    assert!(
+        body.receipt
+            .expected_followup
+            .contains(&ExpectedFollowup::TaskGraphUpdate)
+    );
 
     let calls = fake.calls.evidence.lock().unwrap();
     assert_eq!(calls.len(), 1);

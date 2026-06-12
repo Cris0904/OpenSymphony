@@ -72,19 +72,37 @@ impl EventActor {
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     // Orchestrator events
-    OrchestratorStateTransition { from: String, to: String },
+    OrchestratorStateTransition {
+        from: String,
+        to: String,
+    },
     OrchestratorWorkerStarted,
-    OrchestratorWorkerCompleted { outcome: String },
-    OrchestratorWorkerFailed { reason: String },
-    OrchestratorRetryScheduled { attempt: u32 },
+    OrchestratorWorkerCompleted {
+        outcome: String,
+    },
+    OrchestratorWorkerFailed {
+        reason: String,
+    },
+    OrchestratorRetryScheduled {
+        attempt: u32,
+    },
 
     // Gateway action events
-    GatewayActionDispatched { action: String },
-    GatewayActionCompleted { action: String },
-    GatewayActionFailed { action: String, reason: String },
+    GatewayActionDispatched {
+        action: String,
+    },
+    GatewayActionCompleted {
+        action: String,
+    },
+    GatewayActionFailed {
+        action: String,
+        reason: String,
+    },
 
     // Normalized harness events
-    HarnessEventNormalized { source_kind: String },
+    HarnessEventNormalized {
+        source_kind: String,
+    },
     HarnessSseEvent,
     HarnessToolCall,
     HarnessToolResult,
@@ -97,8 +115,12 @@ pub enum EventKind {
     RunCancelled,
 
     // Terminal / log events
-    TerminalFrame { frame_id: String },
-    LogEntry { level: String },
+    TerminalFrame {
+        frame_id: String,
+    },
+    LogEntry {
+        level: String,
+    },
 
     // Approval events
     ApprovalRequested,
@@ -111,25 +133,53 @@ pub enum EventKind {
     PlanningArtifactGenerated,
 
     // Stream connection events
-    StreamConnected { client_id: String },
-    StreamDisconnected { client_id: String },
-    StreamReconnected { client_id: String },
+    StreamConnected {
+        client_id: String,
+    },
+    StreamDisconnected {
+        client_id: String,
+    },
+    StreamReconnected {
+        client_id: String,
+    },
 
     // Task graph mutation events (mirrors `/api/v1/taskgraph/*`).
     // Each variant carries the Linear node id so callers can correlate the
     // mutation back to the cached task graph entry plus the gateway
     // `correlation_id` propagated by the envelope.
-    TaskGraphMilestoneCreated { milestone_id: String },
-    TaskGraphMilestoneUpdated { milestone_id: String },
-    TaskGraphIssueCreated { issue_id: String, parent_identifier: Option<String> },
-    TaskGraphIssueUpdated { issue_id: String },
-    TaskGraphSubIssueCreated { sub_issue_id: String, parent_identifier: String },
-    TaskGraphSubIssueUpdated { sub_issue_id: String },
-    TaskGraphRelationCreated { relation_id: String, relation_type: String },
-    TaskGraphCommentCreated { comment_id: String, issue_id: String },
+    TaskGraphMilestoneCreated {
+        milestone_id: String,
+    },
+    TaskGraphMilestoneUpdated {
+        milestone_id: String,
+    },
+    TaskGraphIssueCreated {
+        issue_id: String,
+        parent_identifier: Option<String>,
+    },
+    TaskGraphIssueUpdated {
+        issue_id: String,
+    },
+    TaskGraphSubIssueCreated {
+        sub_issue_id: String,
+        parent_identifier: String,
+    },
+    TaskGraphSubIssueUpdated {
+        sub_issue_id: String,
+    },
+    TaskGraphRelationCreated {
+        relation_id: String,
+        relation_type: String,
+    },
+    TaskGraphCommentCreated {
+        comment_id: String,
+        issue_id: String,
+    },
 
     // Catch-all for unknown future events
-    Unknown { raw_kind: String },
+    Unknown {
+        raw_kind: String,
+    },
 }
 
 impl EventKind {

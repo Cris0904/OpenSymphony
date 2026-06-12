@@ -254,8 +254,8 @@ pub trait LinearMutationClient: Send + Sync + 'static {
 
 use crate::opensymphony_linear::{
     IssueCreateInput, IssueUpdateInput, LinearClient, LinearCommentMutationResult,
-    LinearIssueMutationResult, LinearIssueRelationMutationResult,
-    LinearMilestoneMutationResult, ProjectMilestoneCreateInput,
+    LinearIssueMutationResult, LinearIssueRelationMutationResult, LinearMilestoneMutationResult,
+    ProjectMilestoneCreateInput,
 };
 
 pub struct LinearClientMutationAdapter {
@@ -297,7 +297,11 @@ impl LinearMutationClient for LinearClientMutationAdapter {
             .create_project_milestone(input)
             .await
             .map_err(map_linear_err)?;
-        Ok(build_milestone_response_accepted(&action_id, &result, &request.correlation_id))
+        Ok(build_milestone_response_accepted(
+            &action_id,
+            &result,
+            &request.correlation_id,
+        ))
     }
 
     async fn create_or_update_issue(
@@ -336,9 +340,9 @@ impl LinearMutationClient for LinearClientMutationAdapter {
                 .await
                 .map_err(map_linear_err)?,
             IssueOp::Update => {
-                let id = issue_id
-                    .clone()
-                    .ok_or_else(|| MutationError::Validation("issue_id required for update".into()))?;
+                let id = issue_id.clone().ok_or_else(|| {
+                    MutationError::Validation("issue_id required for update".into())
+                })?;
                 let update_input = IssueUpdateInput {
                     title: Some(input.title),
                     description: input.description,
@@ -356,7 +360,11 @@ impl LinearMutationClient for LinearClientMutationAdapter {
                     .map_err(map_linear_err)?
             }
         };
-        Ok(build_issue_response_accepted(&action_id, &result, &request.correlation_id))
+        Ok(build_issue_response_accepted(
+            &action_id,
+            &result,
+            &request.correlation_id,
+        ))
     }
 
     async fn create_or_update_sub_issue(
@@ -437,16 +445,14 @@ impl LinearMutationClient for LinearClientMutationAdapter {
             ));
         }
         if relation_type.is_empty() {
-            return Err(MutationError::Validation("relation_type is required".into()));
+            return Err(MutationError::Validation(
+                "relation_type is required".into(),
+            ));
         }
         let action_id = Uuid::new_v4().to_string();
         let result: LinearIssueRelationMutationResult = self
             .client
-            .create_issue_relation(
-                &request.issue_id,
-                &request.related_issue_id,
-                &relation_type,
-            )
+            .create_issue_relation(&request.issue_id, &request.related_issue_id, &relation_type)
             .await
             .map_err(map_linear_err)?;
         Ok(TaskGraphRelationResponse {
@@ -604,8 +610,13 @@ fn build_accepted_receipt_with_followups(
     kind: ActionKind,
 ) -> ActionReceipt {
     let mut receipt = ActionReceipt::accepted(action_id.to_owned(), correlation_id, kind);
-    if !receipt.expected_followup.contains(&ExpectedFollowup::TaskGraphUpdate) {
-        receipt.expected_followup.push(ExpectedFollowup::TaskGraphUpdate);
+    if !receipt
+        .expected_followup
+        .contains(&ExpectedFollowup::TaskGraphUpdate)
+    {
+        receipt
+            .expected_followup
+            .push(ExpectedFollowup::TaskGraphUpdate);
     }
     receipt
 }
@@ -686,7 +697,8 @@ pub async fn append_mutation_event(
             ));
         }
     };
-    let record = build_audit_event_inner("gateway", correlation_id, entity_ref, event_kind, payload);
+    let record =
+        build_audit_event_inner("gateway", correlation_id, entity_ref, event_kind, payload);
     journal
         .append(record)
         .await
@@ -819,8 +831,8 @@ pub fn task_graph_router() -> axum::Router<TaskGraphMutationState> {
         .route("/evidence", post(task_graph_evidence_handler))
 }
 
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 
 async fn task_graph_milestone_handler(
@@ -881,7 +893,9 @@ async fn task_graph_issue_handler(
     let correlation_id = ensure_correlation_id(&request.correlation_id);
     request.correlation_id = correlation_id.clone();
     let journal = state.journal.clone();
-    let result = client.create_or_update_issue(request, &correlation_id).await;
+    let result = client
+        .create_or_update_issue(request, &correlation_id)
+        .await;
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {
@@ -1019,7 +1033,9 @@ async fn task_graph_evidence_handler(
     let correlation_id = ensure_correlation_id(&request.correlation_id);
     request.correlation_id = correlation_id.clone();
     let journal = state.journal.clone();
-    let result = client.create_evidence_comment(request, &correlation_id).await;
+    let result = client
+        .create_evidence_comment(request, &correlation_id)
+        .await;
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {

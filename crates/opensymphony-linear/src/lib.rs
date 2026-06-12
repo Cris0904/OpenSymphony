@@ -7,8 +7,7 @@ mod task_graph_cache;
 
 pub use client::{
     LinearClient, LinearCommentMutationResult, LinearConfig, LinearIssueMutationResult,
-    LinearIssueRelationMutationResult, LinearMilestoneMutationResult, RetryPolicy,
-    WorkpadComment,
+    LinearIssueRelationMutationResult, LinearMilestoneMutationResult, RetryPolicy, WorkpadComment,
 };
 pub use error::{GraphqlError, LinearError};
 pub use graphql::{

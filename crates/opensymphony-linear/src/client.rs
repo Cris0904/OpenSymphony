@@ -14,17 +14,17 @@ use super::error::{GraphqlError, LinearError, ResponseMetadata};
 use super::graphql::{
     COMMENT_CREATE_MUTATION, CommentCreateData, CommentCreateInput, CommentCreateVariables,
     GraphqlEnvelope, GraphqlErrorPayload, ISSUE_ARCHIVE_MUTATION, ISSUE_BY_IDENTIFIER_QUERY,
-    ISSUE_COMMENTS_QUERY, ISSUE_CREATE_MUTATION, ISSUE_INVERSE_RELATIONS_QUERY,
-    ISSUE_LABELS_QUERY, ISSUE_RELATION_CREATE_MUTATION, ISSUE_STATES_BY_IDS_QUERY,
-    ISSUE_UPDATE_MUTATION, ISSUES_BY_STATE_QUERY, IssueArchiveData, IssueArchiveVariables,
-    IssueByIdentifierData, IssueByIdentifierVariables, IssueCommentsData, IssueCommentsVariables,
-    IssueCreateData, IssueCreateInput, IssueCreateVariables, IssueInverseRelationsData,
-    IssueInverseRelationsVariables, IssueLabelsData, IssueLabelsVariables,
-    IssueRelationCreateData, IssueRelationCreateInput, IssueRelationCreateVariables,
-    IssueRelationMutationNode, IssueStatesByIdsData, IssueStatesByIdsVariables, IssueUpdateData,
-    IssueUpdateInput, IssueUpdateVariables, IssuesByStateData, IssuesByStateVariables,
-    LinearIssueNode, LinearLabelConnection, LinearProjectNode, LinearRelationConnection,
-    PROJECT_BY_SLUG_QUERY, PROJECT_MILESTONE_CREATE_MUTATION, PROJECT_MILESTONE_UPDATE_MUTATION,
+    ISSUE_COMMENTS_QUERY, ISSUE_CREATE_MUTATION, ISSUE_INVERSE_RELATIONS_QUERY, ISSUE_LABELS_QUERY,
+    ISSUE_RELATION_CREATE_MUTATION, ISSUE_STATES_BY_IDS_QUERY, ISSUE_UPDATE_MUTATION,
+    ISSUES_BY_STATE_QUERY, IssueArchiveData, IssueArchiveVariables, IssueByIdentifierData,
+    IssueByIdentifierVariables, IssueCommentsData, IssueCommentsVariables, IssueCreateData,
+    IssueCreateInput, IssueCreateVariables, IssueInverseRelationsData,
+    IssueInverseRelationsVariables, IssueLabelsData, IssueLabelsVariables, IssueRelationCreateData,
+    IssueRelationCreateInput, IssueRelationCreateVariables, IssueRelationMutationNode,
+    IssueStatesByIdsData, IssueStatesByIdsVariables, IssueUpdateData, IssueUpdateInput,
+    IssueUpdateVariables, IssuesByStateData, IssuesByStateVariables, LinearIssueNode,
+    LinearLabelConnection, LinearProjectNode, LinearRelationConnection, PROJECT_BY_SLUG_QUERY,
+    PROJECT_MILESTONE_CREATE_MUTATION, PROJECT_MILESTONE_UPDATE_MUTATION,
     PROJECT_UPDATE_CONTENT_MUTATION, ProjectBySlugData, ProjectBySlugVariables,
     ProjectMilestoneCreateData, ProjectMilestoneCreateInput, ProjectMilestoneCreateVariables,
     ProjectMilestoneUpdateData, ProjectMilestoneUpdateInput, ProjectMilestoneUpdateVariables,
@@ -163,14 +163,8 @@ impl From<super::graphql::IssueMutationNode> for LinearIssueMutationResult {
             state_kind: node.state.kind,
             project_id: node.project.as_ref().map(|p| p.id.clone()),
             project_slug_id: node.project.as_ref().map(|p| p.slug_id.clone()),
-            project_milestone_id: node
-                .project_milestone
-                .as_ref()
-                .map(|m| m.id.clone()),
-            project_milestone_name: node
-                .project_milestone
-                .as_ref()
-                .map(|m| m.name.clone()),
+            project_milestone_id: node.project_milestone.as_ref().map(|m| m.id.clone()),
+            project_milestone_name: node.project_milestone.as_ref().map(|m| m.name.clone()),
             parent_id: node.parent.as_ref().map(|p| p.id.clone()),
             parent_identifier: node.parent.as_ref().map(|p| p.identifier.clone()),
             assignee_id: node.assignee.as_ref().map(|a| a.id.clone()),
@@ -560,10 +554,7 @@ impl LinearClient {
         let response: ProjectMilestoneCreateData = self
             .execute_graphql(PROJECT_MILESTONE_CREATE_MUTATION, json!(variables))
             .await?;
-        Self::milestone_mutation_result(
-            "projectMilestoneCreate",
-            response.project_milestone_create,
-        )
+        Self::milestone_mutation_result("projectMilestoneCreate", response.project_milestone_create)
     }
 
     /// Update a project milestone via Linear GraphQL `projectMilestoneUpdate`.
@@ -579,10 +570,7 @@ impl LinearClient {
         let response: ProjectMilestoneUpdateData = self
             .execute_graphql(PROJECT_MILESTONE_UPDATE_MUTATION, json!(variables))
             .await?;
-        Self::milestone_mutation_result(
-            "projectMilestoneUpdate",
-            response.project_milestone_update,
-        )
+        Self::milestone_mutation_result("projectMilestoneUpdate", response.project_milestone_update)
     }
 
     fn milestone_mutation_result(
@@ -712,18 +700,15 @@ impl LinearClient {
                 "Linear issueRelationCreate returned success=false".to_string(),
             ));
         }
-        response
-            .issue_relation_create
-            .issue_relation
-            .map_or_else(
-                || {
-                    Err(LinearError::InvalidResponse(
-                        "Linear issueRelationCreate returned success=true without an issueRelation"
-                            .to_string(),
-                    ))
-                },
-                |node| Ok(node.into()),
-            )
+        response.issue_relation_create.issue_relation.map_or_else(
+            || {
+                Err(LinearError::InvalidResponse(
+                    "Linear issueRelationCreate returned success=true without an issueRelation"
+                        .to_string(),
+                ))
+            },
+            |node| Ok(node.into()),
+        )
     }
 
     async fn expand_issue(

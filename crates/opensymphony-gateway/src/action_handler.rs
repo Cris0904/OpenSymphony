@@ -454,11 +454,7 @@ fn validate_task_graph(action: &ActionDispatch, action_id: &str) -> ValidatedAct
     use EntityKind as Ek;
 
     let kind = action.target_entity.entity_kind;
-    if matches!(
-        kind,
-        Ek::Milestone | Ek::Issue | Ek::SubIssue | Ek::Project
-    ) == false
-    {
+    if matches!(kind, Ek::Milestone | Ek::Issue | Ek::SubIssue | Ek::Project) == false {
         return reject(
             action,
             action_id,
@@ -469,7 +465,11 @@ fn validate_task_graph(action: &ActionDispatch, action_id: &str) -> ValidatedAct
         );
     }
     if action.correlation_id.trim().is_empty() {
-        return reject(action, action_id, "task-graph action requires non-empty correlation_id");
+        return reject(
+            action,
+            action_id,
+            "task-graph action requires non-empty correlation_id",
+        );
     }
     if let Some(payload) = action.payload.as_ref() {
         if !payload.is_object() {

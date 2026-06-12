@@ -257,7 +257,10 @@ impl std::fmt::Debug for GatewayServer {
             .field("journal", &"<journal>")
             .field("broker", &"<broker>")
             .field("web_assets_dir", &self.web_assets_dir)
-            .field("linear_mutations", &self.linear_mutations.as_ref().map(|_| "..."))
+            .field(
+                "linear_mutations",
+                &self.linear_mutations.as_ref().map(|_| "..."),
+            )
             .finish()
     }
 }
@@ -301,10 +304,7 @@ impl GatewayServer {
     /// because the host client must not call Linear without an explicit
     /// adapter wired in (tests inject fakes; production wires
     /// `LinearClientMutationAdapter`).
-    pub fn with_linear_mutations(
-        mut self,
-        client: Option<Arc<dyn LinearMutationClient>>,
-    ) -> Self {
+    pub fn with_linear_mutations(mut self, client: Option<Arc<dyn LinearMutationClient>>) -> Self {
         self.linear_mutations = client;
         self
     }
@@ -359,8 +359,7 @@ impl GatewayServer {
             store: self.store.clone(),
             broker: self.broker.clone(),
         };
-        let mutation_router = task_graph_router()
-            .with_state(mutation_state);
+        let mutation_router = task_graph_router().with_state(mutation_state);
         router = router.nest("/api/v1/taskgraph", mutation_router);
 
         router.with_state(state)

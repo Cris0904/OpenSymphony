@@ -1098,4 +1098,3 @@ pub(super) struct IssueRelationMutationNode {
     pub issue: IssueRefNode,
     pub related_issue: IssueRefNode,
 }
-
