@@ -99,16 +99,17 @@ impl ValidationMessage {
 }
 
 /// A sub-issue flagged as underspecified. The compiler records the exact
-/// field counts that are missing so the planning stage can recover
-/// without re-running the entire pipeline.
+/// field counts already present on the sub-issue so the planning stage can
+/// recover without re-running the entire pipeline. A `*_count` of `0`
+/// indicates the corresponding field is missing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnderspecifiedSubIssue {
     pub sub_issue_id: TaskId,
     pub parent_issue_id: TaskId,
-    pub missing_acceptance_criteria: usize,
-    pub missing_verification_steps: usize,
-    pub missing_deliverables: usize,
-    pub missing_scope_in: usize,
+    pub acceptance_criteria_count: usize,
+    pub verification_steps_count: usize,
+    pub deliverables_count: usize,
+    pub scope_in_count: usize,
     pub reasons: Vec<String>,
 }
 

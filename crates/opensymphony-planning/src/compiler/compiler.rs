@@ -61,23 +61,24 @@ impl PlanCompiler {
         let mut validation_messages = Vec::new();
         let mut underspecified_sub_issues = Vec::new();
 
-        let milestones = artifacts.milestones.clone();
-        let manifest = artifacts.manifest.clone();
-        let planning_wave = artifacts.planning_wave.clone();
-        let tasks_dir = artifacts.manifest.tasks_dir.clone();
-
         validate_taxonomy(
-            &milestones,
+            &artifacts.milestones,
             &mut taxonomy_violations,
             &mut validation_messages,
         );
 
-        let mut compiled_milestones: Vec<CompiledMilestone> = Vec::with_capacity(milestones.len());
+        let milestones = &artifacts.milestones;
+        let manifest = &artifacts.manifest;
+        let planning_wave = artifacts.planning_wave.as_str();
+        let tasks_dir = artifacts.manifest.tasks_dir.as_str();
+
+        let mut compiled_milestones: Vec<CompiledMilestone> =
+            Vec::with_capacity(artifacts.milestones.len());
         let mut dependency_edges: Vec<DependencyEdge> = Vec::new();
         let mut sub_issue_count = 0usize;
         let mut issue_count_total = 0usize;
 
-        for milestone in &milestones {
+        for milestone in milestones {
             for issue in &milestone.issues {
                 issue_count_total += 1;
                 collect_issue_dependency_edges(issue, &milestone.name, &mut dependency_edges);
@@ -102,10 +103,10 @@ impl PlanCompiler {
             compiled_milestones.push(compile_milestone(milestone));
         }
 
-        let manifest_yaml = render_manifest_yaml(&planning_wave, &tasks_dir, &milestones);
+        let manifest_yaml = render_manifest_yaml(planning_wave, tasks_dir, milestones);
 
         let applied_hierarchy = AppliedHierarchy {
-            planning_wave: planning_wave.clone(),
+            planning_wave: artifacts.planning_wave.clone(),
             milestones: compiled_milestones.clone(),
         };
 
@@ -117,10 +118,11 @@ impl PlanCompiler {
                 .then_with(|| a.target.cmp(&b.target))
         });
 
+        let milestone_count = artifacts.milestones.len();
         let dependency_metadata = DependencyMetadata {
-            planning_wave: planning_wave.clone(),
-            total_nodes: milestones.len() + issue_count_total + sub_issue_count,
-            milestone_count: milestones.len(),
+            planning_wave: artifacts.planning_wave.clone(),
+            total_nodes: milestone_count + issue_count_total + sub_issue_count,
+            milestone_count,
             issue_count: issue_count_total,
             sub_issue_count,
             edges: dependency_edges,
@@ -130,20 +132,20 @@ impl PlanCompiler {
         underspecified_sub_issues.sort_by(|a, b| a.sub_issue_id.cmp(&b.sub_issue_id));
 
         // Cross-check manifest milestones against compiled milestones.
-        validate_manifest_consistency(&manifest, &compiled_milestones, &mut validation_messages);
+        validate_manifest_consistency(manifest, &compiled_milestones, &mut validation_messages);
 
         let receipt_struct = build_publish_receipt(
-            &planning_wave,
+            planning_wave,
             &compiled_milestones,
-            &tasks_dir,
-            &manifest,
+            tasks_dir,
+            manifest,
             &applied_hierarchy,
         );
         let publish_receipt_yaml =
             serde_yaml::to_string(&receipt_struct).expect("publish receipt yaml should serialize");
 
         CompilationResult {
-            planning_wave,
+            planning_wave: artifacts.planning_wave.clone(),
             manifest_yaml,
             publish_receipt_yaml,
             applied_hierarchy,
@@ -252,8 +254,6 @@ fn validate_taxonomy(
                     milestone.id
                 ),
             });
-        }
-        if milestone.name.trim().is_empty() {
             validation_messages.push(ValidationMessage::error(
                 Some(milestone.id.clone()),
                 "name",
@@ -340,10 +340,10 @@ fn validate_sub_issue(
         underspecified.push(UnderspecifiedSubIssue {
             sub_issue_id: sub_issue.id.clone(),
             parent_issue_id: parent.id.clone(),
-            missing_acceptance_criteria: sub_issue.acceptance_criteria.len(),
-            missing_verification_steps: sub_issue.verification_steps.len(),
-            missing_deliverables: sub_issue.deliverables.len(),
-            missing_scope_in: sub_issue.scope_in.len(),
+            acceptance_criteria_count: sub_issue.acceptance_criteria.len(),
+            verification_steps_count: sub_issue.verification_steps.len(),
+            deliverables_count: sub_issue.deliverables.len(),
+            scope_in_count: sub_issue.scope_in.len(),
             reasons,
         });
         validation_messages.push(ValidationMessage::warning(
@@ -452,7 +452,7 @@ fn build_publish_receipt(
             } else {
                 issue.source_file.clone()
             };
-            let review_comments = extract_review_comments(manifest, &issue.task_id.0);
+            let review_comments = Vec::new();
             tasks.insert(
                 issue.task_id.clone(),
                 LinearPublishEntity {
@@ -480,7 +480,7 @@ fn build_publish_receipt(
                         parent_task_id: Some(issue.task_id.clone()),
                         blocked_by: sub.blocked_by.clone(),
                         blocks: sub.blocks.clone(),
-                        review_comments: extract_review_comments(manifest, &sub.task_id.0),
+                        review_comments: Vec::new(),
                         issue: None,
                         issue_id: None,
                         url: None,
@@ -507,16 +507,12 @@ fn build_publish_receipt(
     }
 }
 
-fn extract_review_comments(manifest: &GeneratedManifest, task_id: &str) -> Vec<String> {
-    let _ = manifest;
-    // Review comment lanes are surfaced through the manifest's planning
-    // wave plus the task id; the draft preview task interprets them. Today
-    // they are empty because the planning generator does not collect
-    // review comments; the field exists so downstream consumers can rely on
-    // a stable shape.
-    let _ = task_id;
-    Vec::new()
-}
+// Review-comment extraction is intentionally absent today: the planning
+// generator does not yet collect review comment lanes, so `LinearPublishEntity`
+// stores an empty `review_comments: Vec<String>` at both issue and sub-issue
+// insertion sites. A future change can add a `Vec<&ReviewComment>` pull from
+// `PlanArtifacts` and feed it directly into the field without resurrecting
+// this function.
 
 fn sort_messages(taxonomy: &mut [TaxonomyViolation], messages: &mut [ValidationMessage]) {
     taxonomy.sort_by(|a, b| {
@@ -688,12 +684,7 @@ mod tests {
             "violations: {:?}",
             result.taxonomy_violations
         );
-        assert!(
-            result
-                .taxonomy_violations
-                .iter()
-                .all(|v| v.reason.contains("non-empty") || v.reason.is_empty())
-        );
+        assert_eq!(result.taxonomy_violations, vec![]);
         assert_eq!(result.planning_wave, "rich-client-hosted-mode");
         assert!(
             result
@@ -875,5 +866,6 @@ mod tests {
         );
         assert_eq!(result.dependency_metadata.issue_count, 1);
         assert_eq!(result.dependency_metadata.milestone_count, 1);
+        assert_eq!(result.dependency_metadata.total_nodes, 1 + 1 + 2);
     }
 }
