@@ -1120,7 +1120,7 @@ async fn task_graph_issue_handler(
         serde_json::json!({
             "issue_id": issue_id,
             "issue_identifier": issue_identifier,
-            "parent_identifier": response.project_milestone_id.clone(),
+            "milestone_id": response.project_milestone_id.clone(),
         }),
     )
     .await
@@ -1212,6 +1212,11 @@ async fn task_graph_relation_handler(
     };
     let correlation_id = ensure_correlation_id(&request.correlation_id);
     request.correlation_id = correlation_id.clone();
+    // Capture the "from" issue id up front: `EntityKind` has no `Relation`
+    // variant, so the journal entity ref must identify the issue the relation
+    // originated from so downstream filters "events for issue X" include it.
+    let from_issue_id = request.issue_id.clone();
+    let relation_type = request.relation_type.clone();
     let journal = state.journal.clone();
     let result = client.create_issue_relation(request, &correlation_id).await;
     let response = match result {
@@ -1235,20 +1240,24 @@ async fn task_graph_relation_handler(
     };
     let relation_id = response.relation_id.clone().unwrap_or_default();
     let related_issue_id = response.related_issue_id.clone().unwrap_or_default();
-    let relation_type = response.relation_type.clone().unwrap_or_default();
+    let response_relation_type = response
+        .relation_type
+        .clone()
+        .unwrap_or_else(|| relation_type.clone());
     if let Err(err) = append_mutation_event(
         &journal,
         &correlation_id,
         ActionKind::TaskGraphRelation,
         EntityRef {
             kind: entity_kind_for(ActionKind::TaskGraphRelation),
-            id: relation_id.clone(),
-            identifier: Some(relation_type.clone()),
+            id: from_issue_id.clone(),
+            identifier: Some(response_relation_type.clone()),
         },
         serde_json::json!({
             "relation_id": relation_id,
             "related_issue_id": related_issue_id,
-            "relation_type": relation_type,
+            "relation_type": response_relation_type,
+            "from_issue_id": from_issue_id,
         }),
     )
     .await
@@ -1301,15 +1310,20 @@ async fn task_graph_evidence_handler(
 
     // Build the audit event directly so we can carry both `comment_id` AND
     // the real `issue_id` (the shared helper stamped `issue_id = ""` for
-    // evidence, which lost correlation).
+    // evidence, which lost correlation). The `entity_ref.id` also uses the
+    // issue id so journal queries of the form "events for issue X" include
+    // this comment — `comment_id` is preserved in the payload and the
+    // `EventKind` variant so consumers can still pivot to it.
     let event_kind = EventKind::TaskGraphCommentCreated {
         comment_id: comment_id.clone(),
         issue_id: issue_id.clone(),
     };
     let entity_ref = EntityRef {
         kind: entity_kind_for(ActionKind::TaskGraphEvidence),
-        id: comment_id.clone(),
-        identifier: issue_identifier.clone(),
+        id: issue_id.clone(),
+        identifier: issue_identifier
+            .clone()
+            .or_else(|| Some(comment_id.clone())),
     };
     let payload = serde_json::json!({
         "comment_id": comment_id,

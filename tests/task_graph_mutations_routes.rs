@@ -31,6 +31,7 @@ use opensymphony::opensymphony_gateway::{
 use opensymphony::opensymphony_gateway_schema::action::{
     ActionKind, ActionReceipt, ActionStatus, ExpectedFollowup,
 };
+use opensymphony::opensymphony_gateway_schema::envelope::EntityKind;
 use opensymphony::opensymphony_gateway_schema::event_journal::EventKind as JournalEventKind;
 use reqwest::Client;
 use std::net::SocketAddr;
@@ -724,5 +725,141 @@ async fn evidence_create_returns_comment_receipt_with_taskgraph_followup() {
 
     let calls = fake.calls.evidence.lock().await;
     assert_eq!(calls.len(), 1);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn evidence_journal_entity_ref_correlates_by_issue_id() {
+    // Regression guard for the round-4 audit-journal finding: an evidence
+    // event was stamped with `entity_ref.id = comment_id` even though
+    // `entity_ref.kind = Issue`, so future journal queries of the form
+    // "events for issue X" silently missed the comment. The fix pins
+    // `entity_ref.id` to `issue_id` and keeps `comment_id` in the typed
+    // `EventKind::TaskGraphCommentCreated` payload.
+    let fake = Arc::new(FakeLinearClient::new());
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
+
+    let req = TaskGraphEvidenceRequest {
+        schema_version: "1.0.0".into(),
+        correlation_id: "corr-evidence-corr-id".into(),
+        idempotency_key: None,
+        issue_id: "COE-405".into(),
+        body: "evidence body".into(),
+    };
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/taskgraph/evidence"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let events = journal.recent_events(10).await;
+    let comment_event = events
+        .iter()
+        .find(|rec| matches!(rec.kind, JournalEventKind::TaskGraphCommentCreated { .. }))
+        .expect("expected TaskGraphCommentCreated event in journal");
+    let entity_ref = comment_event
+        .entity_refs
+        .first()
+        .expect("event should carry an entity_ref");
+    assert_eq!(
+        entity_ref.id, "COE-405",
+        "entity_ref.id must be the issue id so 'events for issue X' filters find the comment"
+    );
+    assert_eq!(entity_ref.kind, EntityKind::Issue);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn relation_journal_entity_ref_correlates_by_from_issue_id() {
+    // Regression guard for the round-4 audit-journal finding: the relation
+    // event stamped `entity_ref.id = relation_id` while `kind = Issue`, so
+    // issue-keyed queries dropped it. The fix uses the request's
+    // `issue_id` (the "from" issue of the relation) as `entity_ref.id`.
+    let fake = Arc::new(FakeLinearClient::new());
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
+
+    let req = TaskGraphRelationRequest {
+        schema_version: "1.0.0".into(),
+        correlation_id: "corr-relation-corr-id".into(),
+        idempotency_key: None,
+        relation_type: "blocks".into(),
+        issue_id: "COE-405".into(),
+        related_issue_id: "COE-411".into(),
+    };
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/taskgraph/relations"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let events = journal.recent_events(10).await;
+    let relation_event = events
+        .iter()
+        .find(|rec| matches!(rec.kind, JournalEventKind::TaskGraphRelationCreated { .. }))
+        .expect("expected TaskGraphRelationCreated event in journal");
+    let entity_ref = relation_event
+        .entity_refs
+        .first()
+        .expect("event should carry an entity_ref");
+    assert_eq!(
+        entity_ref.id, "COE-405",
+        "entity_ref.id must be the from-issue id so 'events for issue X' filters find the relation"
+    );
+    assert_eq!(entity_ref.kind, EntityKind::Issue);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn issue_journal_payload_renames_milestone_field() {
+    // Regression guard for the round-4 review item pointing out that the
+    // audit payload field called `parent_identifier` actually carried
+    // `project_milestone_id` (a milestone id, not an issue identifier).
+    // The fix renames the payload field to `milestone_id`.
+    let fake = Arc::new(FakeLinearClient::new());
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
+
+    let req = TaskGraphIssueRequest {
+        schema_version: "1.0.0".into(),
+        correlation_id: "corr-issue-milestone-field".into(),
+        op: IssueOp::Create,
+        idempotency_key: None,
+        team_id: "team_1".into(),
+        issue_id: None,
+        title: "M-rename test issue".into(),
+        description: None,
+        priority: None,
+        estimate: None,
+        assignee_id: None,
+        project_id: None,
+        project_milestone_id: Some("ms_target".into()),
+        label_ids: None,
+    };
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/taskgraph/issues"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let events = journal.recent_events(10).await;
+    let issue_event = events
+        .iter()
+        .find(|rec| matches!(rec.kind, JournalEventKind::TaskGraphIssueCreated { .. }))
+        .expect("expected TaskGraphIssueCreated event in journal");
+    let payload = issue_event.payload.clone().expect("payload should be set");
+    assert_eq!(
+        payload.get("milestone_id").and_then(|v| v.as_str()),
+        Some("ms_target"),
+        "milestone id must be carried under the `milestone_id` payload field"
+    );
+    assert!(
+        payload.get("parent_identifier").is_none(),
+        "renamed `milestone_id` payload field must replace the misleading `parent_identifier`"
+    );
     handle.abort();
 }
