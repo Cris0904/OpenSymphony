@@ -9,6 +9,8 @@
 //   * return an `ActionReceipt` whose `status` reflects the Linear result;
 //   * tag the receipt with the expected task-graph-update follow-up event.
 
+#![allow(clippy::unwrap_used)]
+
 use chrono::Utc;
 use opensymphony::opensymphony_control::SnapshotStore;
 use opensymphony::opensymphony_domain::{
