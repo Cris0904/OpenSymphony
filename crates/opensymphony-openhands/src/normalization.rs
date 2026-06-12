@@ -236,6 +236,7 @@ pub fn normalize_action(
 ) -> NormalizedRecord {
     let _ = envelope;
     let mut body = json!({
+        "action_id": payload.action_id,
         "tool_name": payload.tool_name,
         "message": payload.message,
     });

@@ -131,7 +131,7 @@ fn token_only_progress_slides_stall_deadline() {
     let baseline = mirror.stall_metadata();
     let baseline_deadline = baseline.stalled_at;
 
-    mirror.apply_token_update(200, 100, TimestampMs::new(1_300));
+    mirror.apply_token_update(200, 100, 30, TimestampMs::new(1_300));
     let slid = mirror.stall_metadata();
     let slid_deadline = slid.stalled_at;
     assert!(
@@ -145,7 +145,7 @@ fn token_only_progress_slides_stall_deadline() {
     assert_eq!(snap_after.input_tokens, 200);
     assert_eq!(snap_after.output_tokens, 100);
 
-    mirror.apply_token_update(50, 25, TimestampMs::new(1_500));
+    mirror.apply_token_update(50, 25, 5, TimestampMs::new(1_500));
     let snap_after_2 = mirror.snapshot_at(TimestampMs::new(1_500));
     assert_eq!(snap_after_2.input_tokens, 250);
     assert_eq!(snap_after_2.output_tokens, 125);

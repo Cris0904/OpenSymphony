@@ -212,6 +212,11 @@ fn action_event_normalizes_into_tool_call() {
             .and_then(Value::as_str),
         Some("ls -la"),
     );
+    assert_eq!(
+        payload.get("action_id").and_then(Value::as_str),
+        Some("evt-act"),
+        "action_id must propagate so the action/observation chain stays correlatable"
+    );
     assert_eq!(normalized.record.summary, "Running `ls -la`");
 }
 

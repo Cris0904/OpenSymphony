@@ -234,10 +234,18 @@ impl RuntimeMirror {
     /// Observe a token usage bump (typically derived from an LLM completion log).
     /// Counts are deltas since the last call and they are merged into the
     /// state mirror's raw statistics blob so subsequent snapshots reflect
-    /// the new totals.
-    pub fn apply_token_update(&mut self, input_tokens: u64, output_tokens: u64, now: TimestampMs) {
+    /// the new totals. All three token buckets (prompt / completion /
+    /// cache-read) are forwarded so callers don't silently drop cache read
+    /// counts.
+    pub fn apply_token_update(
+        &mut self,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        now: TimestampMs,
+    ) {
         self.state_mirror
-            .apply_token_counts(input_tokens, output_tokens, 0);
+            .apply_token_counts(input_tokens, output_tokens, cache_read_tokens);
         self.slide_deadline(now);
     }
 
@@ -301,7 +309,7 @@ impl RuntimeMirror {
     /// the elapsed-since-last-activity comparison that
     /// [`RuntimeMirror::phase_at`] performs.
     pub fn snapshot_at(&self, now: TimestampMs) -> RuntimeProgressSnapshot {
-        Self::build_snapshot(self, now)
+        self.build_snapshot(now)
     }
 
     /// Backwards-compatible shorthand for [`RuntimeMirror::snapshot_at`] that
@@ -311,7 +319,7 @@ impl RuntimeMirror {
     /// [`RuntimeMirror::snapshot_at`] whenever silence matters.
     pub fn snapshot(&self) -> RuntimeProgressSnapshot {
         let at = self.last_logical_event_at.unwrap_or(self.started_at);
-        Self::build_snapshot(self, at)
+        self.build_snapshot(at)
     }
 
     fn build_snapshot(&self, at: TimestampMs) -> RuntimeProgressSnapshot {
@@ -811,7 +819,7 @@ mod tests {
             .expect("deadline")
             .as_u64();
         for _ in 0..5 {
-            mirror.apply_token_update(100, 50, TimestampMs::new(now));
+            mirror.apply_token_update(100, 50, 10, TimestampMs::new(now));
             let current = mirror
                 .snapshot()
                 .stall_deadline_at
