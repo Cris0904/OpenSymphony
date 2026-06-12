@@ -33,8 +33,9 @@ use opensymphony::opensymphony_gateway_schema::action::{
 };
 use reqwest::Client;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
 use uuid::Uuid;
@@ -131,7 +132,7 @@ impl LinearMutationClient for FakeLinearClient {
         self.calls
             .milestone
             .lock()
-            .unwrap()
+            .await
             .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphMilestoneResponse {
             receipt: ActionReceipt::accepted(
@@ -153,7 +154,7 @@ impl LinearMutationClient for FakeLinearClient {
         self.calls
             .issue
             .lock()
-            .unwrap()
+            .await
             .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphIssueResponse {
             receipt: ActionReceipt::accepted(
@@ -176,7 +177,7 @@ impl LinearMutationClient for FakeLinearClient {
         self.calls
             .sub_issue
             .lock()
-            .unwrap()
+            .await
             .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphSubIssueResponse {
             receipt: ActionReceipt::accepted(
@@ -199,7 +200,7 @@ impl LinearMutationClient for FakeLinearClient {
         self.calls
             .relation
             .lock()
-            .unwrap()
+            .await
             .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphRelationResponse {
             receipt: ActionReceipt::accepted(
@@ -221,7 +222,7 @@ impl LinearMutationClient for FakeLinearClient {
         self.calls
             .evidence
             .lock()
-            .unwrap()
+            .await
             .push((request.clone(), correlation_id.to_string()));
         Ok(TaskGraphEvidenceResponse {
             receipt: ActionReceipt::accepted(
@@ -284,7 +285,7 @@ async fn milestones_create_returns_accepted_receipt_with_correlation_id() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.milestone.lock().unwrap();
+    let calls = fake.calls.milestone.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].1, "corr-milestone-create");
     handle.abort();
@@ -323,7 +324,7 @@ async fn milestones_update_forwards_existing_id_to_fake_client() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.milestone.lock().unwrap();
+    let calls = fake.calls.milestone.lock().await;
     let (forwarded, cid) = &calls[0];
     assert_eq!(cid, "corr-milestone-update");
     assert_eq!(forwarded.milestone_id.as_deref(), Some("ms_existing"));
@@ -370,7 +371,7 @@ async fn issues_create_forwards_request_and_returns_receipt() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.issue.lock().unwrap();
+    let calls = fake.calls.issue.lock().await;
     let (forwarded, cid) = &calls[0];
     assert_eq!(cid, "corr-issue-create");
     assert_eq!(forwarded.title, "Demo issue");
@@ -416,7 +417,7 @@ async fn issues_update_forwards_issue_id_to_fake_client() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.issue.lock().unwrap();
+    let calls = fake.calls.issue.lock().await;
     let (forwarded, cid) = &calls[0];
     assert_eq!(cid, "corr-issue-update");
     assert_eq!(forwarded.issue_id.as_deref(), Some("iss_existing"));
@@ -464,7 +465,7 @@ async fn sub_issue_create_forwards_parent_identifier_and_returns_receipt() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.sub_issue.lock().unwrap();
+    let calls = fake.calls.sub_issue.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0.parent_identifier, "COE-405");
     handle.abort();
@@ -502,7 +503,7 @@ async fn relations_create_preserves_dependency_metadata() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.relation.lock().unwrap();
+    let calls = fake.calls.relation.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0.related_issue_id, "COE-411");
     handle.abort();
@@ -537,7 +538,7 @@ async fn evidence_create_returns_comment_receipt_with_taskgraph_followup() {
             .contains(&ExpectedFollowup::TaskGraphUpdate)
     );
 
-    let calls = fake.calls.evidence.lock().unwrap();
+    let calls = fake.calls.evidence.lock().await;
     assert_eq!(calls.len(), 1);
     handle.abort();
 }

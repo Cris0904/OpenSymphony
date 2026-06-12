@@ -195,6 +195,9 @@ pub enum MutationError {
     PermissionDenied(String),
     SchemaDrift(String),
     Upstream(String),
+    /// The mutation client is not configured (i.e. no `LinearMutationClient`
+    /// was wired into the gateway). Surfaced as HTTP 503 Service Unavailable.
+    Unavailable(String),
 }
 
 impl MutationError {
@@ -204,7 +207,93 @@ impl MutationError {
             MutationError::PermissionDenied(reason) => format!("permission denied: {reason}"),
             MutationError::SchemaDrift(reason) => format!("schema drift: {reason}"),
             MutationError::Upstream(reason) => format!("upstream error: {reason}"),
+            MutationError::Unavailable(reason) => {
+                format!("mutation client unavailable: {reason}")
+            }
         }
+    }
+}
+
+/// Trait used to expose the shared `IssueCreateInput` field set on both
+/// `TaskGraphIssueRequest` and `TaskGraphSubIssueRequest`. Lets the issue and
+/// sub-issue adapters route through one helper instead of duplicating the
+/// struct construction.
+trait IssueCreateInputFields {
+    fn description(&self) -> Option<String>;
+    fn priority(&self) -> Option<f64>;
+    fn estimate(&self) -> Option<f64>;
+    fn assignee_id(&self) -> Option<String>;
+    fn project_id(&self) -> Option<String>;
+    fn project_milestone_id(&self) -> Option<String>;
+    fn label_ids(&self) -> Option<Vec<String>>;
+}
+
+impl IssueCreateInputFields for TaskGraphIssueRequest {
+    fn description(&self) -> Option<String> {
+        self.description.clone()
+    }
+    fn priority(&self) -> Option<f64> {
+        self.priority
+    }
+    fn estimate(&self) -> Option<f64> {
+        self.estimate
+    }
+    fn assignee_id(&self) -> Option<String> {
+        self.assignee_id.clone()
+    }
+    fn project_id(&self) -> Option<String> {
+        self.project_id.clone()
+    }
+    fn project_milestone_id(&self) -> Option<String> {
+        self.project_milestone_id.clone()
+    }
+    fn label_ids(&self) -> Option<Vec<String>> {
+        self.label_ids.clone()
+    }
+}
+
+impl IssueCreateInputFields for TaskGraphSubIssueRequest {
+    fn description(&self) -> Option<String> {
+        self.description.clone()
+    }
+    fn priority(&self) -> Option<f64> {
+        self.priority
+    }
+    fn estimate(&self) -> Option<f64> {
+        self.estimate
+    }
+    fn assignee_id(&self) -> Option<String> {
+        self.assignee_id.clone()
+    }
+    fn project_id(&self) -> Option<String> {
+        self.project_id.clone()
+    }
+    fn project_milestone_id(&self) -> Option<String> {
+        self.project_milestone_id.clone()
+    }
+    fn label_ids(&self) -> Option<Vec<String>> {
+        self.label_ids.clone()
+    }
+}
+
+fn build_issue_create_input<R: IssueCreateInputFields>(
+    team_id: String,
+    title: String,
+    request: &R,
+    parent_id: Option<String>,
+) -> IssueCreateInput {
+    IssueCreateInput {
+        team_id,
+        title,
+        description: request.description(),
+        priority: request.priority(),
+        estimate: request.estimate(),
+        state_id: None,
+        assignee_id: request.assignee_id(),
+        project_id: request.project_id(),
+        project_milestone_id: request.project_milestone_id(),
+        parent_id,
+        label_ids: request.label_ids(),
     }
 }
 
@@ -273,9 +362,10 @@ impl LinearMutationClient for LinearClientMutationAdapter {
     async fn create_project_milestone(
         &self,
         request: TaskGraphMilestoneRequest,
-        correlation_id: &str,
+        _correlation_id: &str,
     ) -> Result<TaskGraphMilestoneResponse, MutationError> {
-        let _ = correlation_id;
+        // The adapter ultimately threads `request.correlation_id` into the
+        // generated `ActionReceipt`, so we don't need this parameter here.
         let project_id = request.project_id.trim().to_string();
         let name = request.name.trim().to_string();
         if project_id.is_empty() {
@@ -307,9 +397,10 @@ impl LinearMutationClient for LinearClientMutationAdapter {
     async fn create_or_update_issue(
         &self,
         request: TaskGraphIssueRequest,
-        correlation_id: &str,
+        _correlation_id: &str,
     ) -> Result<TaskGraphIssueResponse, MutationError> {
-        let _ = correlation_id;
+        // The adapter ultimately threads `request.correlation_id` into the
+        // generated `ActionReceipt`, so we don't need this parameter here.
         let team_id = request.team_id.trim().to_string();
         let title = request.title.trim().to_string();
         if team_id.is_empty() {
@@ -320,19 +411,7 @@ impl LinearMutationClient for LinearClientMutationAdapter {
         }
         let action_id = Uuid::new_v4().to_string();
         let issue_id = request.issue_id.clone();
-        let input = IssueCreateInput {
-            team_id,
-            title,
-            description: request.description,
-            priority: request.priority,
-            estimate: request.estimate,
-            state_id: None,
-            assignee_id: request.assignee_id,
-            project_id: request.project_id.clone(),
-            project_milestone_id: request.project_milestone_id.clone(),
-            parent_id: None,
-            label_ids: request.label_ids,
-        };
+        let input = build_issue_create_input(team_id, title, &request, None);
         let result: LinearIssueMutationResult = match request.op {
             IssueOp::Create => self
                 .client
@@ -370,9 +449,10 @@ impl LinearMutationClient for LinearClientMutationAdapter {
     async fn create_or_update_sub_issue(
         &self,
         request: TaskGraphSubIssueRequest,
-        correlation_id: &str,
+        _correlation_id: &str,
     ) -> Result<TaskGraphSubIssueResponse, MutationError> {
-        let _ = correlation_id;
+        // The adapter ultimately threads `request.correlation_id` into the
+        // generated `ActionReceipt`, so we don't need this parameter here.
         let team_id = request.team_id.trim().to_string();
         let title = request.title.trim().to_string();
         let parent_id = request.parent_id.trim().to_string();
@@ -386,19 +466,7 @@ impl LinearMutationClient for LinearClientMutationAdapter {
             return Err(MutationError::Validation("title is required".into()));
         }
         let action_id = Uuid::new_v4().to_string();
-        let input = IssueCreateInput {
-            team_id,
-            title,
-            description: request.description,
-            priority: request.priority,
-            estimate: request.estimate,
-            state_id: None,
-            assignee_id: request.assignee_id,
-            project_id: request.project_id.clone(),
-            project_milestone_id: request.project_milestone_id.clone(),
-            parent_id: Some(parent_id),
-            label_ids: request.label_ids,
-        };
+        let input = build_issue_create_input(team_id, title, &request, Some(parent_id));
         let result: LinearIssueMutationResult = match request.op {
             SubIssueOp::Create => self
                 .client
@@ -432,9 +500,10 @@ impl LinearMutationClient for LinearClientMutationAdapter {
     async fn create_issue_relation(
         &self,
         request: TaskGraphRelationRequest,
-        correlation_id: &str,
+        _correlation_id: &str,
     ) -> Result<TaskGraphRelationResponse, MutationError> {
-        let _ = correlation_id;
+        // The adapter ultimately threads `request.correlation_id` into the
+        // generated `ActionReceipt`, so we don't need this parameter here.
         let relation_type = request.relation_type.trim().to_string();
         if request.issue_id.trim().is_empty() {
             return Err(MutationError::Validation("issue_id is required".into()));
@@ -470,9 +539,10 @@ impl LinearMutationClient for LinearClientMutationAdapter {
     async fn create_evidence_comment(
         &self,
         request: TaskGraphEvidenceRequest,
-        correlation_id: &str,
+        _correlation_id: &str,
     ) -> Result<TaskGraphEvidenceResponse, MutationError> {
-        let _ = correlation_id;
+        // The adapter ultimately threads `request.correlation_id` into the
+        // generated `ActionReceipt`, so we don't need this parameter here.
         if request.issue_id.trim().is_empty() {
             return Err(MutationError::Validation("issue_id is required".into()));
         }
@@ -525,7 +595,9 @@ fn map_linear_err(err: crate::opensymphony_linear::LinearError) -> MutationError
     match err {
         LinearError::InvalidConfiguration(detail) => MutationError::Validation(detail),
         LinearError::HttpStatus { status, body, .. } => {
-            if status == reqwest_like_status(401) || status == reqwest_like_status(403) {
+            // Compare against the raw `u16` we already have so we don't have
+            // to allocate a `reqwest::StatusCode` just to ask "is it 401/403?".
+            if status.as_u16() == 401 || status.as_u16() == 403 {
                 MutationError::PermissionDenied(format!("linear returned HTTP {status}: {body}"))
             } else {
                 MutationError::Upstream(format!("linear returned HTTP {status}: {body}"))
@@ -561,10 +633,6 @@ fn map_linear_err(err: crate::opensymphony_linear::LinearError) -> MutationError
         LinearError::InvalidResponse(detail) => MutationError::Upstream(detail),
         other => MutationError::Upstream(other.to_string()),
     }
-}
-
-fn reqwest_like_status(code: u16) -> reqwest::StatusCode {
-    reqwest::StatusCode::from_u16(code).unwrap_or(reqwest::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn build_milestone_response_accepted(
@@ -665,6 +733,9 @@ pub fn entity_kind_for(kind: ActionKind) -> EntityKind {
 /// This is intentionally minimal: the dispatcher at `/api/v1/actions/dispatch`
 /// already handles general-purpose action auditing, and this helper just
 /// ensures the task-graph-specific variants land in the journal too.
+///
+/// Evidence/comment events are built inline in `task_graph_evidence_handler`
+/// because they need to carry the real `issue_id` alongside the comment id.
 #[allow(dead_code)]
 pub async fn append_mutation_event(
     journal: &InMemoryEventJournal,
@@ -687,23 +758,30 @@ pub async fn append_mutation_event(
             relation_id: entity_ref.id.clone(),
             relation_type: entity_ref.identifier.clone().unwrap_or_default(),
         },
-        ActionKind::TaskGraphEvidence => EventKind::TaskGraphCommentCreated {
-            comment_id: entity_ref.id.clone(),
-            issue_id: "".into(),
-        },
         other => {
             return Err(format!(
-                "append_mutation_event called with non-taskgraph action {other}"
+                "append_mutation_event called with non-taskgraph action {other} (use the inline builder for evidence)"
             ));
         }
     };
     let record =
         build_audit_event_inner("gateway", correlation_id, entity_ref, event_kind, payload);
-    journal
-        .append(record)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("{:?}", e))
+    match journal.append(record).await {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            // We deliberately do not propagate this: the journal is an audit
+            // mirror, not the source of truth for the mutation, and the
+            // already-built response is on its way to the caller. But we
+            // must not silently drop the failure — surfaced via tracing.
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                action = ?kind,
+                error = ?err,
+                "failed to append task-graph mutation event to journal",
+            );
+            Err(format!("{err:?}"))
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -769,6 +847,7 @@ fn status_for_mutation_error(err: &MutationError) -> axum::http::StatusCode {
         MutationError::PermissionDenied(_) => StatusCode::FORBIDDEN,
         MutationError::SchemaDrift(_) => StatusCode::UNPROCESSABLE_ENTITY,
         MutationError::Upstream(_) => StatusCode::BAD_GATEWAY,
+        MutationError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -851,6 +930,12 @@ async fn task_graph_milestone_handler(
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                action = "task_graph.milestone",
+                error = ?err,
+                "rejected task-graph milestone mutation",
+            );
             let receipt = ActionReceipt::rejected(
                 Uuid::new_v4().to_string(),
                 correlation_id.clone(),
@@ -864,7 +949,7 @@ async fn task_graph_milestone_handler(
     let milestone_id = response.milestone_id.clone().unwrap_or_default();
     let milestone_name = response.milestone_name.clone();
     let project_id = response.project_id.clone();
-    let _ = append_mutation_event(
+    if let Err(err) = append_mutation_event(
         &journal,
         &correlation_id,
         ActionKind::TaskGraphMilestone,
@@ -879,7 +964,15 @@ async fn task_graph_milestone_handler(
             "project_id": project_id,
         }),
     )
-    .await;
+    .await
+    {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            action = "task_graph.milestone",
+            error = %err,
+            "failed to record milestone mutation in audit journal",
+        );
+    }
     (axum::http::StatusCode::OK, Json(response)).into_response()
 }
 
@@ -899,6 +992,12 @@ async fn task_graph_issue_handler(
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                action = "task_graph.issue",
+                error = ?err,
+                "rejected task-graph issue mutation",
+            );
             let receipt = ActionReceipt::rejected(
                 Uuid::new_v4().to_string(),
                 correlation_id.clone(),
@@ -911,7 +1010,7 @@ async fn task_graph_issue_handler(
     };
     let issue_id = response.issue_id.clone().unwrap_or_default();
     let issue_identifier = response.issue_identifier.clone();
-    let _ = append_mutation_event(
+    if let Err(err) = append_mutation_event(
         &journal,
         &correlation_id,
         ActionKind::TaskGraphIssue,
@@ -925,7 +1024,15 @@ async fn task_graph_issue_handler(
             "issue_identifier": issue_identifier,
         }),
     )
-    .await;
+    .await
+    {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            action = "task_graph.issue",
+            error = %err,
+            "failed to record issue mutation in audit journal",
+        );
+    }
     (axum::http::StatusCode::OK, Json(response)).into_response()
 }
 
@@ -945,6 +1052,12 @@ async fn task_graph_sub_issue_handler(
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                action = "task_graph.sub_issue",
+                error = ?err,
+                "rejected task-graph sub-issue mutation",
+            );
             let receipt = ActionReceipt::rejected(
                 Uuid::new_v4().to_string(),
                 correlation_id.clone(),
@@ -958,7 +1071,7 @@ async fn task_graph_sub_issue_handler(
     let sub_issue_id = response.sub_issue_id.clone().unwrap_or_default();
     let sub_issue_identifier = response.sub_issue_identifier.clone();
     let parent_identifier = response.parent_identifier.clone();
-    let _ = append_mutation_event(
+    if let Err(err) = append_mutation_event(
         &journal,
         &correlation_id,
         ActionKind::TaskGraphSubIssue,
@@ -973,7 +1086,15 @@ async fn task_graph_sub_issue_handler(
             "parent_identifier": parent_identifier,
         }),
     )
-    .await;
+    .await
+    {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            action = "task_graph.sub_issue",
+            error = %err,
+            "failed to record sub-issue mutation in audit journal",
+        );
+    }
     (axum::http::StatusCode::OK, Json(response)).into_response()
 }
 
@@ -991,6 +1112,12 @@ async fn task_graph_relation_handler(
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                action = "task_graph.relation",
+                error = ?err,
+                "rejected task-graph relation mutation",
+            );
             let receipt = ActionReceipt::rejected(
                 Uuid::new_v4().to_string(),
                 correlation_id.clone(),
@@ -1004,7 +1131,7 @@ async fn task_graph_relation_handler(
     let relation_id = response.relation_id.clone().unwrap_or_default();
     let related_issue_id = response.related_issue_id.clone().unwrap_or_default();
     let relation_type = response.relation_type.clone().unwrap_or_default();
-    let _ = append_mutation_event(
+    if let Err(err) = append_mutation_event(
         &journal,
         &correlation_id,
         ActionKind::TaskGraphRelation,
@@ -1019,7 +1146,15 @@ async fn task_graph_relation_handler(
             "relation_type": relation_type,
         }),
     )
-    .await;
+    .await
+    {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            action = "task_graph.relation",
+            error = %err,
+            "failed to record relation mutation in audit journal",
+        );
+    }
     (axum::http::StatusCode::OK, Json(response)).into_response()
 }
 
@@ -1039,6 +1174,12 @@ async fn task_graph_evidence_handler(
     let response = match result {
         Ok(resp) => resp,
         Err(err) => {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                action = "task_graph.evidence",
+                error = ?err,
+                "rejected task-graph evidence mutation",
+            );
             let receipt = ActionReceipt::rejected(
                 Uuid::new_v4().to_string(),
                 correlation_id.clone(),
@@ -1052,21 +1193,33 @@ async fn task_graph_evidence_handler(
     let comment_id = response.comment_id.clone().unwrap_or_default();
     let issue_id = response.issue_id.clone().unwrap_or_default();
     let issue_identifier = response.issue_identifier.clone();
-    let _ = append_mutation_event(
-        &journal,
-        &correlation_id,
-        ActionKind::TaskGraphEvidence,
-        EntityRef {
-            kind: entity_kind_for(ActionKind::TaskGraphEvidence),
-            id: comment_id.clone(),
-            identifier: issue_identifier.clone(),
-        },
-        serde_json::json!({
-            "comment_id": comment_id,
-            "issue_id": issue_id,
-            "issue_identifier": issue_identifier,
-        }),
-    )
-    .await;
+
+    // Build the audit event directly so we can carry both `comment_id` AND
+    // the real `issue_id` (the shared helper stamped `issue_id = ""` for
+    // evidence, which lost correlation).
+    let event_kind = EventKind::TaskGraphCommentCreated {
+        comment_id: comment_id.clone(),
+        issue_id: issue_id.clone(),
+    };
+    let entity_ref = EntityRef {
+        kind: entity_kind_for(ActionKind::TaskGraphEvidence),
+        id: comment_id.clone(),
+        identifier: issue_identifier.clone(),
+    };
+    let payload = serde_json::json!({
+        "comment_id": comment_id,
+        "issue_id": issue_id,
+        "issue_identifier": issue_identifier,
+    });
+    let record =
+        build_audit_event_inner("gateway", &correlation_id, entity_ref, event_kind, payload);
+    if let Err(err) = journal.append(record).await {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            action = "task_graph.evidence",
+            error = ?err,
+            "failed to append TaskGraphCommentCreated event to journal",
+        );
+    }
     (axum::http::StatusCode::OK, Json(response)).into_response()
 }

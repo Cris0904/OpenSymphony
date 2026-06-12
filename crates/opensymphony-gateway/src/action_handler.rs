@@ -443,8 +443,9 @@ fn validate_generic(
 /// relations, evidence notes). They are inherently safe at the gateway
 /// validation layer (the gateway is not an orchestrator), so they only need:
 ///
-/// 1. The action target entity kind must be one of `Milestone`, `Issue`, or
-///    `SubIssue`. Relation and evidence actions still target an issue.
+/// 1. The action target entity kind must be one of `Milestone`, `Issue`,
+///    `SubIssue`, or `Project`. Relation and evidence actions still target an
+///    issue under the hood, so the kind stays `Issue`/`SubIssue` here.
 /// 2. The correlation ID must be non-empty so events can be correlated with
 ///    the returned action receipt.
 /// 3. If a payload shape is supplied, it must be a JSON object — non-object
