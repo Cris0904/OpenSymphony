@@ -128,11 +128,14 @@ impl PlanCompiler {
             edges: dependency_edges,
         };
 
-        sort_messages(&mut taxonomy_violations, &mut validation_messages);
         underspecified_sub_issues.sort_by(|a, b| a.sub_issue_id.cmp(&b.sub_issue_id));
 
         // Cross-check manifest milestones against compiled milestones.
         validate_manifest_consistency(manifest, &compiled_milestones, &mut validation_messages);
+
+        // Sort the validation message vectors AFTER the manifest consistency
+        // step so the new diagnostic messages join the same deterministic order.
+        sort_messages(&mut taxonomy_violations, &mut validation_messages);
 
         let receipt_struct = build_publish_receipt(
             planning_wave,
@@ -454,7 +457,7 @@ fn validate_manifest_consistency(
             .any(|t| t.id.0.as_str() == *task_id && t.file.as_str() == *compiled_file);
         if !in_manifest {
             validation_messages.push(ValidationMessage::error(
-                None,
+                Some(TaskId(task_id.to_string())),
                 "tasks",
                 format!(
                     "Compiled task '{}' (file '{}') is missing from manifest tasks list",
@@ -1190,18 +1193,27 @@ mod tests {
                 .any(|e| matches!(e.relation, DependencyRelation::ParentOf))
         );
 
-        // The compiler must surface actionable diagnostics when the generator
-        // omits required fields. End-to-end means we accept either outcome
-        // (publishable or not), but the diagnostics lists must always be
-        // coherent.
-        let coherence = result
-            .taxonomy_violations
-            .iter()
-            .zip(result.validation_messages.iter())
-            .count();
+        // The compiler must preserve the planning wave identity and surface a
+        // deterministic structure regardless of whether the generator's output
+        // is publishable as-is. Specifically: total_nodes counts every
+        // milestone + issue + sub-issue, and that count must agree with the
+        // compiled hierarchy depth.
         assert_eq!(
-            coherence, 0,
-            "taxonomy_violations and validation_messages should be independent vectors",
+            result.dependency_metadata.total_nodes,
+            result.applied_hierarchy.milestones.len()
+                + result
+                    .applied_hierarchy
+                    .milestones
+                    .iter()
+                    .map(|m| m.issues.len())
+                    .sum::<usize>()
+                + result
+                    .applied_hierarchy
+                    .milestones
+                    .iter()
+                    .flat_map(|m| m.issues.iter())
+                    .map(|i| i.sub_issues.len())
+                    .sum::<usize>()
         );
     }
 }
