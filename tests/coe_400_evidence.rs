@@ -32,8 +32,8 @@ use tokio::time::timeout;
 use opensymphony_domain::{ConversationId, DurationMs, RuntimeLivenessPhase, TimestampMs};
 use opensymphony_gateway_schema::event_journal::EventKind;
 use opensymphony_openhands::{
-    ConversationCreateRequest, EventEnvelope, MirrorConfig, NormalizationContext, NormalizationError,
-    NormalizedEvent, OpenHandsClient, RuntimeMirror, RuntimeStreamConfig,
+    ConversationCreateRequest, EventEnvelope, MirrorConfig, NormalizationContext,
+    NormalizationError, NormalizedEvent, OpenHandsClient, RuntimeMirror, RuntimeStreamConfig,
     SendMessageRequest, TransportConfig, normalize_event,
 };
 use opensymphony_testkit::FakeOpenHandsServer;
@@ -116,8 +116,9 @@ async fn end_to_end_evidence_collects_typed_envelopes_and_mirror_snapshots() {
     let drain = async {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while std::time::Instant::now() < deadline {
-            if let Some(Ok(Some(event))) =
-                timeout(Duration::from_millis(500), stream.next_event()).await.ok()
+            if let Some(Ok(Some(event))) = timeout(Duration::from_millis(500), stream.next_event())
+                .await
+                .ok()
             {
                 let normalized = normalize(&event).expect("normalize");
                 match normalized.record.kind.clone() {

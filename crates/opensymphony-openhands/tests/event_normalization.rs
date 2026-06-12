@@ -18,8 +18,7 @@ use uuid::Uuid;
 use crate::opensymphony_domain::ConversationId;
 use crate::opensymphony_gateway_schema::event_journal::EventKind;
 use crate::opensymphony_openhands::{
-    EventEnvelope, NormalizationContext, NormalizedEvent,
-    UNKNOWN_RAW_REF_PREFIX, normalize_event,
+    EventEnvelope, NormalizationContext, NormalizedEvent, UNKNOWN_RAW_REF_PREFIX, normalize_event,
 };
 
 fn conversation_id() -> ConversationId {
@@ -154,7 +153,10 @@ fn empty_source_routes_to_unknown_with_harness_actor() {
         normalized.record.actor.actor_id(),
         "openhands-agent-server-v1"
     );
-    assert_eq!(normalized.raw_payload, json!({ "role": "user", "content": [] }));
+    assert_eq!(
+        normalized.raw_payload,
+        json!({ "role": "user", "content": [] })
+    );
 }
 
 #[test]

@@ -388,10 +388,11 @@ impl RuntimeMirror {
         // once we cross idle_timeout the linear envelope transitions to Stalled.
         let quiet_in_range = quiet_window > 0
             && quiet_window < idle_timeout
-            && now >= self
-                .stall
-                .last_activity_at
-                .saturating_add(DurationMs::new(quiet_window))
+            && now
+                >= self
+                    .stall
+                    .last_activity_at
+                    .saturating_add(DurationMs::new(quiet_window))
             && !self.stall.is_stalled_at(now);
         if quiet_in_range {
             return RuntimeLivenessPhase::Quiet;
