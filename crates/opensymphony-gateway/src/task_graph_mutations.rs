@@ -46,7 +46,8 @@ pub struct TaskGraphMilestoneRequest {
     pub op: MilestoneOp,
     pub idempotency_key: Option<String>,
     pub project_id: String,
-    /// Required for `Create`; required for `Update` (forwarded as the URL id).
+    /// Required for `Update`; forwarded as the URL id and validated by the
+    /// adapter. Ignored for `Create` (the milestone id is chosen by Linear).
     pub milestone_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
@@ -302,7 +303,9 @@ fn build_issue_create_input<R: IssueCreateInputFields>(
 
 #[async_trait]
 pub trait LinearMutationClient: Send + Sync + 'static {
-    async fn create_project_milestone(
+    /// Dispatch a milestone mutation. The `op` field on `request` selects
+    /// which underlying Linear mutation the adapter performs.
+    async fn create_or_update_project_milestone(
         &self,
         request: TaskGraphMilestoneRequest,
         correlation_id: &str,
@@ -342,7 +345,7 @@ pub trait LinearMutationClient: Send + Sync + 'static {
 use crate::opensymphony_linear::{
     IssueCreateInput, IssueUpdateInput, LinearClient, LinearCommentMutationResult,
     LinearIssueMutationResult, LinearIssueRelationMutationResult, LinearMilestoneMutationResult,
-    ProjectMilestoneCreateInput,
+    ProjectMilestoneCreateInput, ProjectMilestoneUpdateInput,
 };
 
 pub struct LinearClientMutationAdapter {
@@ -357,7 +360,7 @@ impl LinearClientMutationAdapter {
 
 #[async_trait]
 impl LinearMutationClient for LinearClientMutationAdapter {
-    async fn create_project_milestone(
+    async fn create_or_update_project_milestone(
         &self,
         request: TaskGraphMilestoneRequest,
         _correlation_id: &str,
@@ -365,26 +368,44 @@ impl LinearMutationClient for LinearClientMutationAdapter {
         // The adapter ultimately threads `request.correlation_id` into the
         // generated `ActionReceipt`, so we don't need this parameter here.
         let project_id = request.project_id.trim().to_string();
-        let name = request.name.trim().to_string();
         if project_id.is_empty() {
             return Err(MutationError::Validation("project_id is required".into()));
         }
+        let name = request.name.trim().to_string();
         if name.is_empty() {
             return Err(MutationError::Validation("name is required".into()));
         }
         let action_id = Uuid::new_v4().to_string();
-        let input = ProjectMilestoneCreateInput {
-            project_id,
-            name,
-            description: request.description,
-            target_date: request.target_date,
-            sort_order: request.sort_order,
+        let result: LinearMilestoneMutationResult = match request.op {
+            MilestoneOp::Create => {
+                let input = ProjectMilestoneCreateInput {
+                    project_id,
+                    name,
+                    description: request.description,
+                    target_date: request.target_date,
+                    sort_order: request.sort_order,
+                };
+                self.client
+                    .create_project_milestone(input)
+                    .await
+                    .map_err(map_linear_err)?
+            }
+            MilestoneOp::Update => {
+                let milestone_id = request.milestone_id.clone().ok_or_else(|| {
+                    MutationError::Validation("milestone_id required for update".into())
+                })?;
+                let input = ProjectMilestoneUpdateInput {
+                    name: Some(name),
+                    description: request.description,
+                    target_date: request.target_date,
+                    sort_order: request.sort_order,
+                };
+                self.client
+                    .update_project_milestone(&milestone_id, input)
+                    .await
+                    .map_err(map_linear_err)?
+            }
         };
-        let result: LinearMilestoneMutationResult = self
-            .client
-            .create_project_milestone(input)
-            .await
-            .map_err(map_linear_err)?;
         Ok(build_milestone_response_accepted(
             &action_id,
             &result,
@@ -742,23 +763,77 @@ pub async fn append_mutation_event(
     entity_ref: EntityRef,
     payload: Value,
 ) -> Result<(), String> {
-    let event_kind = match kind {
-        ActionKind::TaskGraphMilestone => EventKind::TaskGraphMilestoneUpdated {
+    append_mutation_event_with_op(
+        journal,
+        correlation_id,
+        MutationOp::Upsert,
+        kind,
+        entity_ref,
+        payload,
+    )
+    .await
+}
+
+/// Like [`append_mutation_event`] but lets the caller pick between the
+/// `Created` and `Updated` event variants on the resulting `TaskGraph*`
+/// event. Default behavior for relation events and any unknown action kind
+/// is unchanged.
+#[allow(dead_code)]
+pub async fn append_mutation_event_with_op(
+    journal: &InMemoryEventJournal,
+    correlation_id: &str,
+    op: MutationOp,
+    kind: ActionKind,
+    entity_ref: EntityRef,
+    payload: Value,
+) -> Result<(), String> {
+    use MutationOp::*;
+    let event_kind = match (kind, op) {
+        (ActionKind::TaskGraphMilestone, Created) => EventKind::TaskGraphMilestoneCreated {
             milestone_id: entity_ref.id.clone(),
         },
-        ActionKind::TaskGraphIssue => EventKind::TaskGraphIssueUpdated {
+        (ActionKind::TaskGraphMilestone, Updated) => EventKind::TaskGraphMilestoneUpdated {
+            milestone_id: entity_ref.id.clone(),
+        },
+        (ActionKind::TaskGraphIssue, Created) => {
+            // Created events surface the issue's parent identifier (e.g.
+            // `COE-405`) so downstream caches can reason about where the
+            // new node lives in the dependency graph.
+            let parent_identifier = payload
+                .get("parent_identifier")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_owned());
+            EventKind::TaskGraphIssueCreated {
+                issue_id: entity_ref.id.clone(),
+                parent_identifier,
+            }
+        }
+        (ActionKind::TaskGraphIssue, _) => EventKind::TaskGraphIssueUpdated {
             issue_id: entity_ref.id.clone(),
         },
-        ActionKind::TaskGraphSubIssue => EventKind::TaskGraphSubIssueUpdated {
+        (ActionKind::TaskGraphSubIssue, Created) => {
+            // Sub-issue Created events carry the parent identifier
+            // explicitly (sub-issues always have a parent).
+            let parent_identifier = payload
+                .get("parent_identifier")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
+            EventKind::TaskGraphSubIssueCreated {
+                sub_issue_id: entity_ref.id.clone(),
+                parent_identifier,
+            }
+        }
+        (ActionKind::TaskGraphSubIssue, _) => EventKind::TaskGraphSubIssueUpdated {
             sub_issue_id: entity_ref.id.clone(),
         },
-        ActionKind::TaskGraphRelation => EventKind::TaskGraphRelationCreated {
+        (ActionKind::TaskGraphRelation, _) => EventKind::TaskGraphRelationCreated {
             relation_id: entity_ref.id.clone(),
             relation_type: entity_ref.identifier.clone().unwrap_or_default(),
         },
-        other => {
+        (other, _) => {
             return Err(format!(
-                "append_mutation_event called with non-taskgraph action {other} (use the inline builder for evidence)"
+                "append_mutation_event_with_op called with non-taskgraph action {other} (use the inline builder for evidence)"
             ));
         }
     };
@@ -780,6 +855,19 @@ pub async fn append_mutation_event(
             Err(format!("{err:?}"))
         }
     }
+}
+
+/// `Created` vs `Updated` modifier for [`append_mutation_event_with_op`].
+///
+/// `Upsert` is the backwards-compatible default that picks the `Updated`
+/// variant for issue / milestone / sub-issue actions (matching the pre-fix
+/// behaviour, kept so callers that genuinely don't know the op semantic
+/// fall back to something sensible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutationOp {
+    Created,
+    Updated,
+    Upsert,
 }
 
 #[allow(dead_code)]
@@ -920,10 +1008,11 @@ async fn task_graph_milestone_handler(
         return mutation_client_unavailable();
     };
     let correlation_id = ensure_correlation_id(&request.correlation_id);
+    let op = request.op.clone();
     request.correlation_id = correlation_id.clone();
     let journal = state.journal.clone();
     let result = client
-        .create_project_milestone(request, &correlation_id)
+        .create_or_update_project_milestone(request, &correlation_id)
         .await;
     let response = match result {
         Ok(resp) => resp,
@@ -947,9 +1036,14 @@ async fn task_graph_milestone_handler(
     let milestone_id = response.milestone_id.clone().unwrap_or_default();
     let milestone_name = response.milestone_name.clone();
     let project_id = response.project_id.clone();
-    if let Err(err) = append_mutation_event(
+    let event_op = match op {
+        MilestoneOp::Create => MutationOp::Created,
+        MilestoneOp::Update => MutationOp::Updated,
+    };
+    if let Err(err) = append_mutation_event_with_op(
         &journal,
         &correlation_id,
+        event_op,
         ActionKind::TaskGraphMilestone,
         EntityRef {
             kind: entity_kind_for(ActionKind::TaskGraphMilestone),
@@ -982,6 +1076,7 @@ async fn task_graph_issue_handler(
         return mutation_client_unavailable();
     };
     let correlation_id = ensure_correlation_id(&request.correlation_id);
+    let op = request.op.clone();
     request.correlation_id = correlation_id.clone();
     let journal = state.journal.clone();
     let result = client
@@ -1008,9 +1103,14 @@ async fn task_graph_issue_handler(
     };
     let issue_id = response.issue_id.clone().unwrap_or_default();
     let issue_identifier = response.issue_identifier.clone();
-    if let Err(err) = append_mutation_event(
+    let event_op = match op {
+        IssueOp::Create => MutationOp::Created,
+        IssueOp::Update => MutationOp::Updated,
+    };
+    if let Err(err) = append_mutation_event_with_op(
         &journal,
         &correlation_id,
+        event_op,
         ActionKind::TaskGraphIssue,
         EntityRef {
             kind: entity_kind_for(ActionKind::TaskGraphIssue),
@@ -1020,6 +1120,7 @@ async fn task_graph_issue_handler(
         serde_json::json!({
             "issue_id": issue_id,
             "issue_identifier": issue_identifier,
+            "parent_identifier": response.project_milestone_id.clone(),
         }),
     )
     .await
@@ -1042,6 +1143,7 @@ async fn task_graph_sub_issue_handler(
         return mutation_client_unavailable();
     };
     let correlation_id = ensure_correlation_id(&request.correlation_id);
+    let op = request.op.clone();
     request.correlation_id = correlation_id.clone();
     let journal = state.journal.clone();
     let result = client
@@ -1069,9 +1171,14 @@ async fn task_graph_sub_issue_handler(
     let sub_issue_id = response.sub_issue_id.clone().unwrap_or_default();
     let sub_issue_identifier = response.sub_issue_identifier.clone();
     let parent_identifier = response.parent_identifier.clone();
-    if let Err(err) = append_mutation_event(
+    let event_op = match op {
+        SubIssueOp::Create => MutationOp::Created,
+        SubIssueOp::Update => MutationOp::Updated,
+    };
+    if let Err(err) = append_mutation_event_with_op(
         &journal,
         &correlation_id,
+        event_op,
         ActionKind::TaskGraphSubIssue,
         EntityRef {
             kind: entity_kind_for(ActionKind::TaskGraphSubIssue),

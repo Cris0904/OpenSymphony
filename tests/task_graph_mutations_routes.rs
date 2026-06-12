@@ -31,6 +31,7 @@ use opensymphony::opensymphony_gateway::{
 use opensymphony::opensymphony_gateway_schema::action::{
     ActionKind, ActionReceipt, ActionStatus, ExpectedFollowup,
 };
+use opensymphony::opensymphony_gateway_schema::event_journal::EventKind as JournalEventKind;
 use reqwest::Client;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -124,11 +125,16 @@ impl FakeLinearClient {
 
 #[async_trait::async_trait]
 impl LinearMutationClient for FakeLinearClient {
-    async fn create_project_milestone(
+    async fn create_or_update_project_milestone(
         &self,
         request: TaskGraphMilestoneRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphMilestoneResponse, MutationError> {
+        if matches!(request.op, MilestoneOp::Update) && request.milestone_id.is_none() {
+            return Err(MutationError::Validation(
+                "milestone_id required for update".into(),
+            ));
+        }
         self.calls
             .milestone
             .lock()
@@ -140,7 +146,13 @@ impl LinearMutationClient for FakeLinearClient {
                 correlation_id,
                 ActionKind::TaskGraphMilestone,
             ),
-            milestone_id: Some("ms_fake".into()),
+            milestone_id: Some(match request.op {
+                MilestoneOp::Update => request
+                    .milestone_id
+                    .clone()
+                    .unwrap_or_else(|| "ms_fake".to_owned()),
+                MilestoneOp::Create => "ms_fake".into(),
+            }),
             milestone_name: Some(request.name),
             project_id: Some(request.project_id),
         })
@@ -162,7 +174,13 @@ impl LinearMutationClient for FakeLinearClient {
                 correlation_id,
                 ActionKind::TaskGraphIssue,
             ),
-            issue_id: Some("iss_fake".into()),
+            issue_id: Some(match request.op {
+                IssueOp::Update => request
+                    .issue_id
+                    .clone()
+                    .unwrap_or_else(|| "iss_fake".to_owned()),
+                IssueOp::Create => "iss_fake".into(),
+            }),
             issue_identifier: Some(request.title),
             state_id: None,
             project_milestone_id: request.project_milestone_id,
@@ -174,18 +192,32 @@ impl LinearMutationClient for FakeLinearClient {
         request: TaskGraphSubIssueRequest,
         correlation_id: &str,
     ) -> Result<TaskGraphSubIssueResponse, MutationError> {
+        if matches!(request.op, SubIssueOp::Update)
+            && request.sub_issue_id.as_deref().is_none_or(str::is_empty)
+        {
+            return Err(MutationError::Validation(
+                "sub_issue_id required for update".into(),
+            ));
+        }
         self.calls
             .sub_issue
             .lock()
             .await
             .push((request.clone(), correlation_id.to_string()));
+        let sub_issue_id = match request.op {
+            SubIssueOp::Update => request
+                .sub_issue_id
+                .clone()
+                .unwrap_or_else(|| "sub_fake".to_owned()),
+            SubIssueOp::Create => "sub_fake".into(),
+        };
         Ok(TaskGraphSubIssueResponse {
             receipt: ActionReceipt::accepted(
                 Uuid::new_v4().to_string(),
                 correlation_id,
                 ActionKind::TaskGraphSubIssue,
             ),
-            sub_issue_id: Some("sub_fake".into()),
+            sub_issue_id: Some(sub_issue_id),
             sub_issue_identifier: Some(request.title),
             parent_identifier: Some(request.parent_identifier),
             state_id: None,
@@ -238,16 +270,33 @@ impl LinearMutationClient for FakeLinearClient {
 }
 
 async fn start_test_server(client: Arc<FakeLinearClient>) -> (JoinHandle<()>, SocketAddr) {
+    let (handle, addr, _journal) = start_test_server_with_journal(client).await;
+    (handle, addr)
+}
+
+async fn start_test_server_with_journal(
+    client: Arc<FakeLinearClient>,
+) -> (
+    JoinHandle<()>,
+    SocketAddr,
+    opensymphony::opensymphony_domain::InMemoryEventJournal,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = SnapshotStore::new(fixture_snapshot(0));
-    let server = GatewayServer::new(store)
-        .with_linear_mutations(Some(client as Arc<dyn LinearMutationClient>));
+    let journal = opensymphony::opensymphony_domain::InMemoryEventJournal::new(1024, 64);
+    let journal_handle = journal.clone();
+    let server = GatewayServer::with_journal(
+        store,
+        journal.clone(),
+        opensymphony::opensymphony_domain::StreamBroker::new(journal.clone()),
+    )
+    .with_linear_mutations(Some(client as Arc<dyn LinearMutationClient>));
     let handle = tokio::spawn(async move {
         let _ = server.serve(listener).await;
     });
     sleep(Duration::from_millis(25)).await;
-    (handle, addr)
+    (handle, addr, journal_handle)
 }
 
 #[tokio::test]
@@ -294,7 +343,7 @@ async fn milestones_create_returns_accepted_receipt_with_correlation_id() {
 #[tokio::test]
 async fn milestones_update_forwards_existing_id_to_fake_client() {
     let fake = Arc::new(FakeLinearClient::new());
-    let (handle, addr) = start_test_server(fake.clone()).await;
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
 
     let req = TaskGraphMilestoneRequest {
         schema_version: "1.0.0".into(),
@@ -317,6 +366,7 @@ async fn milestones_update_forwards_existing_id_to_fake_client() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: TaskGraphMilestoneResponse = resp.json().await.unwrap();
+    assert_eq!(body.milestone_id.as_deref(), Some("ms_existing"));
     assert_eq!(body.receipt.correlation_id, "corr-milestone-update");
     assert!(
         body.receipt
@@ -328,13 +378,108 @@ async fn milestones_update_forwards_existing_id_to_fake_client() {
     let (forwarded, cid) = &calls[0];
     assert_eq!(cid, "corr-milestone-update");
     assert_eq!(forwarded.milestone_id.as_deref(), Some("ms_existing"));
+    assert!(matches!(forwarded.op, MilestoneOp::Update));
+
+    // The audit event must be `Updated` for an Update op (not the
+    // pre-fix `Created` shape); see COE-405 review feedback round 4.
+    let events = journal.recent_events(10).await;
+    assert!(
+        events.iter().any(|rec| matches!(
+            rec.kind,
+            JournalEventKind::TaskGraphMilestoneUpdated { ref milestone_id } if milestone_id == "ms_existing"
+        )),
+        "expected TaskGraphMilestoneUpdated{{milestone_id=\"ms_existing\"}} in {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|rec| matches!(rec.kind, JournalEventKind::TaskGraphMilestoneCreated { .. })),
+        "did not expect a TaskGraphMilestoneCreated event for an Update op: {events:?}"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn milestones_create_emits_created_event_in_journal() {
+    let fake = Arc::new(FakeLinearClient::new());
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
+
+    let req = TaskGraphMilestoneRequest {
+        schema_version: "1.0.0".into(),
+        correlation_id: "corr-milestone-create-audit".into(),
+        op: MilestoneOp::Create,
+        idempotency_key: None,
+        project_id: "proj_1".into(),
+        milestone_id: None,
+        name: "M1 created".into(),
+        description: Some("desc".into()),
+        target_date: None,
+        sort_order: None,
+    };
+
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/taskgraph/milestones"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let events = journal.recent_events(10).await;
+    assert!(
+        events.iter().any(|rec| matches!(
+            rec.kind,
+            JournalEventKind::TaskGraphMilestoneCreated { ref milestone_id } if milestone_id == "ms_fake"
+        )),
+        "expected TaskGraphMilestoneCreated{{milestone_id=\"ms_fake\"}} in {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|rec| !matches!(rec.kind, JournalEventKind::TaskGraphMilestoneUpdated { .. })),
+        "did not expect any TaskGraphMilestoneUpdated events for a Create op: {events:?}"
+    );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn milestones_update_without_id_is_rejected() {
+    let fake = Arc::new(FakeLinearClient::new());
+    let (handle, addr, _journal) = start_test_server_with_journal(fake.clone()).await;
+
+    let req = TaskGraphMilestoneRequest {
+        schema_version: "1.0.0".into(),
+        correlation_id: "corr-milestone-update-missing-id".into(),
+        op: MilestoneOp::Update,
+        idempotency_key: None,
+        project_id: "proj_1".into(),
+        milestone_id: None, // missing for an Update → should be rejected
+        name: "M1 anonymous".into(),
+        description: None,
+        target_date: None,
+        sort_order: None,
+    };
+
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/taskgraph/milestones"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: TaskGraphMilestoneResponse = resp.json().await.unwrap();
+    assert_eq!(body.receipt.status, ActionStatus::Rejected);
+
+    // The fake client never sees Update requests that fail validation.
+    let calls = fake.calls.milestone.lock().await;
+    assert!(calls.is_empty());
     handle.abort();
 }
 
 #[tokio::test]
 async fn issues_create_forwards_request_and_returns_receipt() {
     let fake = Arc::new(FakeLinearClient::new());
-    let (handle, addr) = start_test_server(fake.clone()).await;
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
 
     let req = TaskGraphIssueRequest {
         schema_version: "1.0.0".into(),
@@ -375,13 +520,24 @@ async fn issues_create_forwards_request_and_returns_receipt() {
     assert_eq!(cid, "corr-issue-create");
     assert_eq!(forwarded.title, "Demo issue");
     assert_eq!(forwarded.team_id, "team_1");
+    assert!(matches!(forwarded.op, IssueOp::Create));
+
+    // Create op must emit the `TaskGraphIssueCreated` event variant.
+    let events = journal.recent_events(10).await;
+    assert!(
+        events.iter().any(|rec| matches!(
+            rec.kind,
+            JournalEventKind::TaskGraphIssueCreated { ref issue_id, .. } if issue_id == "iss_fake"
+        )),
+        "expected TaskGraphIssueCreated{{issue_id=\"iss_fake\"}} in {events:?}"
+    );
     handle.abort();
 }
 
 #[tokio::test]
 async fn issues_update_forwards_issue_id_to_fake_client() {
     let fake = Arc::new(FakeLinearClient::new());
-    let (handle, addr) = start_test_server(fake.clone()).await;
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
 
     let req = TaskGraphIssueRequest {
         schema_version: "1.0.0".into(),
@@ -419,13 +575,31 @@ async fn issues_update_forwards_issue_id_to_fake_client() {
     let (forwarded, cid) = &calls[0];
     assert_eq!(cid, "corr-issue-update");
     assert_eq!(forwarded.issue_id.as_deref(), Some("iss_existing"));
+    assert!(matches!(forwarded.op, IssueOp::Update));
+
+    // Update op must emit the `TaskGraphIssueUpdated` event variant
+    // (not `TaskGraphIssueCreated`).
+    let events = journal.recent_events(10).await;
+    assert!(
+        events.iter().any(|rec| matches!(
+            rec.kind,
+            JournalEventKind::TaskGraphIssueUpdated { ref issue_id } if issue_id == "iss_existing"
+        )),
+        "expected TaskGraphIssueUpdated{{issue_id=\"iss_existing\"}} in {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|rec| matches!(rec.kind, JournalEventKind::TaskGraphIssueCreated { .. })),
+        "did not expect a TaskGraphIssueCreated event for an Update op: {events:?}"
+    );
     handle.abort();
 }
 
 #[tokio::test]
 async fn sub_issue_create_forwards_parent_identifier_and_returns_receipt() {
     let fake = Arc::new(FakeLinearClient::new());
-    let (handle, addr) = start_test_server(fake.clone()).await;
+    let (handle, addr, journal) = start_test_server_with_journal(fake.clone()).await;
 
     let req = TaskGraphSubIssueRequest {
         schema_version: "1.0.0".into(),
@@ -465,6 +639,19 @@ async fn sub_issue_create_forwards_parent_identifier_and_returns_receipt() {
     let calls = fake.calls.sub_issue.lock().await;
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0.parent_identifier, "COE-405");
+    assert!(matches!(calls[0].0.op, SubIssueOp::Create));
+
+    // Create op must emit `TaskGraphSubIssueCreated` and carry the parent
+    // identifier so downstream caches can correlate the new node.
+    let events = journal.recent_events(10).await;
+    assert!(
+        events.iter().any(|rec| matches!(
+            rec.kind,
+            JournalEventKind::TaskGraphSubIssueCreated { ref sub_issue_id, ref parent_identifier }
+            if sub_issue_id == "sub_fake" && parent_identifier == "COE-405"
+        )),
+        "expected TaskGraphSubIssueCreated{{sub_issue_id=\"sub_fake\", parent_identifier=\"COE-405\"}} in {events:?}"
+    );
     handle.abort();
 }
 

@@ -38,11 +38,12 @@ use action_handler::ActionHandler;
 // `opensymphony::opensymphony_gateway::TaskGraphMilestoneRequest` etc.
 pub use task_graph_mutations::{
     IssueOp, LinearClientMutationAdapter, LinearMutationClient, MilestoneOp, MutationError,
-    SubIssueOp, TaskGraphEvidenceRequest, TaskGraphEvidenceResponse, TaskGraphIssueRequest,
-    TaskGraphIssueResponse, TaskGraphMilestoneRequest, TaskGraphMilestoneResponse,
-    TaskGraphMutationState, TaskGraphRelationRequest, TaskGraphRelationResponse,
-    TaskGraphSubIssueRequest, TaskGraphSubIssueResponse, append_mutation_event, entity_kind_for,
-    receipt_status, task_graph_router,
+    MutationOp, SubIssueOp, TaskGraphEvidenceRequest, TaskGraphEvidenceResponse,
+    TaskGraphIssueRequest, TaskGraphIssueResponse, TaskGraphMilestoneRequest,
+    TaskGraphMilestoneResponse, TaskGraphMutationState, TaskGraphRelationRequest,
+    TaskGraphRelationResponse, TaskGraphSubIssueRequest, TaskGraphSubIssueResponse,
+    append_mutation_event, append_mutation_event_with_op, entity_kind_for, receipt_status,
+    task_graph_router,
 };
 
 pub use crate::opensymphony_control::SnapshotStore;
