@@ -370,14 +370,34 @@ impl RuntimeMirror {
         ) {
             return RuntimeLivenessPhase::WaitingOnPriorTurn;
         }
+        // Quiet precedes Stalled on purpose: the docstring on [`RuntimeLivenessPhase::Quiet`]
+        // promises that we let a quiet-but-not-yet-stalled run surface new events before we
+        // declare it stalled. We also guard against configs where `quiet_window >=
+        // idle_timeout` so the operator cannot accidentally collapse Quiet into Stalled.
+        let quiet_window = self
+            .config
+            .quiet_window_ms
+            .unwrap_or(DurationMs::new(0))
+            .as_u64();
+        let idle_timeout = self
+            .config
+            .idle_timeout_ms
+            .unwrap_or(QUIET_SAFE_IDLE_FLOOR)
+            .as_u64();
+        // Quiet is the band *between* the quiet_window mark and the stall mark —
+        // once we cross idle_timeout the linear envelope transitions to Stalled.
+        let quiet_in_range = quiet_window > 0
+            && quiet_window < idle_timeout
+            && now >= self
+                .stall
+                .last_activity_at
+                .saturating_add(DurationMs::new(quiet_window))
+            && !self.stall.is_stalled_at(now);
+        if quiet_in_range {
+            return RuntimeLivenessPhase::Quiet;
+        }
         if self.stall.is_stalled_at(now) {
             return RuntimeLivenessPhase::Stalled;
-        }
-        let quiet_window = self.config.quiet_window_ms.unwrap_or(DurationMs::new(0));
-        if quiet_window.as_u64() > 0
-            && now >= self.stall.last_activity_at.saturating_add(quiet_window)
-        {
-            return RuntimeLivenessPhase::Quiet;
         }
         RuntimeLivenessPhase::RunningTurn
     }

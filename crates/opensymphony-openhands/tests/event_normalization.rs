@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::opensymphony_domain::ConversationId;
 use crate::opensymphony_gateway_schema::event_journal::EventKind;
 use crate::opensymphony_openhands::{
-    EventEnvelope, NormalizationContext, NormalizationError, NormalizedEvent,
+    EventEnvelope, NormalizationContext, NormalizedEvent,
     UNKNOWN_RAW_REF_PREFIX, normalize_event,
 };
 
@@ -129,7 +129,7 @@ fn unknown_envelope(id: &str, kind: &str) -> EventEnvelope {
 }
 
 #[test]
-fn empty_source_is_rejected_as_malformed() {
+fn empty_source_routes_to_unknown_with_harness_actor() {
     let envelope = EventEnvelope::new(
         "evt-empty",
         Utc::now(),
@@ -137,8 +137,24 @@ fn empty_source_is_rejected_as_malformed() {
         "MessageEvent",
         json!({ "role": "user", "content": [] }),
     );
-    let error = normalize_event(&envelope, &context()).expect_err("empty source must error");
-    assert!(matches!(error, NormalizationError::EmptySource));
+    let normalized = normalize_event(&envelope, &context())
+        .expect("normalize_event is total — empty source must not error");
+    match normalized.record.kind {
+        EventKind::Unknown { raw_kind } => assert_eq!(raw_kind, "MessageEvent"),
+        other => panic!("expected Unknown, got {other:?}"),
+    }
+    assert!(
+        normalized
+            .record
+            .summary
+            .contains("source_missing envelope kind=MessageEvent"),
+        "summary should explain the missing source"
+    );
+    assert_eq!(
+        normalized.record.actor.actor_id(),
+        "openhands-agent-server-v1"
+    );
+    assert_eq!(normalized.raw_payload, json!({ "role": "user", "content": [] }));
 }
 
 #[test]
@@ -272,9 +288,7 @@ fn unknown_event_retains_raw_payload_and_ref() {
             .starts_with(UNKNOWN_RAW_REF_PREFIX),
         "unknown events must carry a synthetic raw_payload_ref"
     );
-    let raw_payload = normalized
-        .raw_payload
-        .expect("unknown event raw payload must be preserved");
+    let raw_payload = &normalized.raw_payload;
     assert_eq!(
         raw_payload.get("structure").and_then(Value::as_str),
         Some("future")
@@ -353,9 +367,7 @@ fn raw_payload_for_known_events_is_the_envelope_payload() {
     // Typed variants do not emit a synthetic `raw://openhands/unknown/...` ref.
     assert!(normalized.raw_payload_ref.is_none());
     // Raw payload is preserved in normalized.raw_payload for diagnostics.
-    let raw_payload = normalized
-        .raw_payload
-        .expect("raw payload available even on typed events");
+    let raw_payload = &normalized.raw_payload;
     assert_eq!(
         raw_payload.get("execution_status").and_then(Value::as_str),
         Some("running"),

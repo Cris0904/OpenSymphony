@@ -52,9 +52,6 @@ pub enum NormalizationError {
     /// The conversation id was empty, which would result in an unsafe cursor.
     #[error("normalization context requires a non-empty conversation id")]
     MissingConversationId,
-    /// OpenHands sent an event whose source string was empty; treat as malformed.
-    #[error("event envelope has empty source")]
-    EmptySource,
 }
 
 /// Input to [`normalize_event`] — provides the harness identity, conversation
@@ -127,14 +124,17 @@ impl NormalizationContext {
 }
 
 /// Result of [`normalize_event`]: a typed [`EventRecordBuilder`](EventRecord)
-/// plus the raw payload (when present) so downstream consumers can still
-/// forward unknown event kinds without losing fidelity.
+/// plus the raw payload so downstream consumers can still forward unknown
+/// event kinds without losing fidelity.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedEvent {
     /// Fully-built journal record.
     pub record: EventRecord,
     /// Original OpenHands payload (for diagnostics + forward compatibility).
-    pub raw_payload: Option<Value>,
+    /// Always populated — the mirror never produces `None` because the raw
+    /// payload is preserved for diagnostic consumers even when the encoded
+    /// [`EventKind`] is fully typed.
+    pub raw_payload: Value,
     /// Synthesized raw payload reference when normalization produced an
     /// `EventKind::Unknown` envelope.
     pub raw_payload_ref: Option<String>,
@@ -142,15 +142,30 @@ pub struct NormalizedEvent {
 
 /// Convert an OpenHands event envelope into a normalized OpenSymphony envelope.
 ///
-/// The function is total: any malformed input still produces a [`NormalizedEvent`]
-/// whose [`EventKind`] is `Unknown` and whose raw payload is preserved, so unknown
-/// events can flow through the journal without failing the run.
+/// [`normalize_event`] is total: every (well-formed or malformed) envelope
+/// produces a [`NormalizedEvent`]. Envelopes whose `source` is empty (no
+/// upstream actor signal at all) are routed through the `Unknown` envelope
+/// path with a synthetic `harness` actor and a `source_missing` summary so
+/// the journal still sees the raw payload instead of failing the run.
 pub fn normalize_event(
     envelope: &EventEnvelope,
     context: &NormalizationContext,
 ) -> Result<NormalizedEvent, NormalizationError> {
     if envelope.source.is_empty() {
-        return Err(NormalizationError::EmptySource);
+        // Total fallback: route to the Unknown envelope machinery directly so
+        // the run keeps going and the raw payload is still preserved through
+        // the journal. This is what the docstring promises.
+        let synthetic = UnknownEvent {
+            kind: envelope.kind.clone(),
+            payload: envelope.payload.clone(),
+            key: envelope.key.clone(),
+            value: envelope.value.clone(),
+        };
+        let mut record = normalize_unknown(envelope, &synthetic);
+        // Override the summary so consumers can tell that this came in with
+        // no actor signal at all (as opposed to a genuine unknown kind).
+        record.summary = format!("source_missing envelope kind={}", envelope.kind);
+        return Ok(build_normalized_event(envelope, context, record));
     }
 
     let known = KnownEvent::from_envelope(envelope);
@@ -412,7 +427,7 @@ fn build_normalized_event(
 
     NormalizedEvent {
         record: builder.build(),
-        raw_payload: Some(raw_payload_if_unknown(envelope, &record)),
+        raw_payload: raw_payload_if_unknown(envelope, &record),
         raw_payload_ref,
     }
 }
@@ -714,7 +729,7 @@ mod tests {
         assert!(raw_ref.starts_with(UNKNOWN_RAW_REF_PREFIX));
         assert_eq!(
             normalized.raw_payload,
-            Some(json!({ "future": true, "details": "raw" }))
+            json!({ "future": true, "details": "raw" })
         );
     }
 
@@ -827,12 +842,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_source_returns_error() {
-        let envelope = EventEnvelope::new("evt", Utc::now(), "", "Anything", Value::Null);
-        assert!(matches!(
-            normalize_event(&envelope, &context()),
-            Err(NormalizationError::EmptySource)
-        ));
+    fn empty_source_is_total_routes_to_unknown_with_harness_actor() {
+        let envelope = EventEnvelope::new(
+            "evt-source-missing",
+            Utc::now(),
+            "",
+            "Anything",
+            json!({ "lost": true }),
+        );
+        let normalized = normalize_event(&envelope, &context())
+            .expect("normalize_event is total — empty source must not error");
+        match normalized.record.kind {
+            EventKind::Unknown { raw_kind } => assert_eq!(raw_kind, "Anything"),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+        assert!(
+            normalized
+                .record
+                .summary
+                .contains("source_missing envelope kind=Anything"),
+            "summary should explain the missing source: {}",
+            normalized.record.summary
+        );
+        // Harness actor is the default for unrecognized source (including empty).
+        assert_eq!(
+            normalized.record.actor.actor_id(),
+            "openhands-agent-server-v1",
+            "harness actor must be used when source cannot identify the upstream actor"
+        );
+        // Raw payload still preserved for diagnostics / forward compatibility.
+        assert_eq!(normalized.raw_payload, json!({ "lost": true }));
     }
 
     #[test]
@@ -849,7 +888,8 @@ mod tests {
             normalized.record.kind,
             EventKind::HarnessConversationStateUpdate
         ));
-        assert!(normalized.raw_payload.is_some());
+        // Raw payload is always populated (paper trail for diagnostics).
+        assert!(!normalized.raw_payload.is_null());
     }
 
     #[test]
