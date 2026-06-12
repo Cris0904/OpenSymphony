@@ -474,9 +474,13 @@ fn validate_manifest_consistency(
             }
         });
         if !in_manifest {
+            // Single diagnostic format regardless of whether the compiled
+            // side knows the source file. The `(file '<file>')` suffix is
+            // omitted only when the compiled side has no file, so the
+            // message reads consistently with the forward-check error.
             let message = if compiled_file.is_empty() {
                 format!(
-                    "Compiled task '{}' has no matching manifest tasks entry",
+                    "Compiled task '{}' is missing from manifest tasks list (compiled source file is empty)",
                     task_id
                 )
             } else {
@@ -778,8 +782,9 @@ mod tests {
 
         assert!(
             result.is_publishable(),
-            "violations: {:?}",
-            result.taxonomy_violations
+            "taxonomy={:?}; messages={:?}",
+            result.taxonomy_violations,
+            result.validation_messages
         );
         assert_eq!(result.taxonomy_violations, vec![]);
         assert_eq!(result.planning_wave, "rich-client-hosted-mode");
