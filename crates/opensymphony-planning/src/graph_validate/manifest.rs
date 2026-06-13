@@ -272,6 +272,8 @@ fn dfs_cycle(node: &TaskId, state: &mut DfsState<'_>) {
 mod tests {
     use super::*;
 
+    use std::collections::BTreeSet;
+    use std::fs;
     use std::io::Write;
 
     fn write(path: &Path, contents: &str) {
@@ -421,7 +423,7 @@ mod tests {
         // appended). After sort the length-2 cycle becomes [A, B].
         let cycle = &result.creation_order_cycles[0];
         assert_eq!(cycle.len(), 2);
-        let unique: std::collections::BTreeSet<&TaskId> = cycle.iter().collect();
+        let unique: BTreeSet<&TaskId> = cycle.iter().collect();
         assert_eq!(unique.len(), 2);
         assert_eq!(cycle, &vec![TaskId::new("TASK-A"), TaskId::new("TASK-B")],);
     }
@@ -475,14 +477,14 @@ mod tests {
         // previously fragile `.parent().and_then(Path::parent)` heuristic.
         let workspace = tempfile::tempdir().expect("workspace");
         let project = workspace.path().join("project");
-        std::fs::create_dir_all(project.join("docs/tasks")).expect("mkdir");
+        fs::create_dir_all(project.join("docs/tasks")).expect("mkdir");
         let manifest_path = project.join("docs/tasks/task-package.yaml");
-        std::fs::write(
+        fs::write(
             &manifest_path,
             manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md")]),
         )
         .expect("write manifest");
-        std::fs::write(
+        fs::write(
             project.join("docs/tasks/a.md"),
             task_file_text("TASK-A", "M1", &[], &[]),
         )

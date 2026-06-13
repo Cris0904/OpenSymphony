@@ -373,9 +373,7 @@ fn topo_waves(dependency_map: &BTreeMap<TaskId, BTreeSet<TaskId>>) -> Vec<Vec<Ta
 mod tests {
     use super::*;
 
-    use crate::opensymphony_planning::generator::domain::{
-        PlannedIssue, PlannedMilestone, PlannedSubIssue,
-    };
+    use crate::opensymphony_planning::generator::domain::{PlannedIssue, PlannedMilestone};
 
     fn issue(id: &str, blocked_by: &[&str]) -> PlannedIssue {
         PlannedIssue {
