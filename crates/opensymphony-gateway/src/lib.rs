@@ -25,8 +25,8 @@ use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 use tokio_util::io::ReaderStream;
 
 use crate::opensymphony_domain::{
-    belongs_to_run, EventStream, InMemoryEventJournal, StreamBroker, TerminalLogStore,
-    TimelineBuilder,
+    EventStream, InMemoryEventJournal, StreamBroker, TerminalLogStore, TimelineBuilder,
+    belongs_to_run,
 };
 use crate::opensymphony_gateway_schema::{
     cursor::StreamCursor,
@@ -245,7 +245,7 @@ pub struct GatewayServer {
     broker: StreamBroker,
     web_assets_dir: Option<String>,
     linear_mutations: Option<Arc<dyn LinearMutationClient>>,
-    terminal_ingest_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    terminal_ingest_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Clone for GatewayServer {
@@ -256,7 +256,10 @@ impl Clone for GatewayServer {
             broker: self.broker.clone(),
             web_assets_dir: self.web_assets_dir.clone(),
             linear_mutations: self.linear_mutations.clone(),
-            terminal_ingest_handle: self.terminal_ingest_handle.clone(),
+            // Each cloned server owns its own ingest handle. The task is tied
+            // to the specific server instance that spawned it, so Drop aborts
+            // reliably without depending on Arc uniqueness.
+            terminal_ingest_handle: Mutex::new(None),
         }
     }
 }
@@ -279,11 +282,10 @@ impl std::fmt::Debug for GatewayServer {
 
 impl Drop for GatewayServer {
     fn drop(&mut self) {
-        if let Some(handle) = Arc::get_mut(&mut self.terminal_ingest_handle)
-            .and_then(|m| m.lock().ok())
-            .and_then(|mut guard| guard.take())
-        {
-            handle.abort();
+        if let Ok(mut guard) = self.terminal_ingest_handle.lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
         }
     }
 }
@@ -298,7 +300,7 @@ impl GatewayServer {
             store,
             web_assets_dir: None,
             linear_mutations: None,
-            terminal_ingest_handle: Arc::new(Mutex::new(None)),
+            terminal_ingest_handle: Mutex::new(None),
         }
     }
 
@@ -314,7 +316,7 @@ impl GatewayServer {
             broker,
             web_assets_dir: None,
             linear_mutations: None,
-            terminal_ingest_handle: Arc::new(Mutex::new(None)),
+            terminal_ingest_handle: Mutex::new(None),
         }
     }
 
@@ -351,8 +353,8 @@ impl GatewayServer {
             linear_mutations: self.linear_mutations.clone(),
         };
 
-        // Abort any previous terminal ingest task so router rebuilds don't leak
-        // background tasks.
+        // Abort any previous terminal ingest task associated with this server
+        // instance so router rebuilds don't leak background tasks.
         {
             let mut handle = self.terminal_ingest_handle.lock().unwrap();
             if let Some(old) = handle.take() {
@@ -2031,7 +2033,6 @@ async fn get_run_logs(
         }),
     )
 }
-
 
 #[derive(Debug, serde::Deserialize)]
 struct TerminalSnapshotQuery {
