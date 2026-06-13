@@ -207,4 +207,23 @@ mod tests {
         assert_eq!(parsed.frontmatter.id.as_deref(), Some("OSYM-734"));
         assert!(parsed.frontmatter.extra.contains_key("unknown_field"));
     }
+
+    #[test]
+    fn read_task_frontmatter_or_default_swallows_missing_file_only() {
+        // `NotFound` is the only IO error class we silently downgrade to
+        // `TaskFrontmatter::default()`. Other errors (parse failures,
+        // permission errors) are intentionally surfaced, see COE-416 review.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does-not-exist.md");
+        let fm = read_task_frontmatter_or_default(&missing).expect("missing file OK");
+        assert!(fm.id.is_none());
+        assert!(fm.title.is_none());
+
+        let dir = tmp.path();
+        let malformed = dir.join("malformed.md");
+        fs::write(&malformed, "---\nid: [unclosed\n---\n# body\n").expect("write");
+        let err =
+            read_task_frontmatter_or_default(&malformed).expect_err("yaml error must propagate");
+        assert!(matches!(err, TaskFrontmatterError::Yaml { .. }));
+    }
 }

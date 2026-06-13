@@ -357,12 +357,15 @@ fn topo_waves(dependency_map: &BTreeMap<TaskId, BTreeSet<TaskId>>) -> Vec<Vec<Ta
             // forever; callers should run validate_dependency_graph first.
             break;
         }
-        let current_set: BTreeSet<TaskId> = current.iter().cloned().collect();
         for task_id in &current {
             remaining.remove(task_id);
         }
         for deps in remaining.values_mut() {
-            deps.retain(|dep| !current_set.contains(dep));
+            // Removing the dependency from the working set via `remaining.remove`
+            // above is sufficient: each affected `deps` entry is a TaskId and
+            // can only name a node that left the working set this wave, so we
+            // retain *any* dependency whose target is still unprocessed.
+            deps.retain(|dep| !current.contains(dep));
         }
         waves.push(current);
     }
