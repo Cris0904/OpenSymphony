@@ -25,11 +25,12 @@ export function isActionCapable(transport: unknown): transport is ActionCapableT
 export async function dispatchTaskGraphUpdate(
   transport: ActionCapableTransport,
   payload: TaskGraphUpdatePayload,
+  correlationId?: string,
 ): Promise<ActionReceipt> {
   return transport.dispatchAction({
     schema_version: { major: 1, minor: 0, patch: 0 },
-    correlation_id: `tg-update-${payload.node_id}-${generateId()}`,
-    action_kind: "comment", // Reused action channel until dedicated mutation action is available.
+    correlation_id: correlationId ?? `tg-update-${payload.node_id}-${generateId()}`,
+    action_kind: "update_node",
     target_entity: { entity_kind: "issue", entity_id: payload.node_id },
     payload,
     idempotency_key: `tg-update-${payload.node_id}`,
@@ -39,11 +40,12 @@ export async function dispatchTaskGraphUpdate(
 export async function dispatchTaskGraphCreate(
   transport: ActionCapableTransport,
   payload: TaskGraphCreatePayload,
+  correlationId?: string,
 ): Promise<ActionReceipt> {
   const targetId = payload.parent_id ?? "root";
   return transport.dispatchAction({
     schema_version: { major: 1, minor: 0, patch: 0 },
-    correlation_id: `tg-create-${targetId}-${payload.kind}-${generateId()}`,
+    correlation_id: correlationId ?? `tg-create-${targetId}-${payload.kind}-${generateId()}`,
     action_kind: "create_followup",
     target_entity: { entity_kind: "issue", entity_id: targetId },
     payload,
@@ -54,10 +56,11 @@ export async function dispatchTaskGraphCreate(
 export async function dispatchTaskGraphDependencies(
   transport: ActionCapableTransport,
   payload: TaskGraphDependencyPayload,
+  correlationId?: string,
 ): Promise<ActionReceipt> {
   return transport.dispatchAction({
     schema_version: { major: 1, minor: 0, patch: 0 },
-    correlation_id: `tg-deps-${payload.node_id}-${generateId()}`,
+    correlation_id: correlationId ?? `tg-deps-${payload.node_id}-${generateId()}`,
     action_kind: "transition_issue",
     target_entity: { entity_kind: "issue", entity_id: payload.node_id },
     payload,
@@ -68,10 +71,11 @@ export async function dispatchTaskGraphDependencies(
 export async function dispatchTaskGraphComment(
   transport: ActionCapableTransport,
   payload: TaskGraphCommentPayload,
+  correlationId?: string,
 ): Promise<ActionReceipt> {
   return transport.dispatchAction({
     schema_version: { major: 1, minor: 0, patch: 0 },
-    correlation_id: `tg-comment-${payload.node_id}-${generateId()}`,
+    correlation_id: correlationId ?? `tg-comment-${payload.node_id}-${generateId()}`,
     action_kind: "comment",
     target_entity: { entity_kind: "issue", entity_id: payload.node_id },
     payload,

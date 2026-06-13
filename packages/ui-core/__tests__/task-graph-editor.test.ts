@@ -7,10 +7,12 @@
 import { renderOpenSymphonyApp } from "../src/app-shell.js";
 import { MockGatewayTransport } from "@opensymphony/api-client";
 import { schemaVersionV1 } from "@opensymphony/gateway-schema";
+import { buildRuntimeOverlay } from "../src/task-graph-editor.js";
 import type {
   DashboardSnapshot,
   GatewayCapabilities,
   RunDetail,
+  TaskGraphNode,
   TaskGraphSnapshot,
 } from "@opensymphony/gateway-schema";
 
@@ -104,54 +106,60 @@ const releasedRun: RunDetail = {
   },
 };
 
-const taskGraph: TaskGraphSnapshot = {
-  schema_version: schemaVersionV1(),
-  project_id: "proj-editor",
-  generated_at: "2025-09-01T00:00:00Z",
-  root_ids: ["m1"],
-  nodes: [
-    {
-      schema_version: schemaVersionV1(),
-      node_id: "m1",
-      kind: "milestone",
-      identifier: "M1",
-      title: "Editor milestone",
-      state: "In Progress",
-      state_category: "in_progress",
-      children: ["editor-1", "editor-2"],
-      blocked_by: [],
-      labels: ["editor"],
-    },
-    {
-      schema_version: schemaVersionV1(),
-      node_id: "editor-1",
-      kind: "issue",
-      identifier: "EDITOR-1",
-      title: "Running issue",
-      state: "In Progress",
-      state_category: "in_progress",
-      parent_id: "m1",
-      children: [],
-      blocked_by: ["editor-2"],
-      labels: ["runtime"],
-      run_id: "run-1",
-    },
-    {
-      schema_version: schemaVersionV1(),
-      node_id: "editor-2",
-      kind: "issue",
-      identifier: "EDITOR-2",
-      title: "Completed issue",
-      state: "Done",
-      state_category: "done",
-      parent_id: "m1",
-      children: [],
-      blocked_by: [],
-      labels: ["runtime"],
-      run_id: "run-2",
-    },
-  ],
-};
+function buildTaskGraph(): TaskGraphSnapshot {
+  return {
+    schema_version: schemaVersionV1(),
+    project_id: "proj-editor",
+    generated_at: "2025-09-01T00:00:00Z",
+    root_ids: ["m1"],
+    nodes: [
+      {
+        schema_version: schemaVersionV1(),
+        node_id: "m1",
+        kind: "milestone",
+        identifier: "M1",
+        title: "Editor milestone",
+        state: "In Progress",
+        state_category: "in_progress",
+        children: ["editor-1", "editor-2"],
+        blocked_by: [],
+        labels: ["editor"],
+      },
+      {
+        schema_version: schemaVersionV1(),
+        node_id: "editor-1",
+        kind: "issue",
+        identifier: "EDITOR-1",
+        title: "Running issue",
+        state: "In Progress",
+        state_category: "in_progress",
+        parent_id: "m1",
+        children: [],
+        blocked_by: ["editor-2"],
+        labels: ["runtime"],
+        run_id: "run-1",
+      },
+      {
+        schema_version: schemaVersionV1(),
+        node_id: "editor-2",
+        kind: "issue",
+        identifier: "EDITOR-2",
+        title: "Completed issue",
+        state: "Done",
+        state_category: "done",
+        parent_id: "m1",
+        children: [],
+        blocked_by: [],
+        labels: ["runtime"],
+        run_id: "run-2",
+      },
+    ],
+  };
+}
+
+function buildRunDetails(): RunDetail[] {
+  return [runningRun, releasedRun];
+}
 
 function flushAsync(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -175,8 +183,8 @@ function buildTransport(): MockGatewayTransport {
     baseUri: "http://127.0.0.1:8000",
     health: capabilities,
     snapshot: dashboard,
-    taskGraph,
-    runDetails: [runningRun, releasedRun],
+    taskGraph: buildTaskGraph(),
+    runDetails: buildRunDetails(),
   });
 }
 
@@ -466,5 +474,92 @@ describe("TaskGraphEditor", () => {
     expect(root.textContent).toContain("Acknowledged title");
 
     await handle.destroy();
+  });
+
+  it("creates a root-level milestone and dispatches to the server", async () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const transport = buildTransport();
+    const handle = renderOpenSymphonyApp({
+      root,
+      mode: "desktop",
+      transport,
+    });
+
+    await flushUntil(() => root.querySelector("[data-tg-create='milestone']") !== null);
+
+    (root.querySelector("[data-tg-create='milestone']") as HTMLButtonElement).click();
+    await flushAsync();
+
+    expect(root.querySelector("[data-tg-create-dialog='open']")).not.toBeNull();
+
+    const titleInput = root.querySelector("[data-tg-create-title]") as HTMLInputElement;
+    titleInput.value = "Root milestone";
+    (root.querySelector("[data-tg-create-save]") as HTMLButtonElement).click();
+    await flushAsync();
+
+    expect(root.querySelector("[data-tg-create-dialog='open']")).toBeNull();
+    expect(root.textContent).toContain("Root milestone");
+    await flushUntil(() => root.querySelector(".os-pending-banner") === null);
+
+    await handle.destroy();
+  });
+
+  it("does not double-render the title during inline editing", async () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const handle = renderOpenSymphonyApp({
+      root,
+      mode: "desktop",
+      transport: buildTransport(),
+    });
+
+    await flushUntil(() => root.querySelector("[data-tg-edit='editor-1']") !== null);
+    expect(root.textContent).toContain("Running issue");
+
+    (root.querySelector("[data-tg-edit='editor-1']") as HTMLButtonElement).click();
+    await flushAsync();
+
+    // The read-only title span should be removed while the input is active.
+    expect(root.querySelector("[data-tg-inline-title='editor-1']")).not.toBeNull();
+    expect(root.textContent).not.toContain("Running issue");
+
+    await handle.destroy();
+  });
+
+  it("deduplicates retry badges when retry_queued carries a retry attempt", () => {
+    const node: TaskGraphNode = {
+      schema_version: schemaVersionV1(),
+      node_id: "retry-1",
+      kind: "issue",
+      identifier: "RETRY-1",
+      title: "Retry queued issue",
+      state: "In Progress",
+      state_category: "in_progress",
+      children: [],
+      blocked_by: [],
+      labels: [],
+    };
+    const run: RunDetail = {
+      schema_version: schemaVersionV1(),
+      run_id: "run-retry",
+      issue_id: "retry-1",
+      issue_identifier: "RETRY-1",
+      worker_id: "worker-1",
+      status: "retry_queued",
+      claimed_at: "2025-09-01T00:00:00Z",
+      turn_count: 0,
+      max_turns: 10,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      runtime_seconds: 0,
+      retry_attempt: 3,
+    };
+    const overlay = buildRuntimeOverlay(node, run);
+    const retryCount = overlay.badges.filter((b) => b === "retry").length;
+    expect(retryCount).toBe(1);
+    expect(overlay.badges).toContain("retry");
+    expect(overlay.badges).toContain("queued");
   });
 });

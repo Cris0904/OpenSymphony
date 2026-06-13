@@ -70,6 +70,8 @@ export function renderTaskGraphNode(
     ? `<input class="os-inline-input" data-tg-inline-title="${escapeAttr(node.node_id)}" value="${escapeAttr(inlineEdit.title)}" />`
     : `<strong>${escapeHtml(node.identifier)}</strong>`;
 
+  const titleDisplay = isEditing ? "" : `<span>${escapeHtml(node.title)}</span>`;
+
   const stateContent = isEditing
     ? `<input class="os-inline-input os-inline-state" data-tg-inline-state="${escapeAttr(node.node_id)}" value="${escapeAttr(inlineEdit.state)}" />`
     : `<em>${escapeHtml(node.state)}</em>`;
@@ -80,9 +82,9 @@ export function renderTaskGraphNode(
 
   return `
     <button type="button" class="os-node ${isSelected ? "is-selected" : ""}" data-node-id="${escapeAttr(node.node_id)}">
-      <span class="os-node-kind">${escapeHtml(node.kind.replace("_", " "))}</span>
+      <span class="os-node-kind">${escapeHtml(node.kind.replace(/_/g, " "))}</span>
       ${titleContent}
-      <span>${escapeHtml(node.title)}</span>
+      ${titleDisplay}
       ${stateContent}
       <div class="os-node-badges">${overlayBadges}</div>
       ${runMeta}
@@ -110,7 +112,7 @@ export function renderSelectedNodeDetail(node: TaskGraphNode | undefined): strin
 /** Render the create dialog for milestones/issues/sub-issues. */
 export function renderCreateDialog(dialog: EditorDialogState): string {
   if (!dialog.open || !dialog.kind) return "";
-  const title = `Create ${dialog.kind.replace("_", " ")}`;
+  const title = `Create ${dialog.kind.replace(/_/g, " ")}`;
   return `
     <div class="os-dialog-backdrop" data-tg-create-dialog="open">
       <div class="os-dialog">

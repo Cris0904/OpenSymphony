@@ -107,6 +107,7 @@ interface AppState {
   commentEdit: CommentEditState;
   runOverlays: Map<string, RunDetail>;
   pendingMutations: Set<string>;
+  pendingCreates: Map<string, string>;
 }
 
 const schemaVersion = { major: 1, minor: 0, patch: 0 };
@@ -150,6 +151,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       commentEdit: { ...emptyCommentEdit },
       runOverlays: new Map(),
       pendingMutations: new Set(),
+      pendingCreates: new Map(),
     };
   }
 
@@ -727,9 +729,10 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     this.state.createDialog = { ...emptyEditorDialog };
     this.render();
 
-    if (isActionCapable(this.transport) && parentId) {
-      const correlationId = `tg-create-${parentId}-${dialog.kind}-${generateId()}`;
+    if (isActionCapable(this.transport)) {
+      const correlationId = `tg-create-${parentId ?? "root"}-${dialog.kind}-${generateId()}`;
       this.state.pendingMutations.add(correlationId);
+      this.state.pendingCreates.set(correlationId, nodeId);
       this.render();
       try {
         const receipt = await dispatchTaskGraphCreate(this.transport, {
@@ -737,11 +740,11 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
           kind: dialog.kind,
           title,
           state,
-        });
-        this.state.pendingMutations.delete(correlationId);
+        }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
         this.state.pendingMutations.delete(correlationId);
+        this.state.pendingCreates.delete(correlationId);
         this.state.connectionMessage = `Create failed: ${errorMessage(error)}`;
       }
       this.render();
@@ -777,8 +780,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
           node_id: nodeId,
           title,
           state,
-        });
-        this.state.pendingMutations.delete(correlationId);
+        }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
         this.state.pendingMutations.delete(correlationId);
@@ -814,8 +816,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       this.state.pendingMutations.add(correlationId);
       this.render();
       try {
-        const receipt = await dispatchTaskGraphDependencies(this.transport, { node_id: nodeId, blocked_by: blockedBy });
-        this.state.pendingMutations.delete(correlationId);
+        const receipt = await dispatchTaskGraphDependencies(this.transport, { node_id: nodeId, blocked_by: blockedBy }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
         this.state.pendingMutations.delete(correlationId);
@@ -852,8 +853,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       this.state.pendingMutations.add(correlationId);
       this.render();
       try {
-        const receipt = await dispatchTaskGraphComment(this.transport, { node_id: nodeId, body, kind });
-        this.state.pendingMutations.delete(correlationId);
+        const receipt = await dispatchTaskGraphComment(this.transport, { node_id: nodeId, body, kind }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
         this.state.pendingMutations.delete(correlationId);
@@ -876,12 +876,46 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
 
   private applyMutationReceipt(receipt: ActionReceipt): void {
     const result = receipt.result as { node_id?: string; updated_at?: string } | undefined;
-    if (result?.node_id && result?.updated_at) {
-      const node = this.state.taskGraph?.nodes.find((n) => n.node_id === result.node_id);
-      if (node) {
-        this.updateTaskGraphNode({ ...node, updated_at: result.updated_at });
-      }
+    if (!result?.node_id || !result?.updated_at) {
+      this.state.pendingMutations.delete(receipt.correlation_id);
+      return;
     }
+
+    // Reconcile optimistic create ids with the server-assigned id from the receipt.
+    const localNodeId = this.state.pendingCreates.get(receipt.correlation_id);
+    if (localNodeId && localNodeId !== result.node_id) {
+      this.reconcileNodeId(localNodeId, result.node_id);
+    }
+    this.state.pendingMutations.delete(receipt.correlation_id);
+    this.state.pendingCreates.delete(receipt.correlation_id);
+
+    const node = this.state.taskGraph?.nodes.find((n) => n.node_id === result.node_id);
+    if (node) {
+      this.updateTaskGraphNode({ ...node, updated_at: result.updated_at });
+    }
+  }
+
+  private reconcileNodeId(oldId: string, newId: string): void {
+    const taskGraph = this.state.taskGraph;
+    if (!taskGraph) return;
+
+    const node = taskGraph.nodes.find((n) => n.node_id === oldId);
+    if (!node) return;
+    node.node_id = newId;
+
+    if (taskGraph.root_ids.includes(oldId)) {
+      taskGraph.root_ids = taskGraph.root_ids.map((id) => (id === oldId ? newId : id));
+    }
+    for (const n of taskGraph.nodes) {
+      if (n.parent_id === oldId) n.parent_id = newId;
+      n.children = n.children.map((id) => (id === oldId ? newId : id));
+      n.blocked_by = n.blocked_by.map((id) => (id === oldId ? newId : id));
+    }
+
+    if (this.state.selectedNodeId === oldId) this.state.selectedNodeId = newId;
+    if (this.state.inlineEdit.nodeId === oldId) this.state.inlineEdit.nodeId = newId;
+    if (this.state.dependencyEdit.nodeId === oldId) this.state.dependencyEdit.nodeId = newId;
+    if (this.state.commentEdit.nodeId === oldId) this.state.commentEdit.nodeId = newId;
   }
 }
 

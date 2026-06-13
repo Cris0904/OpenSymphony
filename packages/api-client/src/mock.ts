@@ -260,34 +260,33 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       this.emitTaskGraphEvent();
     }
 
-    if (action.action_kind === "comment" && payload && typeof payload.node_id === "string") {
-      if (typeof payload.body === "string") {
-        // Comment / evidence action.
-        const comment = payload as unknown as TaskGraphCommentPayload;
-        const node = this.mockTaskGraph.nodes.find((n) => n.node_id === comment.node_id);
-        if (node) {
-          node.comment_count = (node.comment_count ?? 0) + 1;
-          node.updated_at = new Date().toISOString();
-          baseReceipt.result = { node_id: node.node_id, updated_at: node.updated_at, applied: true };
-          this.emitTaskGraphEvent();
+    if (action.action_kind === "update_node" && payload && typeof payload.node_id === "string") {
+      const update = payload as unknown as TaskGraphUpdatePayload;
+      const node = this.mockTaskGraph.nodes.find((n) => n.node_id === update.node_id);
+      if (node) {
+        if (update.title !== undefined) node.title = update.title;
+        if (update.state !== undefined) {
+          node.state = update.state;
+          node.state_category = this.stateToCategory(update.state);
         }
-      } else if (typeof payload.title === "string" || typeof payload.state === "string") {
-        // Inline update action (reuses comment action_kind in the UI shim).
-        const update = payload as unknown as TaskGraphUpdatePayload;
-        const node = this.mockTaskGraph.nodes.find((n) => n.node_id === update.node_id);
-        if (node) {
-          if (update.title !== undefined) node.title = update.title;
-          if (update.state !== undefined) {
-            node.state = update.state;
-            node.state_category = this.stateToCategory(update.state);
-          }
-          if (update.priority !== undefined) node.priority = update.priority;
-          if (update.estimate_minutes !== undefined) node.estimate_minutes = update.estimate_minutes;
-          if (update.labels !== undefined) node.labels = update.labels;
-          node.updated_at = new Date().toISOString();
-          baseReceipt.result = { node_id: node.node_id, updated_at: node.updated_at, applied: true };
-          this.emitTaskGraphEvent();
-        }
+        if (update.priority !== undefined) node.priority = update.priority;
+        if (update.estimate_minutes !== undefined) node.estimate_minutes = update.estimate_minutes;
+        if (update.labels !== undefined) node.labels = update.labels;
+        node.updated_at = new Date().toISOString();
+        baseReceipt.result = { node_id: node.node_id, updated_at: node.updated_at, applied: true };
+        this.emitTaskGraphEvent();
+      }
+    }
+
+    if (action.action_kind === "comment" && payload && typeof payload.node_id === "string" && typeof payload.body === "string") {
+      // Comment / evidence action.
+      const comment = payload as unknown as TaskGraphCommentPayload;
+      const node = this.mockTaskGraph.nodes.find((n) => n.node_id === comment.node_id);
+      if (node) {
+        node.comment_count = (node.comment_count ?? 0) + 1;
+        node.updated_at = new Date().toISOString();
+        baseReceipt.result = { node_id: node.node_id, updated_at: node.updated_at, applied: true };
+        this.emitTaskGraphEvent();
       }
     }
 

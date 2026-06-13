@@ -54,7 +54,9 @@ export function buildRuntimeOverlay(
 
   if (runDetail?.workspace_path) badges.push("workspace");
   if (runDetail?.worker_id) badges.push("harness");
-  if (runDetail?.retry_attempt && runDetail.retry_attempt > 0) badges.push("retry");
+  if (runDetail?.retry_attempt && runDetail.retry_attempt > 0 && !badges.includes("retry")) {
+    badges.push("retry");
+  }
 
   // Validation status is inferred from run outcome when not explicit.
   let validationStatus: TaskGraphRuntimeOverlay["validation_status"] = "unknown";
@@ -81,7 +83,7 @@ export function buildRuntimeOverlay(
     retry_attempt: runDetail?.retry_attempt,
     blocked_by_count: node.blocked_by.length,
     last_event_at: runDetail?.liveness?.latest_progress?.happened_at,
-    badges,
+    badges: [...new Set(badges)],
   };
 }
 
@@ -167,7 +169,7 @@ export function renderTaskGraphFilters(filter: TaskGraphFilter): string {
       </label>
       <label class="os-field">
         <span>Search</span>
-        <input data-tg-filter="search" type="search" value="${escapeHtml(filter.search)}" placeholder="Filter tasks..." />
+        <input data-tg-filter="search" type="search" value="${escapeAttr(filter.search)}" placeholder="Filter tasks..." />
       </label>
       <button type="button" data-tg-filter-reset>Reset</button>
     </div>
