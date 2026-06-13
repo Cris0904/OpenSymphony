@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::opensymphony_domain::InMemoryEventJournal;
 use crate::opensymphony_gateway_schema::action::{
-    ActionKind, ActionReceipt, ActionStatus, ExpectedFollowup, PermissionResult,
+    ActionKind, ActionReceipt, ExpectedFollowup, PermissionResult,
 };
 use crate::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
 use crate::opensymphony_gateway_schema::event_journal::{EventActor, EventKind, EventRecord};
@@ -708,7 +708,6 @@ fn build_accepted_receipt_with_followups(
     receipt
 }
 
-#[allow(dead_code)]
 fn build_audit_event_inner(
     actor_id: &str,
     correlation_id: &str,
@@ -726,7 +725,6 @@ fn build_audit_event_inner(
         .build()
 }
 
-#[allow(dead_code)]
 pub fn entity_kind_for(kind: ActionKind) -> EntityKind {
     match kind {
         ActionKind::TaskGraphMilestone => EntityKind::Milestone,
@@ -745,7 +743,6 @@ pub fn entity_kind_for(kind: ActionKind) -> EntityKind {
 ///
 /// Evidence/comment events are built inline in `task_graph_evidence_handler`
 /// because they need to carry the real `issue_id` alongside the comment id.
-#[allow(dead_code)]
 pub async fn append_mutation_event(
     journal: &InMemoryEventJournal,
     correlation_id: &str,
@@ -768,7 +765,6 @@ pub async fn append_mutation_event(
 /// `Created` and `Updated` event variants on the resulting `TaskGraph*`
 /// event. Default behavior for relation events and any unknown action kind
 /// is unchanged.
-#[allow(dead_code)]
 pub async fn append_mutation_event_with_op(
     journal: &InMemoryEventJournal,
     correlation_id: &str,
@@ -855,11 +851,6 @@ pub enum MutationOp {
     Created,
     Updated,
     Upsert,
-}
-
-#[allow(dead_code)]
-pub fn receipt_status(receipt: &ActionReceipt) -> ActionStatus {
-    receipt.status
 }
 
 // =============================================================================
