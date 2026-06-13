@@ -684,7 +684,35 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     const state = (root.querySelector<HTMLSelectElement>("[data-tg-filter='state']")?.value ?? "all") as TaskGraphFilter["stateCategory"];
     const search = root.querySelector<HTMLInputElement>("[data-tg-filter='search']")?.value ?? "";
     this.state.taskGraphFilter = { kind, runtime, stateCategory: state, search };
+    this.renderPreservingFocus();
+  }
+
+  private renderPreservingFocus(): void {
+    const root = this.options.root;
+    const active = root.ownerDocument?.activeElement as HTMLElement | null;
+    const tag = active?.tagName?.toLowerCase() ?? null;
+    const dataAttrs = active
+      ? Array.from(active.attributes)
+          .filter((attr) => attr.name.startsWith("data-"))
+          .map((attr) => ({ name: attr.name, value: attr.value }))
+      : [];
+    const input = active as HTMLInputElement | HTMLTextAreaElement | null;
+    const selectionStart = input?.selectionStart ?? null;
+    const selectionEnd = input?.selectionEnd ?? null;
+
     this.render();
+
+    if (!tag || dataAttrs.length === 0) return;
+    const candidates = Array.from(root.querySelectorAll<HTMLElement>(tag));
+    const match = candidates.find((el) =>
+      dataAttrs.every((attr) => el.getAttribute(attr.name) === attr.value),
+    );
+    if (match) {
+      match.focus();
+      if (selectionStart !== null && selectionEnd !== null && "setSelectionRange" in match) {
+        (match as HTMLInputElement | HTMLTextAreaElement).setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
   }
 
   // -- Create dialog handling --
@@ -762,8 +790,12 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
 
   private async saveInlineEdit(nodeId: string): Promise<void> {
     const root = this.options.root;
-    const title = root.querySelector<HTMLInputElement>(`[data-tg-inline-title='${nodeId}']`)?.value.trim();
-    const state = root.querySelector<HTMLInputElement>(`[data-tg-inline-state='${nodeId}']`)?.value.trim();
+    const title = Array.from(root.querySelectorAll<HTMLInputElement>("[data-tg-inline-title]")).find(
+      (el) => el.dataset.tgInlineTitle === nodeId,
+    )?.value.trim();
+    const state = Array.from(root.querySelectorAll<HTMLInputElement>("[data-tg-inline-state]")).find(
+      (el) => el.dataset.tgInlineState === nodeId,
+    )?.value.trim();
     const node = this.state.taskGraph?.nodes.find((n) => n.node_id === nodeId);
     if (!node) return;
     const updated = applyNodeUpdate(node, { title, state });
@@ -875,6 +907,14 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
   }
 
   private applyMutationReceipt(receipt: ActionReceipt): void {
+    if (receipt.status !== "accepted") {
+      this.state.pendingMutations.delete(receipt.correlation_id);
+      this.state.pendingCreates.delete(receipt.correlation_id);
+      const detail = receipt.reason ? `: ${receipt.reason}` : "";
+      this.state.connectionMessage = `Mutation ${receipt.status}${detail}`;
+      return;
+    }
+
     const result = receipt.result as { node_id?: string; updated_at?: string } | undefined;
     if (!result?.node_id || !result?.updated_at) {
       this.state.pendingMutations.delete(receipt.correlation_id);

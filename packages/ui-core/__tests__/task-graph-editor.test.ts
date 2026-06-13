@@ -245,6 +245,55 @@ describe("TaskGraphEditor", () => {
     await handle.destroy();
   });
 
+  it("filters the runtime badge option to match the emitted badge", async () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const handle = renderOpenSymphonyApp({
+      root,
+      mode: "desktop",
+      transport: buildTransport(),
+    });
+
+    await flushUntil(() => root.querySelector("[data-tg-filter='runtime']") !== null);
+    expect(root.querySelector("[data-node-id='editor-1']")?.querySelector(".os-badge-blocker")).not.toBeNull();
+
+    const runtimeSelect = root.querySelector("[data-tg-filter='runtime']") as HTMLSelectElement;
+    runtimeSelect.value = "blocker";
+    runtimeSelect.dispatchEvent(new Event("change"));
+    await flushAsync();
+
+    expect(root.querySelector("[data-node-id='editor-1']")).not.toBeNull();
+    expect(root.querySelector("[data-node-id='editor-2']")).toBeNull();
+
+    await handle.destroy();
+  });
+
+  it("preserves search input focus and cursor position while typing", async () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const handle = renderOpenSymphonyApp({
+      root,
+      mode: "desktop",
+      transport: buildTransport(),
+    });
+
+    await flushUntil(() => root.querySelector("[data-tg-filter='search']") !== null);
+    const searchInput = root.querySelector("[data-tg-filter='search']") as HTMLInputElement;
+    searchInput.focus();
+    searchInput.setSelectionRange(3, 3);
+    searchInput.value = "Com";
+    searchInput.dispatchEvent(new Event("input"));
+    await flushAsync();
+
+    const active = document.activeElement as HTMLInputElement | null;
+    expect(active?.getAttribute("data-tg-filter")).toBe("search");
+    expect(active?.value).toBe("Com");
+    expect(active?.selectionStart).toBe(3);
+    expect(active?.selectionEnd).toBe(3);
+
+    await handle.destroy();
+  });
+
   it("filters task nodes by kind and state", async () => {
     const root = document.createElement("div");
     document.body.appendChild(root);
@@ -472,6 +521,87 @@ describe("TaskGraphEditor", () => {
 
     await flushUntil(() => root.querySelector(".os-pending-banner") === null);
     expect(root.textContent).toContain("Acknowledged title");
+
+    await handle.destroy();
+  });
+
+  it("treats a rejected mutation receipt as a failure even when a result is present", async () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const transport = buildTransport();
+    const rejectedAt = new Date().toISOString();
+    transport.dispatchAction = async (action) => ({
+      schema_version: schemaVersionV1(),
+      action_id: "mock-rejected",
+      correlation_id: action.correlation_id,
+      status: "rejected",
+      reason: "Title is not allowed",
+      expected_events: [],
+      issued_at: rejectedAt,
+      result: { node_id: "editor-1", updated_at: rejectedAt, applied: true },
+    });
+
+    const handle = renderOpenSymphonyApp({
+      root,
+      mode: "desktop",
+      transport,
+    });
+
+    await flushUntil(() => root.querySelector("[data-tg-edit='editor-1']") !== null);
+
+    (root.querySelector("[data-tg-edit='editor-1']") as HTMLButtonElement).click();
+    await flushAsync();
+
+    const titleInput = root.querySelector("[data-tg-inline-title='editor-1']") as HTMLInputElement;
+    titleInput.value = "Rejected title";
+    (root.querySelector("[data-tg-inline-save='editor-1']") as HTMLButtonElement).click();
+
+    await flushUntil(() => root.querySelector(".os-pending-banner") === null);
+    expect(root.textContent).toContain("Mutation rejected: Title is not allowed");
+
+    await handle.destroy();
+  });
+
+  it("saves inline edits on a node whose id contains a single quote", async () => {
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const graph = buildTaskGraph();
+    const quotedNode: TaskGraphNode = {
+      schema_version: schemaVersionV1(),
+      node_id: "node'quote",
+      kind: "issue",
+      identifier: "QUOTED-1",
+      title: "Quoted issue",
+      state: "Todo",
+      state_category: "todo",
+      parent_id: "m1",
+      children: [],
+      blocked_by: [],
+      labels: [],
+    };
+    graph.nodes.push(quotedNode);
+    graph.nodes.find((n) => n.node_id === "m1")?.children.push("node'quote");
+
+    const transport = buildTransport();
+    (transport as any).mockTaskGraph = graph;
+    const handle = renderOpenSymphonyApp({
+      root,
+      mode: "desktop",
+      transport,
+    });
+
+    await flushUntil(() => root.querySelector("[data-node-id=\"node'quote\"]") !== null);
+
+    (root.querySelector("[data-tg-edit=\"node'quote\"]") as HTMLButtonElement).click();
+    await flushAsync();
+
+    const titleInput = root.querySelector("[data-tg-inline-title=\"node'quote\"]") as HTMLInputElement;
+    expect(titleInput).not.toBeNull();
+    titleInput.value = "Updated quoted issue";
+    (root.querySelector("[data-tg-inline-save=\"node'quote\"]") as HTMLButtonElement).click();
+    await flushAsync();
+
+    expect(root.textContent).toContain("Updated quoted issue");
 
     await handle.destroy();
   });

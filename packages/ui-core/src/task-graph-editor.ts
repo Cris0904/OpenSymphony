@@ -132,7 +132,6 @@ export function renderTaskGraphFilters(filter: TaskGraphFilter): string {
     { value: "complete", label: "Complete" },
     { value: "failed", label: "Failed" },
     { value: "stale", label: "Stale" },
-    { value: "blocked", label: "Blocked" },
     { value: "blocker", label: "Blocker" },
     { value: "retry", label: "Retry" },
     { value: "workspace", label: "Workspace" },
