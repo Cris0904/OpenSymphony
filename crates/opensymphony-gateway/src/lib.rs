@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{
-        Path as AxumPath, State,
+        Path as AxumPath, Query, State,
         ws::{Message, WebSocket},
     },
     http::StatusCode,
@@ -24,10 +24,17 @@ use axum::{
 use tokio::{net::TcpListener, sync::broadcast};
 use tokio_util::io::ReaderStream;
 
-use crate::opensymphony_domain::{EventStream, InMemoryEventJournal, StreamBroker};
+use crate::opensymphony_domain::{
+    EventStream, InMemoryEventJournal, StreamBroker, TerminalLogStore, TimelineBuilder,
+};
 use crate::opensymphony_gateway_schema::{
     cursor::StreamCursor,
-    event_journal::{EventPage, EventRecord, JournalError, StreamError},
+    envelope::EntityKind,
+    event_journal::{EventKind, EventPage, EventRecord, JournalError, StreamError},
+    terminal::TerminalSnapshot,
+    timeline::{
+        RunLogEntry, RunLogPage, TerminalJumpResult, TerminalSearchMatch, TerminalSearchResult,
+    },
 };
 
 pub mod action_handler;
@@ -204,6 +211,7 @@ pub struct GatewayState {
     pub store: SnapshotStore,
     pub journal: InMemoryEventJournal,
     pub broker: StreamBroker,
+    pub terminal_log_store: Arc<tokio::sync::RwLock<TerminalLogStore>>,
     pub web_assets_dir: Option<String>,
     pub action_handler: ActionHandler,
     pub linear_mutations: Option<Arc<dyn LinearMutationClient>>,
@@ -215,6 +223,7 @@ impl Clone for GatewayState {
             store: self.store.clone(),
             journal: self.journal.clone(),
             broker: self.broker.clone(),
+            terminal_log_store: self.terminal_log_store.clone(),
             web_assets_dir: self.web_assets_dir.clone(),
             action_handler: self.action_handler.clone(),
             linear_mutations: self.linear_mutations.clone(),
@@ -315,14 +324,31 @@ impl GatewayServer {
     }
 
     pub fn router(&self) -> Router {
+        let terminal_log_store = Arc::new(tokio::sync::RwLock::new(TerminalLogStore::new()));
         let state = GatewayState {
             store: self.store.clone(),
             journal: self.journal.clone(),
             broker: self.broker.clone(),
+            terminal_log_store: terminal_log_store.clone(),
             web_assets_dir: self.web_assets_dir.clone(),
             action_handler: ActionHandler::new(self.journal.clone()),
             linear_mutations: self.linear_mutations.clone(),
         };
+
+        // Background task: ingest terminal/log events from the journal into the
+        // terminal log store so scrollback and search remain consistent across
+        // reconnect and long-running replays.
+        let mut subscriber = self.journal.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = subscriber.recv().await {
+                let Ok(record) = event else { continue };
+                if !record.kind.is_high_volume() {
+                    continue;
+                }
+                let mut store = terminal_log_store.write().await;
+                store.ingest_event_record(&record);
+            }
+        });
         let mut router = Router::new()
             .route("/api/v1/capabilities", get(capabilities))
             .route("/api/v1/dashboard/snapshot", get(dashboard_snapshot))
@@ -339,6 +365,20 @@ impl GatewayServer {
             .route("/api/v1/runs/{run_id}/events", get(get_run_events))
             .route("/api/v1/runs/{run_id}/files", get(get_run_files))
             .route("/api/v1/runs/{run_id}/diffs", get(get_run_diffs))
+            .route("/api/v1/runs/{run_id}/timeline", get(get_run_timeline))
+            .route("/api/v1/runs/{run_id}/logs", get(get_run_logs))
+            .route(
+                "/api/v1/runs/{run_id}/terminal/{stream_id}",
+                get(get_terminal_snapshot),
+            )
+            .route(
+                "/api/v1/runs/{run_id}/terminal/{stream_id}/search",
+                get(search_terminal),
+            )
+            .route(
+                "/api/v1/runs/{run_id}/terminal/{stream_id}/jump",
+                get(jump_terminal_to_event),
+            )
             .route("/api/v1/actions/dispatch", post(dispatch_action));
 
         if self.web_assets_dir.is_some() {
@@ -817,7 +857,7 @@ async fn events(
 /// Cursor-based event journal query: `GET /api/v1/event-journal?cursor=<sequence>&partition=<name>&limit=<n>`
 async fn event_journal_query(
     State(state): State<GatewayState>,
-    axum::extract::Query(params): axum::extract::Query<EventJournalQueryParams>,
+    Query(params): Query<EventJournalQueryParams>,
 ) -> Result<Json<EventPage>, (StatusCode, Json<JournalError>)> {
     let cursor = StreamCursor::new(params.cursor, &params.partition);
     let limit = params.limit.clamp(1, GATEWAY_EVENT_PAGE_LIMIT);
@@ -1851,6 +1891,223 @@ async fn get_run_diffs(
             hunks,
             total_lines_added,
             total_lines_removed,
+        }),
+    )
+}
+
+async fn get_run_timeline(
+    State(state): State<GatewayState>,
+    AxumPath(run_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let records = state.journal.all_events().await;
+    let timeline = TimelineBuilder::new(run_id).build(&records);
+    (StatusCode::OK, Json(timeline))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RunLogQuery {
+    #[serde(default)]
+    cursor: Option<u64>,
+    #[serde(default = "default_terminal_limit")]
+    limit: usize,
+}
+
+async fn get_run_logs(
+    State(state): State<GatewayState>,
+    AxumPath(run_id): AxumPath<String>,
+    Query(params): Query<RunLogQuery>,
+) -> impl IntoResponse {
+    let records = state.journal.all_events().await;
+    let cursor = params.cursor.unwrap_or(0);
+    let mut entries: Vec<RunLogEntry> = Vec::new();
+
+    for record in records
+        .into_iter()
+        .filter(|r| belongs_to_run(&run_id, r) && r.kind.is_high_volume())
+    {
+        if record.sequence < cursor {
+            continue;
+        }
+        let (level, message, session_id, command_id) = match &record.kind {
+            EventKind::LogEntry { level } => {
+                let payload = record.payload.as_ref();
+                let message = payload
+                    .and_then(|p| p.get("message").or_else(|| p.get("content")))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&record.summary)
+                    .to_string();
+                let session_id = payload
+                    .and_then(|p| p.get("terminal_session_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let command_id = payload
+                    .and_then(|p| p.get("command_id"))
+                    .or_else(|| {
+                        payload
+                            .and_then(|p| p.get("association"))
+                            .and_then(|a| a.get("command_id"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                (level.clone(), message, session_id, command_id)
+            }
+            EventKind::TerminalFrame { .. } => {
+                let payload = record.payload.as_ref();
+                let message = payload
+                    .and_then(|p| p.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&record.summary)
+                    .to_string();
+                let session_id = payload
+                    .and_then(|p| p.get("terminal_session_id").or_else(|| p.get("stream_id")))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let command_id = payload
+                    .and_then(|p| p.get("association"))
+                    .and_then(|a| a.get("command_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                ("stdout".to_string(), message, session_id, command_id)
+            }
+            _ => continue,
+        };
+        entries.push(RunLogEntry {
+            sequence: record.sequence,
+            event_id: record.event_id.clone(),
+            happened_at: record.happened_at,
+            level,
+            message,
+            terminal_session_id: session_id,
+            command_id,
+        });
+        if entries.len() >= params.limit {
+            break;
+        }
+    }
+
+    let next_cursor = entries.last().map(|e| e.sequence + 1);
+    (
+        StatusCode::OK,
+        Json(RunLogPage {
+            schema_version: SchemaVersion::v1(),
+            run_id,
+            next_cursor,
+            entries,
+        }),
+    )
+}
+
+fn belongs_to_run(run_id: &str, record: &EventRecord) -> bool {
+    record.entity_refs.iter().any(|r| match r.kind {
+        EntityKind::Run => r.id == run_id,
+        EntityKind::Issue => r.identifier.as_deref() == Some(run_id) || r.id == run_id,
+        _ => false,
+    }) || record
+        .payload
+        .as_ref()
+        .is_some_and(|p| payload_run_id(p) == Some(run_id))
+}
+
+fn payload_run_id(payload: &serde_json::Value) -> Option<&str> {
+    payload
+        .get("run_id")
+        .or_else(|| payload.get("association").and_then(|a| a.get("run_id")))
+        .and_then(|v| v.as_str())
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TerminalSnapshotQuery {
+    #[serde(default)]
+    cursor: Option<u64>,
+    #[serde(default = "default_terminal_limit")]
+    limit: usize,
+}
+
+fn default_terminal_limit() -> usize {
+    1000
+}
+
+async fn get_terminal_snapshot(
+    State(state): State<GatewayState>,
+    AxumPath((run_id, stream_id)): AxumPath<(String, String)>,
+    Query(params): Query<TerminalSnapshotQuery>,
+) -> Result<Json<TerminalSnapshot>, (StatusCode, Json<serde_json::Value>)> {
+    let store = state.terminal_log_store.read().await;
+    let association = store.association(&stream_id);
+    if let Some(assoc) = association.as_ref()
+        && assoc.run_id != run_id
+    {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "stream does not belong to run",
+                "run_id": run_id,
+                "stream_id": stream_id,
+            })),
+        ));
+    }
+    let mut snapshot = store.snapshot(&stream_id, params.cursor, params.limit);
+    // Ensure the response run_id matches the requested run, even if the store
+    // doesn't know it yet.
+    if snapshot.run_id.is_empty() {
+        snapshot.run_id = run_id;
+    }
+    Ok(Json(snapshot))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TerminalSearchQuery {
+    q: String,
+}
+
+async fn search_terminal(
+    State(state): State<GatewayState>,
+    AxumPath((_run_id, stream_id)): AxumPath<(String, String)>,
+    Query(params): Query<TerminalSearchQuery>,
+) -> impl IntoResponse {
+    let store = state.terminal_log_store.read().await;
+    let matches = store
+        .search(&stream_id, &params.q)
+        .into_iter()
+        .map(
+            |(frame_sequence, frame_timestamp, snippet)| TerminalSearchMatch {
+                frame_sequence,
+                frame_timestamp,
+                snippet,
+            },
+        )
+        .collect();
+    (
+        StatusCode::OK,
+        Json(TerminalSearchResult {
+            schema_version: SchemaVersion::v1(),
+            terminal_session_id: stream_id,
+            query: params.q,
+            matches,
+        }),
+    )
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TerminalJumpQuery {
+    event_id: String,
+}
+
+async fn jump_terminal_to_event(
+    State(state): State<GatewayState>,
+    AxumPath((_run_id, stream_id)): AxumPath<(String, String)>,
+    Query(params): Query<TerminalJumpQuery>,
+) -> impl IntoResponse {
+    let store = state.terminal_log_store.read().await;
+    let frame_sequence = store.jump_to_event(&stream_id, &params.event_id);
+    (
+        StatusCode::OK,
+        Json(TerminalJumpResult {
+            schema_version: SchemaVersion::v1(),
+            terminal_session_id: stream_id,
+            event_id: params.event_id,
+            frame_sequence,
+            found: frame_sequence.is_some(),
         }),
     )
 }

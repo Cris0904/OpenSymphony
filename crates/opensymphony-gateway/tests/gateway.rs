@@ -2030,3 +2030,290 @@ async fn gateway_dispatches_action_and_returns_receipt() {
 
     server_task.abort();
 }
+
+#[tokio::test]
+async fn gateway_run_timeline_groups_runtime_events() {
+    use opensymphony::opensymphony_domain::InMemoryEventJournal as DomainJournal;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::event_journal::{EventKind, EventRecord};
+    use opensymphony::opensymphony_gateway_schema::timeline::{RunTimeline, TimelineEntryKind};
+
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let journal = DomainJournal::new(100, 64);
+
+    let records = vec![
+        EventRecord::builder()
+            .event_id("evt-1")
+            .sequence(1)
+            .actor(
+                opensymphony::opensymphony_gateway_schema::event_journal::EventActor::system(
+                    "test",
+                ),
+            )
+            .entity_ref(EntityRef {
+                kind: EntityKind::Run,
+                id: "run-1".into(),
+                identifier: None,
+            })
+            .kind(EventKind::RunStarted)
+            .summary("Run started")
+            .build(),
+        EventRecord::builder()
+            .event_id("evt-2")
+            .sequence(2)
+            .actor(
+                opensymphony::opensymphony_gateway_schema::event_journal::EventActor::system(
+                    "test",
+                ),
+            )
+            .entity_ref(EntityRef {
+                kind: EntityKind::Run,
+                id: "run-1".into(),
+                identifier: None,
+            })
+            .kind(EventKind::HarnessConversationStateUpdate)
+            .summary("waiting")
+            .payload(serde_json::json!({ "execution_status": "waiting_for_prior_turn" }))
+            .build(),
+        EventRecord::builder()
+            .event_id("evt-3")
+            .sequence(3)
+            .actor(
+                opensymphony::opensymphony_gateway_schema::event_journal::EventActor::system(
+                    "test",
+                ),
+            )
+            .entity_ref(EntityRef {
+                kind: EntityKind::Run,
+                id: "run-1".into(),
+                identifier: None,
+            })
+            .kind(EventKind::HarnessConversationStateUpdate)
+            .summary("running")
+            .payload(serde_json::json!({ "execution_status": "running" }))
+            .build(),
+        EventRecord::builder()
+            .event_id("evt-4")
+            .sequence(4)
+            .actor(
+                opensymphony::opensymphony_gateway_schema::event_journal::EventActor::system(
+                    "test",
+                ),
+            )
+            .entity_ref(EntityRef {
+                kind: EntityKind::Run,
+                id: "run-1".into(),
+                identifier: None,
+            })
+            .kind(EventKind::HarnessToolCall)
+            .summary("terminal tool")
+            .payload(serde_json::json!({ "tool_name": "terminal" }))
+            .build(),
+        EventRecord::builder()
+            .event_id("evt-5")
+            .sequence(5)
+            .actor(
+                opensymphony::opensymphony_gateway_schema::event_journal::EventActor::system(
+                    "test",
+                ),
+            )
+            .entity_ref(EntityRef {
+                kind: EntityKind::Run,
+                id: "run-1".into(),
+                identifier: None,
+            })
+            .kind(EventKind::RunCompleted)
+            .summary("Run completed")
+            .build(),
+    ];
+    for record in records {
+        journal.append(record).await.expect("append");
+    }
+
+    let broker = opensymphony::opensymphony_domain::StreamBroker::new(journal.clone());
+    let server = GatewayServer::with_journal(store, journal, broker);
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{address}/api/v1/runs/run-1/timeline");
+    let timeline: RunTimeline = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch timeline")
+        .json::<RunTimeline>()
+        .await
+        .expect("decode timeline");
+
+    assert_eq!(timeline.run_id, "run-1");
+    let kinds: Vec<_> = timeline.entries.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            TimelineEntryKind::State,
+            TimelineEntryKind::Progress,
+            TimelineEntryKind::Progress,
+            TimelineEntryKind::ToolCall,
+            TimelineEntryKind::State,
+        ]
+    );
+    assert!(
+        timeline
+            .entries
+            .iter()
+            .any(|e| e.title.to_lowercase().contains("waiting"))
+    );
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_terminal_log_associates_frames_and_reconnects() {
+    use opensymphony::opensymphony_domain::InMemoryEventJournal as DomainJournal;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::event_journal::{
+        EventActor, EventKind, EventRecord,
+    };
+    use opensymphony::opensymphony_gateway_schema::terminal::{
+        TerminalEncoding, TerminalFrame, TerminalFrameKind, TerminalLogAssociation,
+        TerminalSnapshot,
+    };
+    use opensymphony::opensymphony_gateway_schema::version::SchemaVersion;
+
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let journal = DomainJournal::new(100, 64);
+    let broker = opensymphony::opensymphony_domain::StreamBroker::new(journal.clone());
+    let server = GatewayServer::with_journal(store, journal.clone(), broker);
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    // Allow the router background task to start and subscribe.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let frame = TerminalFrame {
+        schema_version: SchemaVersion::v1(),
+        frame_sequence: 1,
+        stream_id: "term-1".into(),
+        run_id: "run-1".into(),
+        terminal_session_id: "term-1".into(),
+        frame_kind: TerminalFrameKind::Stdout,
+        encoding: TerminalEncoding::Utf8,
+        content: "hello from command a".into(),
+        timestamp: Utc::now(),
+        association: TerminalLogAssociation {
+            run_id: "run-1".into(),
+            workspace_id: "ws-1".into(),
+            command_id: Some("cmd-a".into()),
+            issue_id: Some("iss-1".into()),
+            sub_issue_id: Some("sub-1".into()),
+            harness_session_id: Some("harness-1".into()),
+        },
+        correlation_id: None,
+        source_event_id: Some("evt-1".into()),
+    };
+    let record = EventRecord::builder()
+        .event_id("evt-1")
+        .sequence(1)
+        .actor(EventActor::system("test"))
+        .entity_ref(EntityRef {
+            kind: EntityKind::Run,
+            id: "run-1".into(),
+            identifier: None,
+        })
+        .kind(EventKind::TerminalFrame {
+            frame_id: "f1".into(),
+        })
+        .summary("terminal frame")
+        .payload(serde_json::to_value(&frame).expect("serialize frame"))
+        .build();
+    journal.append(record).await.expect("append");
+
+    // Simulate reconnect with a second frame for the same session.
+    let mut frame2 = frame.clone();
+    frame2.frame_sequence = 2;
+    frame2.content = "hello again after reconnect".into();
+    frame2.source_event_id = Some("evt-2".into());
+    let record2 = EventRecord::builder()
+        .event_id("evt-2")
+        .sequence(2)
+        .actor(EventActor::system("test"))
+        .entity_ref(EntityRef {
+            kind: EntityKind::Run,
+            id: "run-1".into(),
+            identifier: None,
+        })
+        .kind(EventKind::TerminalFrame {
+            frame_id: "f2".into(),
+        })
+        .summary("terminal frame after reconnect")
+        .payload(serde_json::to_value(&frame2).expect("serialize frame"))
+        .build();
+    journal.append(record2).await.expect("append");
+
+    // Give the background ingestion task time to catch up.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{address}/api/v1/runs/run-1/terminal/term-1");
+    let snapshot: TerminalSnapshot = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch terminal snapshot")
+        .json::<TerminalSnapshot>()
+        .await
+        .expect("decode snapshot");
+
+    assert_eq!(snapshot.total_frames, 2);
+    assert_eq!(snapshot.frames.len(), 2);
+    let session = snapshot.session.expect("session present");
+    assert_eq!(session.association.run_id, "run-1");
+    assert_eq!(session.association.command_id.as_deref(), Some("cmd-a"));
+    assert_eq!(session.association.issue_id.as_deref(), Some("iss-1"));
+    assert_eq!(session.association.sub_issue_id.as_deref(), Some("sub-1"));
+
+    // Search should find the second frame.
+    let url = format!("http://{address}/api/v1/runs/run-1/terminal/term-1/search?q=again");
+    let result: opensymphony::opensymphony_gateway_schema::timeline::TerminalSearchResult = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch search")
+        .json()
+        .await
+        .expect("decode search result");
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].frame_sequence, 2);
+
+    // Jump to event should resolve the first frame.
+    let url = format!("http://{address}/api/v1/runs/run-1/terminal/term-1/jump?event_id=evt-1");
+    let jump: opensymphony::opensymphony_gateway_schema::timeline::TerminalJumpResult = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch jump")
+        .json()
+        .await
+        .expect("decode jump result");
+    assert!(jump.found);
+    assert_eq!(jump.frame_sequence, Some(1));
+
+    server_task.abort();
+}
