@@ -709,16 +709,6 @@ fn build_accepted_receipt_with_followups(
 }
 
 #[allow(dead_code)]
-fn build_rejected_receipt(
-    action_id: &str,
-    correlation_id: &str,
-    kind: ActionKind,
-    reason: impl Into<String>,
-) -> ActionReceipt {
-    ActionReceipt::rejected(action_id.to_owned(), correlation_id, kind, reason.into())
-}
-
-#[allow(dead_code)]
 fn build_audit_event_inner(
     actor_id: &str,
     correlation_id: &str,
