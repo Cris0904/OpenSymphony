@@ -81,7 +81,7 @@ export function renderTaskGraphNode(
     : `<button type="button" data-tg-edit="${escapeAttr(node.node_id)}">Edit</button>`;
 
   return `
-    <button type="button" class="os-node ${isSelected ? "is-selected" : ""}" data-node-id="${escapeAttr(node.node_id)}">
+    <div class="os-node ${isSelected ? "is-selected" : ""}" data-node-id="${escapeAttr(node.node_id)}">
       <span class="os-node-kind">${escapeHtml(node.kind.replace(/_/g, " "))}</span>
       ${titleContent}
       ${titleDisplay}
@@ -93,7 +93,7 @@ export function renderTaskGraphNode(
         <button type="button" data-tg-comment="${escapeAttr(node.node_id)}">Comment</button>
         <button type="button" data-tg-create-child="${escapeAttr(node.node_id)}">+</button>
       </div>
-    </button>
+    </div>
   `;
 }
 

@@ -254,7 +254,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
   }
 
   private async openRun(node: TaskGraphNode): Promise<void> {
-    const runId = node.run_id || node.identifier || node.node_id;
+    const runId = node.run_id || node.node_id;
     this.state.selectedNodeId = node.node_id;
     this.state.loading = true;
     this.render();
