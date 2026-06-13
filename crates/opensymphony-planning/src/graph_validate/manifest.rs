@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 
@@ -88,19 +88,20 @@ pub struct ManifestValidator;
 
 impl ManifestValidator {
     /// Validates the supplied manifest file path (the manifest itself) and
-    /// each declared task file path. Missing or unreadable task files are
-    /// surfaced via `missing_task_files`, not as hard errors.
+    /// each declared task file path against `repo_root`. Missing or
+    /// unreadable task files are surfaced via `missing_task_files`, not as
+    /// hard errors.
+    ///
+    /// `repo_root` is supplied explicitly so the validator cannot silently
+    /// mis-resolve relative task paths when the manifest's location in the
+    /// repository layout changes (see COE-416 review).
     #[allow(dead_code)]
     pub fn validate(
         manifest_path: &Path,
+        repo_root: &Path,
     ) -> Result<ManifestValidationResult, ManifestValidatorError> {
         let manifest = load_manifest(manifest_path)?;
-        let repo_root = manifest_path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        Ok(Self::validate_against_repo_root(&manifest, &repo_root))
+        Ok(Self::validate_against_repo_root(&manifest, repo_root))
     }
 
     /// Same as [`Self::validate`] but takes a pre-parsed manifest and a
@@ -122,7 +123,7 @@ impl ManifestValidator {
         };
 
         let mut seen_ids: BTreeSet<TaskId> = BTreeSet::new();
-        let mut entries: Vec<(TaskId, PathBuf, TaskFrontmatter)> = Vec::new();
+        let mut entries: Vec<(TaskId, TaskFrontmatter)> = Vec::new();
         let milestone_set: BTreeSet<String> = manifest.milestones.iter().cloned().collect();
 
         for entry in &manifest.tasks {
@@ -134,7 +135,7 @@ impl ManifestValidator {
             result.declared_task_ids.push(id.clone());
             let path = repo_root.join(&entry.file);
             match parse_task_file(&path) {
-                Ok(parsed) => entries.push((id.clone(), path, parsed.frontmatter)),
+                Ok(parsed) => entries.push((id.clone(), parsed.frontmatter)),
                 Err(TaskFrontmatterError::Io { source, .. })
                     if source.kind() == std::io::ErrorKind::NotFound =>
                 {
@@ -155,7 +156,7 @@ impl ManifestValidator {
 
         let id_set: BTreeSet<TaskId> = result.declared_task_ids.iter().cloned().collect();
         let mut adjacency: BTreeMap<TaskId, BTreeSet<TaskId>> = BTreeMap::new();
-        for (task_id, _, frontmatter) in &entries {
+        for (task_id, frontmatter) in &entries {
             if !milestone_set.contains(frontmatter.milestone.as_deref().unwrap_or_default())
                 && let Some(declared) = frontmatter.milestone.clone()
             {
@@ -212,61 +213,59 @@ fn creation_order_cycles(
     let mut stack: Vec<TaskId> = Vec::new();
     let mut seen_cycles: BTreeSet<Vec<TaskId>> = BTreeSet::new();
     let mut collected: Vec<Vec<TaskId>> = Vec::new();
+    let mut state = DfsState {
+        adjacency,
+        visited: &mut visited,
+        on_stack: &mut on_stack,
+        stack: &mut stack,
+        seen_cycles: &mut seen_cycles,
+        collected: &mut collected,
+    };
 
     for entry in nodes {
-        if !visited.contains(entry) {
-            dfs_cycle(
-                entry,
-                adjacency,
-                &mut visited,
-                &mut on_stack,
-                &mut stack,
-                &mut seen_cycles,
-                &mut collected,
-            );
+        if !state.visited.contains(entry) {
+            dfs_cycle(entry, &mut state);
         }
     }
     collected
 }
 
-fn dfs_cycle(
-    node: &TaskId,
-    adjacency: &BTreeMap<TaskId, BTreeSet<TaskId>>,
-    visited: &mut BTreeSet<TaskId>,
-    on_stack: &mut BTreeSet<TaskId>,
-    stack: &mut Vec<TaskId>,
-    seen_cycles: &mut BTreeSet<Vec<TaskId>>,
-    collected: &mut Vec<Vec<TaskId>>,
-) {
-    visited.insert(node.clone());
-    on_stack.insert(node.clone());
-    stack.push(node.clone());
-    if let Some(deps) = adjacency.get(node) {
+/// Aggregated mutable DFS bookkeeping shared across recursive calls. Grouped
+/// into a struct (rather than passed as separate parameters) so the recursive
+/// call sites stay readable as the validator grows (see COE-416 review).
+struct DfsState<'a> {
+    adjacency: &'a BTreeMap<TaskId, BTreeSet<TaskId>>,
+    visited: &'a mut BTreeSet<TaskId>,
+    on_stack: &'a mut BTreeSet<TaskId>,
+    stack: &'a mut Vec<TaskId>,
+    seen_cycles: &'a mut BTreeSet<Vec<TaskId>>,
+    collected: &'a mut Vec<Vec<TaskId>>,
+}
+
+fn dfs_cycle(node: &TaskId, state: &mut DfsState<'_>) {
+    state.visited.insert(node.clone());
+    state.on_stack.insert(node.clone());
+    state.stack.push(node.clone());
+    if let Some(deps) = state.adjacency.get(node) {
         for dep in deps {
-            if !visited.contains(dep) {
-                dfs_cycle(
-                    dep,
-                    adjacency,
-                    visited,
-                    on_stack,
-                    stack,
-                    seen_cycles,
-                    collected,
-                );
-            } else if on_stack.contains(dep)
-                && let Some(start_idx) = stack.iter().position(|n| n == dep)
+            if !state.visited.contains(dep) {
+                dfs_cycle(dep, state);
+            } else if state.on_stack.contains(dep)
+                && let Some(start_idx) = state.stack.iter().position(|n| n == dep)
             {
-                let mut cycle: Vec<TaskId> = stack[start_idx..].to_vec();
-                cycle.push(dep.clone());
+                // `stack[start_idx..]` already includes `dep` at `start_idx`,
+                // so appending it again would duplicate the first entry and
+                // produce a malformed cycle vector (see COE-416 review).
+                let mut cycle: Vec<TaskId> = state.stack[start_idx..].to_vec();
                 cycle.sort();
-                if seen_cycles.insert(cycle.clone()) {
-                    collected.push(cycle);
+                if state.seen_cycles.insert(cycle.clone()) {
+                    state.collected.push(cycle);
                 }
             }
         }
     }
-    on_stack.remove(node);
-    stack.pop();
+    state.on_stack.remove(node);
+    state.stack.pop();
 }
 
 #[cfg(test)]
@@ -418,6 +417,13 @@ mod tests {
         let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
         let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
         assert_eq!(result.creation_order_cycles.len(), 1);
+        // Cycle must list each node exactly once (no duplicate start node
+        // appended). After sort the length-2 cycle becomes [A, B].
+        let cycle = &result.creation_order_cycles[0];
+        assert_eq!(cycle.len(), 2);
+        let unique: std::collections::BTreeSet<&TaskId> = cycle.iter().collect();
+        assert_eq!(unique.len(), 2);
+        assert_eq!(cycle, &vec![TaskId::new("TASK-A"), TaskId::new("TASK-B")],);
     }
 
     #[test]
@@ -454,5 +460,46 @@ mod tests {
         let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
         let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
         assert_eq!(result.duplicate_task_ids, vec![TaskId::new("TASK-A")]);
+        // error_count must include duplicate ids so dashboards/tests that
+        // rely on the count do not silently under-report when only the
+        // duplicate id check fires (see COE-416 review).
+        assert!(result.error_count() >= 1);
+        assert!(!result.is_ok());
+    }
+
+    #[test]
+    fn validate_takes_explicit_repo_root() {
+        // `ManifestValidator::validate` must consume the supplied repo_root
+        // so callers can anchor relative task paths regardless of where the
+        // manifest lives in the repository layout. This guards against the
+        // previously fragile `.parent().and_then(Path::parent)` heuristic.
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join("project");
+        std::fs::create_dir_all(project.join("docs/tasks")).expect("mkdir");
+        let manifest_path = project.join("docs/tasks/task-package.yaml");
+        std::fs::write(
+            &manifest_path,
+            manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md")]),
+        )
+        .expect("write manifest");
+        std::fs::write(
+            project.join("docs/tasks/a.md"),
+            task_file_text("TASK-A", "M1", &[], &[]),
+        )
+        .expect("write task file");
+
+        // Anchoring at the workspace root should fail to find the file
+        // (truth path is `project/docs/tasks/a.md`).
+        let bad_result = ManifestValidator::validate(&manifest_path, workspace.path())
+            .expect("manifest parses")
+            .missing_task_files;
+        assert_eq!(bad_result.len(), 1);
+
+        // Anchoring at the project root (where the file actually lives)
+        // resolves the relative path correctly.
+        let good_result = ManifestValidator::validate(&manifest_path, &project)
+            .expect("manifest parses")
+            .missing_task_files;
+        assert!(good_result.is_empty());
     }
 }

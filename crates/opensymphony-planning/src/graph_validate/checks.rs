@@ -16,9 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::opensymphony_planning::generator::domain::{
-    PlanArtifacts, PlannedIssue, PlannedMilestone, PlannedSubIssue, TaskId,
-};
+use crate::opensymphony_planning::generator::domain::{PlanArtifacts, PlannedMilestone, TaskId};
 
 use super::domain::{PlanCheckCategory, PlanCheckFinding, PlanCheckSeverity};
 
@@ -273,28 +271,10 @@ fn check_task_blocker_inverse(
     }
 }
 
-trait BlockingTask {
-    fn id(&self) -> TaskId;
-    fn blocks(&self) -> &[TaskId];
-}
-
-impl BlockingTask for PlannedIssue {
-    fn id(&self) -> TaskId {
-        self.id.clone()
-    }
-    fn blocks(&self) -> &[TaskId] {
-        &self.blocks
-    }
-}
-
-impl BlockingTask for PlannedSubIssue {
-    fn id(&self) -> TaskId {
-        self.id.clone()
-    }
-    fn blocks(&self) -> &[TaskId] {
-        &self.blocks
-    }
-}
+// `BlockingTask` lives in the parent `graph_validate` module so the
+// `graph` and `checks` helpers can share its `id` / `blocks` walks
+// without duplicating the trait definition.
+use super::BlockingTask;
 
 /// Build the inverse blocker map: for every task `T`, the set of tasks
 /// that list `T` as a blocker. Used by the missing-blocker check.
@@ -382,11 +362,8 @@ fn topo_waves(dependency_map: &BTreeMap<TaskId, BTreeSet<TaskId>>) -> Vec<Vec<Ta
             remaining.remove(task_id);
         }
         for deps in remaining.values_mut() {
-            for solved in &current {
-                deps.remove(solved);
-            }
+            deps.retain(|dep| !current_set.contains(dep));
         }
-        let _ = current_set;
         waves.push(current);
     }
     waves
@@ -395,6 +372,10 @@ fn topo_waves(dependency_map: &BTreeMap<TaskId, BTreeSet<TaskId>>) -> Vec<Vec<Ta
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::opensymphony_planning::generator::domain::{
+        PlannedIssue, PlannedMilestone, PlannedSubIssue,
+    };
 
     fn issue(id: &str, blocked_by: &[&str]) -> PlannedIssue {
         PlannedIssue {

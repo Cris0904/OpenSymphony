@@ -16,13 +16,11 @@
 //! so reviewers can link the rendered arrow back to the document that
 //! introduced the metadata.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 
-use crate::opensymphony_planning::generator::domain::{
-    PlanArtifacts, PlannedIssue, PlannedMilestone, PlannedSubIssue, TaskId,
-};
+use crate::opensymphony_planning::generator::domain::{PlanArtifacts, PlannedMilestone, TaskId};
 
 use super::checks::creation_order_waves;
 use super::domain::{DependencyGraph, GraphEdge, GraphEdgeReason, GraphNode, GraphNodeKind};
@@ -151,10 +149,10 @@ fn push_parent_edge(
 }
 
 fn push_blocker_edges(
-    task: &dyn BlockingTaskLike,
+    task: &dyn super::BlockingTask,
     milestone: &PlannedMilestone,
     declared_ids: &BTreeSet<TaskId>,
-    source_for: &std::collections::HashMap<TaskId, Option<String>>,
+    source_for: &BTreeMap<TaskId, Option<String>>,
     edges: &mut Vec<GraphEdge>,
 ) {
     for blocker in task.blocked_by() {
@@ -193,36 +191,6 @@ fn push_blocker_edges(
     }
 }
 
-trait BlockingTaskLike {
-    fn id(&self) -> TaskId;
-    fn blocked_by(&self) -> &[TaskId];
-    fn blocks(&self) -> &[TaskId];
-}
-
-impl BlockingTaskLike for PlannedIssue {
-    fn id(&self) -> TaskId {
-        self.id.clone()
-    }
-    fn blocked_by(&self) -> &[TaskId] {
-        &self.blocked_by
-    }
-    fn blocks(&self) -> &[TaskId] {
-        &self.blocks
-    }
-}
-
-impl BlockingTaskLike for PlannedSubIssue {
-    fn id(&self) -> TaskId {
-        self.id.clone()
-    }
-    fn blocked_by(&self) -> &[TaskId] {
-        &self.blocked_by
-    }
-    fn blocks(&self) -> &[TaskId] {
-        &self.blocks
-    }
-}
-
 fn collect_all_task_ids(milestone: &PlannedMilestone) -> BTreeSet<TaskId> {
     let mut ids: BTreeSet<TaskId> = BTreeSet::new();
     ids.insert(milestone.id.clone());
@@ -238,11 +206,11 @@ fn collect_all_task_ids(milestone: &PlannedMilestone) -> BTreeSet<TaskId> {
 /// Build a lookup from `TaskId` -> task file for every task referenced inside
 /// the milestone, so edges can attach the FROM-side artifact reference
 /// regardless of which side of the relationship was iterated.
-fn build_task_file_lookup(
-    milestone: &PlannedMilestone,
-) -> std::collections::HashMap<TaskId, Option<String>> {
-    let mut lookup: std::collections::HashMap<TaskId, Option<String>> =
-        std::collections::HashMap::new();
+fn build_task_file_lookup(milestone: &PlannedMilestone) -> BTreeMap<TaskId, Option<String>> {
+    // BTreeMap keeps entries in sorted order so the graph-edge attributes
+    // stream is deterministic for the JSON plan-validation artifact (matches
+    // the rest of this module, see COE-416 review).
+    let mut lookup: BTreeMap<TaskId, Option<String>> = BTreeMap::new();
     for issue in &milestone.issues {
         lookup.insert(issue.id.clone(), issue.task_file.clone());
         for sub in &issue.sub_issues {

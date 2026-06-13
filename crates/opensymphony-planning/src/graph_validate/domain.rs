@@ -218,6 +218,7 @@ impl ManifestValidationResult {
                 .map(|cycle| cycle.len())
                 .sum::<usize>()
             + self.self_blocks.len()
+            + self.duplicate_task_ids.len()
     }
 }
 

@@ -39,9 +39,46 @@ pub use manifest::{
     load_manifest,
 };
 
+/// Shared trait over the planning artefact types that carry bidirectional
+/// blocker metadata. Both [`crate::opensymphony_planning::generator::domain::PlannedIssue`]
+/// and [`crate::opensymphony_planning::generator::domain::PlannedSubIssue`]
+/// implement this trait so the graph + plan-check modules can walk them
+/// without duplicating the implementation per struct.
+pub trait BlockingTask {
+    fn id(&self) -> TaskId;
+    fn blocked_by(&self) -> &[TaskId];
+    fn blocks(&self) -> &[TaskId];
+}
+
+impl BlockingTask for PlannedIssue {
+    fn id(&self) -> TaskId {
+        self.id.clone()
+    }
+    fn blocked_by(&self) -> &[TaskId] {
+        &self.blocked_by
+    }
+    fn blocks(&self) -> &[TaskId] {
+        &self.blocks
+    }
+}
+
+impl BlockingTask for PlannedSubIssue {
+    fn id(&self) -> TaskId {
+        self.id.clone()
+    }
+    fn blocked_by(&self) -> &[TaskId] {
+        &self.blocked_by
+    }
+    fn blocks(&self) -> &[TaskId] {
+        &self.blocks
+    }
+}
+
 use chrono::Utc;
 
-use crate::opensymphony_planning::generator::domain::PlanArtifacts;
+use crate::opensymphony_planning::generator::domain::{
+    PlanArtifacts, PlannedIssue, PlannedSubIssue, TaskId,
+};
 
 use super::codebase::CodebaseAnalysis;
 use super::codebase::RiskSeverity;

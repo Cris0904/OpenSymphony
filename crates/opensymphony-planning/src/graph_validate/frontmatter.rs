@@ -136,10 +136,22 @@ pub fn parse_task_text(raw: &str, path: &str) -> Result<ParsedTaskFile, TaskFron
 /// files. Used by the manifest validator when iterating declared paths:
 /// we want errors for "declared but missing" to be surfaced from the
 /// validation layer, not from the loader.
-pub fn read_task_frontmatter_or_default(path: &Path) -> TaskFrontmatter {
+///
+/// Parse errors (malformed YAML, missing frontmatter delimiters, etc.) are
+/// intentionally propagated so the validator can distinguish a true
+/// "file does not exist" finding from a parse failure that demands a
+/// different diagnostic.
+pub fn read_task_frontmatter_or_default(
+    path: &Path,
+) -> Result<TaskFrontmatter, TaskFrontmatterError> {
     match parse_task_file(path) {
-        Ok(parsed) => parsed.frontmatter,
-        Err(_) => TaskFrontmatter::default(),
+        Ok(parsed) => Ok(parsed.frontmatter),
+        Err(TaskFrontmatterError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(TaskFrontmatter::default())
+        }
+        Err(other) => Err(other),
     }
 }
 
