@@ -282,10 +282,13 @@ impl std::fmt::Debug for GatewayServer {
 
 impl Drop for GatewayServer {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.terminal_ingest_handle.lock() {
-            if let Some(handle) = guard.take() {
-                handle.abort();
-            }
+        if let Some(handle) = self
+            .terminal_ingest_handle
+            .lock()
+            .expect("terminal ingest handle mutex poisoned")
+            .take()
+        {
+            handle.abort();
         }
     }
 }
@@ -356,7 +359,10 @@ impl GatewayServer {
         // Abort any previous terminal ingest task associated with this server
         // instance so router rebuilds don't leak background tasks.
         {
-            let mut handle = self.terminal_ingest_handle.lock().unwrap();
+            let mut handle = self
+                .terminal_ingest_handle
+                .lock()
+                .expect("terminal ingest handle mutex poisoned");
             if let Some(old) = handle.take() {
                 old.abort();
             }
@@ -385,7 +391,10 @@ impl GatewayServer {
                 store.ingest_event_record(&record);
             }
         });
-        *self.terminal_ingest_handle.lock().unwrap() = Some(handle);
+        *self
+            .terminal_ingest_handle
+            .lock()
+            .expect("terminal ingest handle mutex poisoned") = Some(handle);
         let mut router = Router::new()
             .route("/api/v1/capabilities", get(capabilities))
             .route("/api/v1/dashboard/snapshot", get(dashboard_snapshot))
