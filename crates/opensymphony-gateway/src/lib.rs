@@ -1,7 +1,7 @@
 use std::{
     convert::Infallible,
     path::{Path as StdPath, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -21,15 +21,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 use tokio_util::io::ReaderStream;
 
 use crate::opensymphony_domain::{
-    EventStream, InMemoryEventJournal, StreamBroker, TerminalLogStore, TimelineBuilder,
+    belongs_to_run, EventStream, InMemoryEventJournal, StreamBroker, TerminalLogStore,
+    TimelineBuilder,
 };
 use crate::opensymphony_gateway_schema::{
     cursor::StreamCursor,
-    envelope::EntityKind,
     event_journal::{EventKind, EventPage, EventRecord, JournalError, StreamError},
     terminal::TerminalSnapshot,
     timeline::{
@@ -245,6 +245,7 @@ pub struct GatewayServer {
     broker: StreamBroker,
     web_assets_dir: Option<String>,
     linear_mutations: Option<Arc<dyn LinearMutationClient>>,
+    terminal_ingest_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl Clone for GatewayServer {
@@ -255,6 +256,7 @@ impl Clone for GatewayServer {
             broker: self.broker.clone(),
             web_assets_dir: self.web_assets_dir.clone(),
             linear_mutations: self.linear_mutations.clone(),
+            terminal_ingest_handle: self.terminal_ingest_handle.clone(),
         }
     }
 }
@@ -270,7 +272,19 @@ impl std::fmt::Debug for GatewayServer {
                 "linear_mutations",
                 &self.linear_mutations.as_ref().map(|_| "..."),
             )
+            .field("terminal_ingest_handle", &"<handle>")
             .finish()
+    }
+}
+
+impl Drop for GatewayServer {
+    fn drop(&mut self) {
+        if let Some(handle) = Arc::get_mut(&mut self.terminal_ingest_handle)
+            .and_then(|m| m.lock().ok())
+            .and_then(|mut guard| guard.take())
+        {
+            handle.abort();
+        }
     }
 }
 
@@ -284,6 +298,7 @@ impl GatewayServer {
             store,
             web_assets_dir: None,
             linear_mutations: None,
+            terminal_ingest_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -299,6 +314,7 @@ impl GatewayServer {
             broker,
             web_assets_dir: None,
             linear_mutations: None,
+            terminal_ingest_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -318,9 +334,9 @@ impl GatewayServer {
         self
     }
 
-    /// Extract the journal and broker so the caller can keep clones for testing.
+    /// Extract clones of the journal and broker so the caller can keep them for testing.
     pub fn journal_and_broker(self) -> (InMemoryEventJournal, StreamBroker) {
-        (self.journal, self.broker)
+        (self.journal.clone(), self.broker.clone())
     }
 
     pub fn router(&self) -> Router {
@@ -335,11 +351,29 @@ impl GatewayServer {
             linear_mutations: self.linear_mutations.clone(),
         };
 
+        // Abort any previous terminal ingest task so router rebuilds don't leak
+        // background tasks.
+        {
+            let mut handle = self.terminal_ingest_handle.lock().unwrap();
+            if let Some(old) = handle.take() {
+                old.abort();
+            }
+        }
+
         // Background task: ingest terminal/log events from the journal into the
         // terminal log store so scrollback and search remain consistent across
-        // reconnect and long-running replays.
-        let mut subscriber = self.journal.subscribe();
-        tokio::spawn(async move {
+        // reconnect, server restart, and long-running replays.
+        let journal = self.journal.clone();
+        let mut subscriber = journal.subscribe();
+        let handle = tokio::spawn(async move {
+            // Reconcile existing journal backlog before subscribing to live events.
+            let records = journal.all_events().await;
+            {
+                let mut store = terminal_log_store.write().await;
+                for record in records.iter().filter(|r| r.kind.is_high_volume()) {
+                    store.ingest_event_record(record);
+                }
+            }
             while let Ok(event) = subscriber.recv().await {
                 let Ok(record) = event else { continue };
                 if !record.kind.is_high_volume() {
@@ -349,6 +383,7 @@ impl GatewayServer {
                 store.ingest_event_record(&record);
             }
         });
+        *self.terminal_ingest_handle.lock().unwrap() = Some(handle);
         let mut router = Router::new()
             .route("/api/v1/capabilities", get(capabilities))
             .route("/api/v1/dashboard/snapshot", get(dashboard_snapshot))
@@ -1997,23 +2032,6 @@ async fn get_run_logs(
     )
 }
 
-fn belongs_to_run(run_id: &str, record: &EventRecord) -> bool {
-    record.entity_refs.iter().any(|r| match r.kind {
-        EntityKind::Run => r.id == run_id,
-        EntityKind::Issue => r.identifier.as_deref() == Some(run_id) || r.id == run_id,
-        _ => false,
-    }) || record
-        .payload
-        .as_ref()
-        .is_some_and(|p| payload_run_id(p) == Some(run_id))
-}
-
-fn payload_run_id(payload: &serde_json::Value) -> Option<&str> {
-    payload
-        .get("run_id")
-        .or_else(|| payload.get("association").and_then(|a| a.get("run_id")))
-        .and_then(|v| v.as_str())
-}
 
 #[derive(Debug, serde::Deserialize)]
 struct TerminalSnapshotQuery {
@@ -2055,11 +2073,7 @@ async fn get_terminal_snapshot(
         ));
     }
     let mut snapshot = store.snapshot(&stream_id, params.cursor, params.limit);
-    // Ensure the response run_id matches the requested run, even if the store
-    // doesn't know it yet.
-    if snapshot.run_id.is_empty() {
-        snapshot.run_id = assoc.run_id.clone();
-    }
+    snapshot.run_id = assoc.run_id.clone();
     Ok(Json(snapshot))
 }
 

@@ -140,7 +140,7 @@ impl TimelineBuilder {
     }
 }
 
-fn belongs_to_run(run_id: &str, record: &EventRecord) -> bool {
+pub fn belongs_to_run(run_id: &str, record: &EventRecord) -> bool {
     record.entity_refs.iter().any(|r| match r.kind {
         EntityKind::Run => r.id == run_id,
         EntityKind::Issue => r.identifier.as_deref() == Some(run_id) || r.id == run_id,
@@ -151,7 +151,7 @@ fn belongs_to_run(run_id: &str, record: &EventRecord) -> bool {
         .is_some_and(|p| payload_run_id(p) == Some(run_id))
 }
 
-fn payload_run_id(payload: &Value) -> Option<&str> {
+pub fn payload_run_id(payload: &Value) -> Option<&str> {
     payload
         .get("run_id")
         .or_else(|| payload.get("association").and_then(|a| a.get("run_id")))
