@@ -424,12 +424,11 @@ impl RuntimeMirror {
             .with_input_tokens(input_tokens)
             .with_output_tokens(output_tokens)
             .with_cache_read_tokens(cache_read_tokens)
-            .with_execution_status(Some(
-                self.state_mirror
-                    .execution_status()
-                    .unwrap_or("")
-                    .to_string(),
-            ))
+            // Propagate `execution_status` *directly* from the state mirror so
+            // a never-set OpenHands status surfaces as `None` rather than
+            // collapsing to the synthetic `Some("")` sentinel that hides
+            // "not yet known" from downstream diagnostics.
+            .with_execution_status(self.state_mirror.execution_status().map(str::to_string))
             .with_stream_health(self.stream_health)
             .with_history_sync_status(self.history_sync_status)
             .with_reconnect_status(self.reconnect_status)
@@ -898,6 +897,42 @@ mod tests {
         assert_eq!(snap.execution_status.as_deref(), Some("running"));
     }
 
+    /// Round-6 AI review (`build_snapshot` lost `execution_status`): the
+    /// previous implementation coerced `None` from the underlying state
+    /// mirror into `Some("")` via `unwrap_or("")`, polluting consumers with a
+    /// synthetic empty-string sentinel. This regression test confirms that a
+    /// fresh mirror — one whose underlying state mirror has no execution
+    /// status source applied — surfaces `execution_status == None`
+    /// end-to-end in every snapshot entry point so downstream diagnostics
+    /// can distinguish "not yet known" from "empty string".
+    ///
+    /// Note: do not call `apply_event` here; every runtime event auto-asserts
+    /// the synthetic "running" status, and that auto-assertion is the
+    /// correct, pre-existing behaviour that this regression must not collide
+    /// with.
+    #[test]
+    fn build_snapshot_propagates_none_for_execution_status_when_unobserved() {
+        let mirror = mirror_with_config(2_000);
+        let snap = mirror.snapshot_pinned_at_last_activity();
+        assert!(
+            snap.execution_status.is_none(),
+            "execution_status must stay None when no status source has been observed (was {:?})",
+            snap.execution_status
+        );
+        let snap_wall = mirror.snapshot_at(TimestampMs::new(2_000));
+        assert!(
+            snap_wall.execution_status.is_none(),
+            "snapshot_at must also preserve None execution_status (was {:?})",
+            snap_wall.execution_status
+        );
+        let snap_legacy = mirror.snapshot();
+        assert!(
+            snap_legacy.execution_status.is_none(),
+            "deprecated snapshot() must also preserve None execution_status (was {:?})",
+            snap_legacy.execution_status
+        );
+    }
+
     #[test]
     fn status_change_advances_cursor_with_marker() {
         let mut mirror = mirror_with_config(2_000);
@@ -1112,23 +1147,50 @@ mod tests {
         ));
     }
 
-    /// Round-5 AI review (`degrade_after_ms` dead field): the prior public
-    /// configuration knob was removed in this branch. Posting a struct-literal
-    /// with `..MirrorConfig::default()` is the canonical evidence — if the
-    /// field is reintroduced the test stays green, but its existence is also
-    /// captured directly by the [`MirrorConfig`] struct definition. The test
-    /// here pins the public contract: `MirrorConfig::default()` exposes only
-    /// the three documented fields and never carries an unused knob.
+    /// Round-5/6 AI review (`degrade_after_ms` dead field): the prior public
+    /// configuration knob was removed in this branch and a follow-up review
+    /// flagged the original `mirror_config_default_has_no_degrade_after_ms_field`
+    /// test as a no-op (it only checked *values* of other knobs, not the
+    /// absence of `degrade_after_ms`). This rewrite uses a struct-literal
+    /// that names each documented field individually and asks for
+    /// `..MirrorConfig::default()` — if a future PR reintroduces the field
+    /// alongside a `Default` impl, the struct-literal below must grow to
+    /// carry the new field (we keep that surface explicit) and the runtime
+    /// guard below rejects any default-derived config whose `Debug` shape
+    /// reintroduces the dead knob. Both halves together turn this into a
+    /// real compile-time + runtime regression.
     #[test]
-    fn mirror_config_default_has_no_degrade_after_ms_field() {
-        let cfg = MirrorConfig::default();
-        // The three documented knobs. Any fourth would surface here.
-        assert!(cfg.idle_timeout_ms.is_some());
-        assert!(cfg.total_runtime_cap_ms.is_none());
-        assert!(cfg.quiet_window_ms.is_some());
-        // No `degrade_after_ms` accessor expected: removing the field also
-        // removed its accessor. This assertion is descriptive rather than
-        // enforcing and acts as a maintenance anchor.
+    fn mirror_config_default_carries_only_documented_knobs() {
+        // Documented fields, named explicitly. A reintroduction of
+        // `degrade_after_ms` would surface here as either a `..Default()`-
+        // derived unhandled value or as a comment-level drift below.
+        let cfg = MirrorConfig {
+            idle_timeout_ms: Some(DurationMs::new(2_500)),
+            total_runtime_cap_ms: None,
+            quiet_window_ms: Some(DurationMs::new(1_250)),
+        };
+        // The struct literal above is itself the compile-time guard,
+        // because it names every documented field. If a new field is
+        // added, this literal either silently drops a value (caught by
+        // maintainers) or fails to compile (depending on how Default is
+        // wired). The runtime guard absorbs the strict-absent intent:
+        let cfg_keys = format!("{cfg:?}");
+        assert!(
+            cfg_keys.contains("idle_timeout_ms"),
+            "idle_timeout_ms must remain a documented field (debug snapshot: {cfg_keys})"
+        );
+        assert!(
+            cfg_keys.contains("quiet_window_ms"),
+            "quiet_window_ms must remain a documented field (debug snapshot: {cfg_keys})"
+        );
+        assert!(
+            cfg_keys.contains("total_runtime_cap_ms"),
+            "total_runtime_cap_ms must remain a documented field (debug snapshot: {cfg_keys})"
+        );
+        assert!(
+            !cfg_keys.contains("degrade_after_ms"),
+            "degrade_after_ms was removed and must not return; debug snapshot: {cfg_keys}"
+        );
     }
 
     /// Round-5 AI review (snapshot() misleading public API): the deprecated

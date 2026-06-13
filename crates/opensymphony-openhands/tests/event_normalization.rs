@@ -220,6 +220,44 @@ fn action_event_normalizes_into_tool_call() {
     assert_eq!(normalized.record.summary, "Running `ls -la`");
 }
 
+/// Round-6 AI review (`tool_call` payload misses `action_id`): the reviewer
+/// flagged a hypothetical tool-call test that lacked the `action_id`
+/// propagation assertion. The general `action_event_normalizes_into_tool_call`
+/// test above already asserts `action_id` (see line ~215), but this more
+/// targeted regression pins the exact invariant the reviewer asked for — an
+/// `ActionEvent` envelope with id `evt-action` produces a `HarnessToolCall`
+/// payload whose `action_id` is the envelope id, so `tool_name`, `arguments`,
+/// and `action_id` all surface on the same record.
+#[test]
+fn action_event_normalizes_tool_call_with_arguments() {
+    let envelope = action_envelope("evt-action", "terminal", "ls -la");
+    let normalized = normalize_event(&envelope, &context());
+    assert!(
+        matches!(normalized.record.kind, EventKind::HarnessToolCall),
+        "envelope id evt-action must normalize to HarnessToolCall"
+    );
+    let payload = normalized.record.payload.expect("tool call payload");
+    assert_eq!(
+        payload.get("tool_name").and_then(Value::as_str),
+        Some("terminal"),
+        "tool_name must match the action envelope's tool"
+    );
+    assert_eq!(
+        payload
+            .get("arguments")
+            .and_then(|a| a.get("command"))
+            .and_then(Value::as_str),
+        Some("ls -la"),
+        "arguments.command must round-trip from the envelope payload"
+    );
+    assert_eq!(
+        payload.get("action_id").and_then(Value::as_str),
+        Some("evt-action"),
+        "action_id must propagate from the envelope id to the normalized payload"
+    );
+    assert_eq!(normalized.record.summary, "Running `ls -la`");
+}
+
 #[test]
 fn observation_event_normalizes_into_tool_result() {
     let envelope = observation_envelope("evt-obs", 0, "ok\n");

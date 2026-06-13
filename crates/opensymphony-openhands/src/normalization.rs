@@ -642,6 +642,14 @@ mod tests {
             payload.get("tool_name").and_then(Value::as_str),
             Some("terminal")
         );
+        // `c0396c1` propagated `action_id` from the envelope id into the normalized
+        // payload so the action/observation chain stays correlatable. Locking
+        // it here means dropping the field later would surface immediately.
+        assert_eq!(
+            payload.get("action_id").and_then(Value::as_str),
+            Some("evt-action"),
+            "action_id must propagate so the action/observation chain stays correlatable"
+        );
         assert!(normalized.record.summary.contains("running ls"));
     }
 
