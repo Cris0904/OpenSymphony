@@ -692,6 +692,7 @@ export class TerminalViewer {
   }
 
   destroy(): void {
+    this.dispose();
     this.detachRender?.();
     this.detachRender = undefined;
     this.renderer = null;

@@ -33,6 +33,14 @@ describe("TerminalViewer association", () => {
     container.remove();
   });
 
+  it("destroy removes event listeners without throwing", () => {
+    viewer = createTerminalViewer(renderer, { container });
+
+    // Calling destroy twice should be safe and listeners should be removed on the first call.
+    expect(() => viewer.destroy()).not.toThrow();
+    expect(() => viewer.destroy()).not.toThrow();
+  });
+
   async function waitForRender(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 50));
   }
