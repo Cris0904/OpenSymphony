@@ -188,7 +188,16 @@ pub struct ManifestValidationResult {
     /// IDs declared in the manifest's `tasks` list. Mirrors the manifest so
     /// downstream tooling can reconcile manifest entries with findings.
     pub declared_task_ids: Vec<TaskId>,
+    /// Files declared in the manifest but not found on disk. Distinct from
+    /// [`Self::invalid_task_files`] — a missing file is an authoritative
+    /// `NotFound`, whereas an invalid file exists on disk but failed to
+    /// parse or read.
     pub missing_task_files: Vec<MissingTaskFile>,
+    /// Files declared in the manifest that exist on disk but cannot be
+    /// loaded as a valid task file (YAML syntax error, missing frontmatter,
+    /// permission denied, etc). Surfaced as a separate class so users
+    /// trying to fix the root cause do not chase a phantom "missing" file.
+    pub invalid_task_files: Vec<InvalidTaskFile>,
     pub unknown_milestones: Vec<UnknownMilestone>,
     pub unknown_dependencies: Vec<UnknownDependency>,
     pub creation_order_cycles: Vec<Vec<TaskId>>,
@@ -200,6 +209,7 @@ impl ManifestValidationResult {
     /// Returns true when there are no error-class findings.
     pub fn is_ok(&self) -> bool {
         self.missing_task_files.is_empty()
+            && self.invalid_task_files.is_empty()
             && self.unknown_milestones.is_empty()
             && self.unknown_dependencies.is_empty()
             && self.creation_order_cycles.is_empty()
@@ -210,6 +220,7 @@ impl ManifestValidationResult {
     /// Total error finding count. Useful for test assertions.
     pub fn error_count(&self) -> usize {
         self.missing_task_files.len()
+            + self.invalid_task_files.len()
             + self.unknown_milestones.len()
             + self.unknown_dependencies.len()
             + self
@@ -228,6 +239,16 @@ impl ManifestValidationResult {
 pub struct MissingTaskFile {
     pub task_id: TaskId,
     pub file_path: String,
+}
+
+/// One entry per task file that exists on disk but failed to load. The
+/// `reason` field carries the underlying parse/read error so users can fix
+/// the root cause without having to re-run the validator with logs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvalidTaskFile {
+    pub task_id: TaskId,
+    pub file_path: String,
+    pub reason: String,
 }
 
 /// One entry per task whose `milestone` field is not in the manifest's

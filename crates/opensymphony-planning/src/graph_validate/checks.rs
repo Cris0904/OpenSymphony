@@ -47,8 +47,20 @@ impl<'a> PlanQualityChecker<'a> {
     }
 
     /// Records the number of findings present in the loaded research brief.
-    /// `Some(0)` means the brief was loaded but had zero findings; `None`
-    /// keeps the layer untouched.
+    ///
+    /// Semantics (mirrored by [`Self::with_codebase`] / [`Self::check_research_coverage`]):
+    ///
+    /// * `Some(0)` — the caller loaded the research layer and the brief
+    ///   contained zero findings. Emits a `ResearchCoverage` warning asking
+    ///   the planning session to verify the brief actually represents
+    ///   upstream research.
+    /// * `Some(n)` where `n > 0` — research layer loaded with `n` findings,
+    ///   no warning emitted.
+    /// * `None` — the caller has chosen to skip the research layer (e.g.
+    ///   the planning session has not yet loaded it). No warning is
+    ///   emitted because the decision to skip is upstream of the checker.
+    ///   Inverting this to warn on `None` would silently fail planning
+    ///   sessions that legitimately defer research gathering.
     #[allow(dead_code)]
     pub fn with_research(mut self, finding_count: usize) -> Self {
         self.research_finding_count = Some(finding_count);
@@ -56,8 +68,13 @@ impl<'a> PlanQualityChecker<'a> {
     }
 
     /// Records the number of risks present in the loaded codebase analysis.
-    /// `Some(0)` means the analysis was loaded but had zero risks; `None`
-    /// keeps the layer untouched.
+    ///
+    /// Semantics mirror [`Self::with_research`]:
+    ///
+    /// * `Some(0)` — caller loaded the codebase layer and the analyzer
+    ///   reported zero risks; emits a `CodebaseAnalysis` warning.
+    /// * `Some(n)` where `n > 0` — analyzer reported `n` risks; no warning.
+    /// * `None` — caller chose to skip the codebase layer; no warning.
     #[allow(dead_code)]
     pub fn with_codebase(mut self, risk_count: usize) -> Self {
         self.codebase_risk_count = Some(risk_count);
@@ -132,6 +149,11 @@ impl<'a> PlanQualityChecker<'a> {
         }
     }
 
+    /// Emits a `ResearchCoverage` warning when the caller has loaded
+    /// the research layer (`Some`) but the brief contains zero findings.
+    /// `None` is intentional — the planning session chose to skip the
+    /// layer upstream — and is not warning-eligible. See
+    /// [`Self::with_research`] for the full contract.
     fn check_research_coverage(&self, findings: &mut Vec<PlanCheckFinding>) {
         if let Some(0) = self.research_finding_count {
             findings.push(PlanCheckFinding::warning(
@@ -143,6 +165,10 @@ impl<'a> PlanQualityChecker<'a> {
         }
     }
 
+    /// Emits a `CodebaseAnalysis` warning when the caller has loaded the
+    /// codebase layer (`Some`) but the analyzer reported zero risks.
+    /// `None` means the caller skipped the analyzer upstream and is not
+    /// warning-eligible. See [`Self::with_codebase`] for the full contract.
     fn check_codebase_analysis(&self, findings: &mut Vec<PlanCheckFinding>) {
         if let Some(0) = self.codebase_risk_count {
             findings.push(PlanCheckFinding::warning(

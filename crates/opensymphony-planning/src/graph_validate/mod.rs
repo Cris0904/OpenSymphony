@@ -81,7 +81,6 @@ use crate::opensymphony_planning::generator::domain::{
 };
 
 use super::codebase::CodebaseAnalysis;
-use super::codebase::RiskSeverity;
 use super::research::ResearchBrief;
 
 /// Convenience helper that runs the graph builder and the plan-quality
@@ -100,11 +99,13 @@ pub fn build_in_memory_report(
         checker = checker.with_research(brief.findings.len());
     }
     if let Some(analysis) = codebase {
-        let risk_count: usize = analysis
-            .risks
-            .iter()
-            .filter(|risk| matches!(risk.severity, RiskSeverity::High))
-            .count();
+        // Count every risk regardless of severity so the in-memory checker
+        // gets an accurate picture of what the analyzer actually found.
+        // Filtering to `RiskSeverity::High` here would silently downgrade
+        // medium/low risks to zero, which then makes the plan checker emit
+        // a misleading "rerun the analyzer" warning for analyses that did
+        // run and did find issues.
+        let risk_count = analysis.risks.len();
         checker = checker.with_codebase(risk_count);
     }
     let plan_checks = checker.run();
@@ -162,5 +163,76 @@ mod tests {
         let parsed: PlanValidationReport = serde_json::from_str(&json).expect("deserializable");
         assert_eq!(parsed.planning_wave, "rich-client-hosted-mode");
         assert!(parsed.dependency_graph.is_some());
+    }
+
+    /// Regression test for the in-memory report helper: when the loaded
+    /// codebase analysis contains only medium-severity risks, the helper
+    /// must count all of them and produce exactly one `CodebaseAnalysis`
+    /// warning — not zero. Previously the helper filtered to
+    /// `RiskSeverity::High` only, which would silently downgrade
+    /// medium/low risks to 0 and emit a misleading "rerun the analyzer"
+    /// warning for an analysis that did run and did find issues.
+    #[test]
+    fn build_in_memory_report_counts_all_risk_severities() {
+        use crate::opensymphony_planning::codebase::{
+            AnalysisRisk, CodebaseAnalysis, RiskCategory, RiskSeverity,
+        };
+        use crate::opensymphony_planning::generator::domain::{PlanArtifacts, TaskPackageManifest};
+        use crate::opensymphony_planning::graph_validate::{
+            checks::PlanQualityChecker, domain::PlanCheckCategory,
+        };
+
+        let artifacts = PlanArtifacts {
+            generated_at: Utc::now(),
+            planning_wave: "rich-client-hosted-mode".to_string(),
+            milestones: vec![],
+            manifest: TaskPackageManifest {
+                planning_wave: "rich-client-hosted-mode".to_string(),
+                tasks_dir: "docs/tasks".to_string(),
+                milestones: vec![],
+                tasks: vec![],
+            },
+            milestone_index: String::new(),
+            task_files: Default::default(),
+        };
+        let analysis = CodebaseAnalysis {
+            root_path: "/tmp".to_string(),
+            languages: vec![],
+            packages: vec![],
+            build_systems: vec![],
+            ownership_files: vec![],
+            integration_points: vec![],
+            conventions: vec![],
+            // Two medium risks, no high risks. With the bug, this would be
+            // bucketed to 0 and the plan checker would warn; with the fix,
+            // the count is 2 so no `CodebaseAnalysis` warning fires.
+            risks: vec![
+                AnalysisRisk {
+                    category: RiskCategory::Complexity,
+                    severity: RiskSeverity::Medium,
+                    description: "fan-out beyond threshold".to_string(),
+                    affected_path: "crates/foo".to_string(),
+                },
+                AnalysisRisk {
+                    category: RiskCategory::Coupling,
+                    severity: RiskSeverity::Medium,
+                    description: "cross-crate import".to_string(),
+                    affected_path: "crates/bar".to_string(),
+                },
+            ],
+            total_files: 0,
+            total_rust_files: 0,
+            total_typescript_files: 0,
+        };
+
+        let checker = PlanQualityChecker::new(&artifacts).with_codebase(analysis.risks.len());
+        let findings = checker.run();
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.category == PlanCheckCategory::CodebaseAnalysis),
+            "CodebaseAnalysis must not warn when the analyzer reported {len} risks",
+            len = analysis.risks.len(),
+        );
     }
 }

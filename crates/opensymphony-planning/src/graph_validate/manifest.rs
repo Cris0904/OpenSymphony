@@ -25,7 +25,8 @@ use serde::Deserialize;
 use crate::opensymphony_planning::generator::domain::TaskId;
 
 use super::domain::{
-    ManifestValidationResult, MissingTaskFile, SelfBlock, UnknownDependency, UnknownMilestone,
+    InvalidTaskFile, ManifestValidationResult, MissingTaskFile, SelfBlock, UnknownDependency,
+    UnknownMilestone,
 };
 use super::frontmatter::{TaskFrontmatter, TaskFrontmatterError, parse_task_file};
 
@@ -115,6 +116,7 @@ impl ManifestValidator {
             planning_wave: manifest.planning_wave.clone(),
             declared_task_ids: Vec::new(),
             missing_task_files: Vec::new(),
+            invalid_task_files: Vec::new(),
             unknown_milestones: Vec::new(),
             unknown_dependencies: Vec::new(),
             creation_order_cycles: Vec::new(),
@@ -144,11 +146,17 @@ impl ManifestValidator {
                         file_path: entry.file.clone(),
                     });
                 }
-                Err(_) => {
-                    // Malformed task file is treated as if it were not loadable.
-                    result.missing_task_files.push(MissingTaskFile {
+                Err(err) => {
+                    // The file exists on disk but is not loadable as a task
+                    // file (YAML syntax error, missing frontmatter, IO
+                    // permission denied, etc). Surface it as a distinct
+                    // `invalid_task_files` finding so users fixing the
+                    // manifest see the real cause instead of a phantom
+                    // "missing" file.
+                    result.invalid_task_files.push(InvalidTaskFile {
                         task_id: id.clone(),
                         file_path: entry.file.clone(),
+                        reason: err.to_string(),
                     });
                 }
             }
@@ -188,6 +196,9 @@ impl ManifestValidator {
         // Stable order keeps the artefact diff-friendly for tests.
         result
             .missing_task_files
+            .sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        result
+            .invalid_task_files
             .sort_by(|a, b| a.task_id.cmp(&b.task_id));
         result
             .unknown_milestones
@@ -368,6 +379,81 @@ mod tests {
         assert!(!result.is_ok());
         assert_eq!(result.missing_task_files.len(), 1);
         assert_eq!(result.missing_task_files[0].task_id, TaskId::new("TASK-B"));
+    }
+
+    #[test]
+    fn invalid_task_file_is_reported_separately_from_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[
+            ("TASK-A", "docs/tasks/a.md"),
+            // Declare a task whose frontmatter is malformed YAML. The file
+            // *exists* on disk, so this must surface as an `invalid_task_files`
+            // finding rather than being bucketed into `missing_task_files`
+            // (which would mislead users into chasing a phantom missing file).
+            ("TASK-B", "docs/tasks/broken.md"),
+        ]);
+        let files = vec![
+            (
+                "docs/tasks/a.md".to_string(),
+                task_file_text("TASK-A", "M1", &[], &[]),
+            ),
+            (
+                "docs/tasks/broken.md".to_string(),
+                // Open the frontmatter block but never close it; this
+                // exercises the brace/quote mismatch path in
+                // `parse_task_text`.
+                "---\nid: \"TASK-B\"\ntitle: \"Broken\"\n  unclosed_quote: \"\n".to_string(),
+            ),
+        ];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(!result.is_ok());
+        assert_eq!(
+            result.missing_task_files.len(),
+            0,
+            "files that exist on disk must not be reported as missing: {result:?}",
+        );
+        assert_eq!(result.invalid_task_files.len(), 1);
+        let invalid = &result.invalid_task_files[0];
+        assert_eq!(invalid.task_id, TaskId::new("TASK-B"));
+        assert_eq!(invalid.file_path, "docs/tasks/broken.md");
+        assert!(
+            !invalid.reason.is_empty(),
+            "invalid_task_files entries must carry a non-empty reason so users can fix the root cause"
+        );
+
+        // The total error count rolls invalid_task_files into the tally so
+        // dashboards do not silently lose visibility into malformed
+        // manifests.
+        assert!(
+            result.error_count() >= 1,
+            "error_count must include invalid_task_files: {result:?}",
+        );
+    }
+
+    /// Convenience builder that returns a task file YAML with the closing
+    /// `---` marker intentionally omitted. Used by the regression tests
+    /// that exercise the missing-frontmatter path.
+    fn task_file_with_open_marker(id: &str, milestone: &str) -> String {
+        format!(
+            "---\nid: \"{}\"\ntitle: \"{}\"\nmilestone: \"{}\"\nblockedBy: []\nblocks: []\n",
+            id, id, milestone
+        )
+    }
+
+    #[test]
+    fn missing_frontmatter_is_reported_as_invalid_not_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[("TASK-X", "docs/tasks/x.md")]);
+        let files = vec![(
+            "docs/tasks/x.md".to_string(),
+            task_file_with_open_marker("TASK-X", "M1"),
+        )];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert_eq!(result.missing_task_files.len(), 0);
+        assert_eq!(result.invalid_task_files.len(), 1);
+        assert_eq!(result.invalid_task_files[0].task_id, TaskId::new("TASK-X"));
     }
 
     #[test]
