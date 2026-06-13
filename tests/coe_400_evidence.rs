@@ -106,7 +106,6 @@ async fn end_to_end_evidence_collects_typed_envelopes_and_mirror_snapshots() {
             idle_timeout_ms: Some(DurationMs::new(5_000)),
             total_runtime_cap_ms: None,
             quiet_window_ms: Some(DurationMs::new(2_000)),
-            degrade_after_ms: None,
         },
     );
 
@@ -212,7 +211,6 @@ async fn runtime_mirror_quiet_window_alive_then_transitions_to_stalled() {
             idle_timeout_ms: Some(DurationMs::new(2_000)),
             total_runtime_cap_ms: None,
             quiet_window_ms: Some(DurationMs::new(1_000)),
-            degrade_after_ms: None,
         },
     );
     let envelope = EventEnvelope::new(
@@ -226,7 +224,7 @@ async fn runtime_mirror_quiet_window_alive_then_transitions_to_stalled() {
     mirror.apply_event(&envelope);
     mirror.apply_status_change("running", TimestampMs::new(1_000));
     mirror.apply_socket_ready(TimestampMs::new(1_000));
-    let baseline = mirror.snapshot();
+    let baseline = mirror.snapshot_at(TimestampMs::new(1_000));
     println!("=== COE-400 QUIET/STALLED EVIDENCE ===");
     println!(
         "baseline.phase = {:?} | liveness_state = {:?} | last_event_at = {:?}",

@@ -32,7 +32,6 @@ fn idle_config(idle_ms: u64) -> MirrorConfig {
         idle_timeout_ms: Some(DurationMs::new(idle_ms)),
         total_runtime_cap_ms: None,
         quiet_window_ms: Some(DurationMs::new(idle_ms / 2)),
-        degrade_after_ms: Some(DurationMs::new(idle_ms * 4)),
     }
 }
 
@@ -62,7 +61,7 @@ fn progress_based_idle_detection_keeps_long_running_turn_active() {
         activity_count += 1;
         now_ms += 100;
     }
-    let snap = mirror.snapshot();
+    let snap = mirror.snapshot_at(TimestampMs::new(end_ms));
     assert!(matches!(snap.phase, RuntimeLivenessPhase::RunningTurn));
     assert!(matches!(snap.liveness_state, LivenessState::Active));
     assert!(snap.stall_deadline_at.is_some(), "deadline set by activity");
@@ -80,7 +79,7 @@ fn snapshot_at_reports_quiet_and_stalled_phases_when_supplied_now() {
     mirror.apply_event(&runtime_event("evt-1", "MessageEvent", 1_000));
 
     // Baseline snapshot pins to last activity — must report RunningTurn.
-    let baseline = mirror.snapshot();
+    let baseline = mirror.snapshot_at(TimestampMs::new(1_000));
     assert!(matches!(baseline.phase, RuntimeLivenessPhase::RunningTurn));
 
     // 1.3 s of silence — well before idle timeout. snapshot_at(now) reports Quiet.
@@ -109,7 +108,7 @@ fn silence_progresses_quiet_then_stalled() {
     mirror.apply_socket_ready(TimestampMs::new(1_000));
     // Initial activity so we aren't in the prior-turn-wait / unknown phase.
     mirror.apply_event(&runtime_event("evt-1", "MessageEvent", 1_000));
-    let _ = mirror.snapshot();
+    let _ = mirror.snapshot_at(TimestampMs::new(1_000));
 
     // Past idle timeout (800ms after last activity at 1000 = 1800).
     let phase_at_2000 = mirror.phase_at(TimestampMs::new(2_000));
@@ -231,7 +230,7 @@ fn stream_disconnect_marks_history_stale_and_pending_reconnect() {
     );
     mirror.apply_socket_ready(TimestampMs::new(1_000));
     mirror.apply_socket_disconnected("network_reset", TimestampMs::new(2_000));
-    let snap = mirror.snapshot();
+    let snap = mirror.snapshot_at(TimestampMs::new(2_000));
     assert!(matches!(snap.stream_health, StreamHealth::Disconnected));
     assert!(matches!(snap.history_sync_status, HistorySyncStatus::Stale));
     assert!(matches!(snap.reconnect_status, ReconnectStatus::Pending));
@@ -247,7 +246,7 @@ fn rest_reconcile_progress_collapses_reconciling_then_replay() {
     mirror.apply_socket_ready(TimestampMs::new(1_000));
     mirror.apply_socket_disconnected("ws_dropped", TimestampMs::new(2_000));
     // While disconnected, the phase should reflect stream-driven reconciliation.
-    let mid = mirror.snapshot();
+    let mid = mirror.snapshot_at(TimestampMs::new(2_000));
     assert!(matches!(mid.phase, RuntimeLivenessPhase::Reconciling));
 
     // REST reconcile delivers missed events. Mirror must dedupe against
@@ -257,7 +256,7 @@ fn rest_reconcile_progress_collapses_reconciling_then_replay() {
         runtime_event("evt-new-2", "MessageEvent", 2_700),
     ];
     mirror.apply_reconnect_succeeded(replayed, TimestampMs::new(2_800));
-    let snap = mirror.snapshot();
+    let snap = mirror.snapshot_at(TimestampMs::new(2_800));
     assert!(matches!(snap.phase, RuntimeLivenessPhase::RunningTurn));
     assert!(matches!(snap.stream_health, StreamHealth::Ready));
     assert!(matches!(
@@ -286,7 +285,7 @@ fn unknown_events_remain_visible_through_cursor_without_failing_run() {
     let inserted = mirror.apply_event(&unknown);
     assert!(inserted, "unknown event must be retained, not dropped");
 
-    let snap = mirror.snapshot();
+    let snap = mirror.snapshot_at(TimestampMs::new(2_000));
     assert!(matches!(snap.phase, RuntimeLivenessPhase::RunningTurn));
     assert_eq!(snap.last_event_cursor.as_deref(), Some("evt-unknown"));
     assert_eq!(snap.event_count, 2);
@@ -373,7 +372,7 @@ async fn prior_turn_wait_visible_via_attaching_stream_health_fake() {
     if let Ok(initial_conversation) = client.get_conversation(conversation.conversation_id).await {
         mirror.apply_initial_conversation_snapshot(&initial_conversation);
     }
-    let snap = mirror.snapshot();
+    let snap = mirror.snapshot_at(TimestampMs::new(1_000));
     assert!(matches!(
         snap.stream_health,
         StreamHealth::Attaching | StreamHealth::Unknown

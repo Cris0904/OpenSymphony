@@ -33,7 +33,9 @@ pub use normalization::{
     normalize_action, normalize_conversation_error, normalize_event, normalize_llm_completion,
     normalize_message, normalize_observation, normalize_state_update, normalize_unknown,
 };
-pub use runtime_mirror::{MirrorConfig, NO_EVENT_CURSOR_MARKER, RuntimeMirror};
+pub use runtime_mirror::{
+    MirrorConfig, NO_EVENT_CURSOR_MARKER, RuntimeMirror, TERMINAL_CURSOR_MARKER,
+};
 pub use session::{
     ConversationLaunchProfile, IssueConversationManifest, IssueSessionContext, IssueSessionError,
     IssueSessionObserver, IssueSessionPromptKind, IssueSessionResult, IssueSessionReusePolicy,
