@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use tracing::warn;
 
 use crate::opensymphony_gateway_schema::{
     event_journal::{EventKind, EventRecord},
@@ -45,15 +46,32 @@ impl TerminalLogStore {
     pub fn ingest_event_record(&mut self, record: &EventRecord) {
         match &record.kind {
             EventKind::TerminalFrame { frame_id } => {
-                let frame = record
-                    .payload
-                    .as_ref()
-                    .and_then(|p| serde_json::from_value::<TerminalFrame>(p.clone()).ok());
-                if let Some(mut frame) = frame {
-                    if frame.frame_id.is_none() {
-                        frame.frame_id = Some(frame_id.clone());
+                let payload = match record.payload.as_ref() {
+                    Some(p) => p,
+                    None => {
+                        warn!(
+                            event_id = %record.event_id,
+                            sequence = record.sequence,
+                            "terminal frame event missing payload; dropping"
+                        );
+                        return;
                     }
-                    self.ingest_frame(frame, frame_id.clone());
+                };
+                match serde_json::from_value::<TerminalFrame>(payload.clone()) {
+                    Ok(mut frame) => {
+                        if frame.frame_id.is_none() {
+                            frame.frame_id = Some(frame_id.clone());
+                        }
+                        self.ingest_frame(frame, frame_id.clone());
+                    }
+                    Err(err) => {
+                        warn!(
+                            event_id = %record.event_id,
+                            sequence = record.sequence,
+                            error = %err,
+                            "failed to deserialize terminal frame payload; dropping"
+                        );
+                    }
                 }
             }
             EventKind::LogEntry { level } => {
@@ -562,5 +580,40 @@ mod tests {
             frame.association.harness_session_id.as_deref(),
             Some("harness-2")
         );
+    }
+
+    #[test]
+    fn malformed_terminal_frame_payload_is_logged_and_dropped() {
+        let mut store = TerminalLogStore::new();
+        let record = EventRecord::builder()
+            .event_id("bad-frame-1")
+            .sequence(1)
+            .kind(EventKind::TerminalFrame {
+                frame_id: "fid-bad-1".into(),
+            })
+            .payload(serde_json::json!({
+                "unexpected_shape": true,
+            }))
+            .summary("malformed terminal frame")
+            .build();
+        store.ingest_event_record(&record);
+
+        assert!(store.sessions.is_empty());
+    }
+
+    #[test]
+    fn terminal_frame_event_missing_payload_is_logged_and_dropped() {
+        let mut store = TerminalLogStore::new();
+        let record = EventRecord::builder()
+            .event_id("no-payload-1")
+            .sequence(1)
+            .kind(EventKind::TerminalFrame {
+                frame_id: "fid-none-1".into(),
+            })
+            .summary("no payload")
+            .build();
+        store.ingest_event_record(&record);
+
+        assert!(store.sessions.is_empty());
     }
 }
