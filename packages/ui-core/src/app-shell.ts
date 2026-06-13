@@ -878,6 +878,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     const result = receipt.result as { node_id?: string; updated_at?: string } | undefined;
     if (!result?.node_id || !result?.updated_at) {
       this.state.pendingMutations.delete(receipt.correlation_id);
+      this.state.pendingCreates.delete(receipt.correlation_id);
       return;
     }
 
@@ -898,6 +899,11 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
   private reconcileNodeId(oldId: string, newId: string): void {
     const taskGraph = this.state.taskGraph;
     if (!taskGraph) return;
+
+    if (taskGraph.nodes.some((n) => n.node_id === newId && n.node_id !== oldId)) {
+      this.state.connectionMessage = `Server returned a duplicate node ID (${newId}); optimistic ID not reconciled.`;
+      return;
+    }
 
     const node = taskGraph.nodes.find((n) => n.node_id === oldId);
     if (!node) return;
