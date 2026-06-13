@@ -2344,5 +2344,31 @@ async fn gateway_terminal_log_associates_frames_and_reconnects() {
         .expect("fetch wrong run jump");
     assert_eq!(resp.status(), 404);
 
+    // Unknown stream should be rejected for snapshot, search, and jump.
+    let unknown_url = format!("http://{address}/api/v1/runs/run-1/terminal/unknown/snapshot");
+    let resp = client
+        .get(&unknown_url)
+        .send()
+        .await
+        .expect("fetch unknown snapshot");
+    assert_eq!(resp.status(), 404);
+
+    let unknown_url = format!("http://{address}/api/v1/runs/run-1/terminal/unknown/search?q=x");
+    let resp = client
+        .get(&unknown_url)
+        .send()
+        .await
+        .expect("fetch unknown search");
+    assert_eq!(resp.status(), 404);
+
+    let unknown_url =
+        format!("http://{address}/api/v1/runs/run-1/terminal/unknown/jump?event_id=evt-1");
+    let resp = client
+        .get(&unknown_url)
+        .send()
+        .await
+        .expect("fetch unknown jump");
+    assert_eq!(resp.status(), 404);
+
     server_task.abort();
 }

@@ -2074,9 +2074,17 @@ async fn search_terminal(
     Query(params): Query<TerminalSearchQuery>,
 ) -> Result<Json<TerminalSearchResult>, (StatusCode, Json<serde_json::Value>)> {
     let store = state.terminal_log_store.read().await;
-    if let Some(assoc) = store.association(&stream_id)
-        && assoc.run_id != run_id
-    {
+    let assoc = store.association(&stream_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "stream not found",
+                "run_id": run_id,
+                "stream_id": stream_id,
+            })),
+        )
+    })?;
+    if assoc.run_id != run_id {
         return Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -2116,9 +2124,17 @@ async fn jump_terminal_to_event(
     Query(params): Query<TerminalJumpQuery>,
 ) -> Result<Json<TerminalJumpResult>, (StatusCode, Json<serde_json::Value>)> {
     let store = state.terminal_log_store.read().await;
-    if let Some(assoc) = store.association(&stream_id)
-        && assoc.run_id != run_id
-    {
+    let assoc = store.association(&stream_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "stream not found",
+                "run_id": run_id,
+                "stream_id": stream_id,
+            })),
+        )
+    })?;
+    if assoc.run_id != run_id {
         return Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
