@@ -112,6 +112,8 @@ export type {
   RunDetail,
   RunEventPage,
   TerminalSnapshot,
+  TerminalSearchResult,
+  TerminalJumpResult,
   TaskGraphSnapshot,
   GatewayCapabilities,
   ActionDispatch,

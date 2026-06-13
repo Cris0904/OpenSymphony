@@ -2034,9 +2034,17 @@ async fn get_terminal_snapshot(
 ) -> Result<Json<TerminalSnapshot>, (StatusCode, Json<serde_json::Value>)> {
     let store = state.terminal_log_store.read().await;
     let association = store.association(&stream_id);
-    if let Some(assoc) = association.as_ref()
-        && assoc.run_id != run_id
-    {
+    let assoc = association.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "stream not found",
+                "run_id": run_id,
+                "stream_id": stream_id,
+            })),
+        )
+    })?;
+    if assoc.run_id != run_id {
         return Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -2050,7 +2058,7 @@ async fn get_terminal_snapshot(
     // Ensure the response run_id matches the requested run, even if the store
     // doesn't know it yet.
     if snapshot.run_id.is_empty() {
-        snapshot.run_id = run_id;
+        snapshot.run_id = assoc.run_id.clone();
     }
     Ok(Json(snapshot))
 }
@@ -2062,10 +2070,22 @@ struct TerminalSearchQuery {
 
 async fn search_terminal(
     State(state): State<GatewayState>,
-    AxumPath((_run_id, stream_id)): AxumPath<(String, String)>,
+    AxumPath((run_id, stream_id)): AxumPath<(String, String)>,
     Query(params): Query<TerminalSearchQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<TerminalSearchResult>, (StatusCode, Json<serde_json::Value>)> {
     let store = state.terminal_log_store.read().await;
+    if let Some(assoc) = store.association(&stream_id)
+        && assoc.run_id != run_id
+    {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "stream does not belong to run",
+                "run_id": run_id,
+                "stream_id": stream_id,
+            })),
+        ));
+    }
     let matches = store
         .search(&stream_id, &params.q)
         .into_iter()
@@ -2077,15 +2097,12 @@ async fn search_terminal(
             },
         )
         .collect();
-    (
-        StatusCode::OK,
-        Json(TerminalSearchResult {
-            schema_version: SchemaVersion::v1(),
-            terminal_session_id: stream_id,
-            query: params.q,
-            matches,
-        }),
-    )
+    Ok(Json(TerminalSearchResult {
+        schema_version: SchemaVersion::v1(),
+        terminal_session_id: stream_id,
+        query: params.q,
+        matches,
+    }))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -2095,21 +2112,30 @@ struct TerminalJumpQuery {
 
 async fn jump_terminal_to_event(
     State(state): State<GatewayState>,
-    AxumPath((_run_id, stream_id)): AxumPath<(String, String)>,
+    AxumPath((run_id, stream_id)): AxumPath<(String, String)>,
     Query(params): Query<TerminalJumpQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<TerminalJumpResult>, (StatusCode, Json<serde_json::Value>)> {
     let store = state.terminal_log_store.read().await;
+    if let Some(assoc) = store.association(&stream_id)
+        && assoc.run_id != run_id
+    {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "stream does not belong to run",
+                "run_id": run_id,
+                "stream_id": stream_id,
+            })),
+        ));
+    }
     let frame_sequence = store.jump_to_event(&stream_id, &params.event_id);
-    (
-        StatusCode::OK,
-        Json(TerminalJumpResult {
-            schema_version: SchemaVersion::v1(),
-            terminal_session_id: stream_id,
-            event_id: params.event_id,
-            frame_sequence,
-            found: frame_sequence.is_some(),
-        }),
-    )
+    Ok(Json(TerminalJumpResult {
+        schema_version: SchemaVersion::v1(),
+        terminal_session_id: stream_id,
+        event_id: params.event_id,
+        frame_sequence,
+        found: frame_sequence.is_some(),
+    }))
 }
 
 #[cfg(test)]

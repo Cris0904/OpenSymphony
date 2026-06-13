@@ -42,7 +42,8 @@ fn sample_terminal_frame(sequence: u64) -> TerminalFrame {
             harness_session_id: None,
         },
         correlation_id: None,
-        source_event_id: None,
+        source_event_id: Some(format!("evt-{sequence}")),
+        frame_id: Some(format!("fid-{sequence}")),
     }
 }
 

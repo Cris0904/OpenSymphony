@@ -49,7 +49,10 @@ impl TerminalLogStore {
                     .payload
                     .as_ref()
                     .and_then(|p| serde_json::from_value::<TerminalFrame>(p.clone()).ok());
-                if let Some(frame) = frame {
+                if let Some(mut frame) = frame {
+                    if frame.frame_id.is_none() {
+                        frame.frame_id = Some(frame_id.clone());
+                    }
                     self.ingest_frame(frame, frame_id.clone());
                 }
             }
@@ -64,7 +67,7 @@ impl TerminalLogStore {
 
     /// Directly ingest a terminal frame. Useful for tests and for callers that
     /// already have decoded frames.
-    pub fn ingest_frame(&mut self, frame: TerminalFrame, _frame_id: String) {
+    pub fn ingest_frame(&mut self, frame: TerminalFrame, frame_id: String) {
         let session = self
             .sessions
             .entry(frame.terminal_session_id.clone())
@@ -75,6 +78,24 @@ impl TerminalLogStore {
                 created_at: frame.timestamp,
                 updated_at: frame.timestamp,
             });
+        // Replay-safe deduplication: skip if a frame with the same frame_id
+        // or source_event_id is already present.
+        if !frame_id.is_empty()
+            && session
+                .frames
+                .iter()
+                .any(|f| f.frame_id.as_deref() == Some(frame_id.as_str()))
+        {
+            return;
+        }
+        if frame.source_event_id.as_ref().is_some_and(|eid| {
+            session
+                .frames
+                .iter()
+                .any(|f| f.source_event_id.as_deref() == Some(eid.as_str()))
+        }) {
+            return;
+        }
         session.total_bytes = session
             .total_bytes
             .saturating_add(frame.content.len() as u64);
@@ -268,6 +289,44 @@ fn log_entry_to_frame(record: &EventRecord, _level: &str) -> Option<TerminalFram
         .get("command_id")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
+    let issue_id = payload
+        .get("issue_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let sub_issue_id = payload
+        .get("sub_issue_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    let harness_session_id = payload
+        .get("harness_session_id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    // Support nested association payload as a fallback.
+    let association = payload.get("association");
+    let issue_id = issue_id.or_else(|| {
+        association
+            .and_then(|a| a.get("issue_id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+    });
+    let sub_issue_id = sub_issue_id.or_else(|| {
+        association
+            .and_then(|a| a.get("sub_issue_id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+    });
+    let command_id = command_id.or_else(|| {
+        association
+            .and_then(|a| a.get("command_id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+    });
+    let harness_session_id = harness_session_id.or_else(|| {
+        association
+            .and_then(|a| a.get("harness_session_id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned)
+    });
 
     Some(TerminalFrame {
         schema_version: SchemaVersion::v1(),
@@ -283,12 +342,13 @@ fn log_entry_to_frame(record: &EventRecord, _level: &str) -> Option<TerminalFram
             run_id,
             workspace_id,
             command_id,
-            issue_id: None,
-            sub_issue_id: None,
-            harness_session_id: None,
+            issue_id,
+            sub_issue_id,
+            harness_session_id,
         },
         correlation_id: record.correlation_id.clone(),
         source_event_id: Some(record.event_id.clone()),
+        frame_id: Some(record.event_id.clone()),
     })
 }
 
@@ -333,6 +393,7 @@ mod tests {
             },
             correlation_id: None,
             source_event_id: Some(format!("evt-{seq}")),
+            frame_id: Some(format!("fid-{seq}")),
         }
     }
 
@@ -374,6 +435,59 @@ mod tests {
     }
 
     #[test]
+    fn replay_same_frame_is_deduplicated() {
+        let mut store = TerminalLogStore::new();
+        let mut frame = sample_frame(1, "term-1", "hello", None);
+        frame.frame_id = Some("fid-1".into());
+        store.ingest_frame(frame.clone(), "fid-1".into());
+        store.ingest_frame(frame.clone(), "fid-1".into());
+        let mut distinct = sample_frame(1, "term-1", "hello", None);
+        distinct.frame_id = Some("different-frame-id".into());
+        distinct.source_event_id = Some("different-event".into());
+        store.ingest_frame(distinct, "different-frame-id".into());
+
+        let snap = store.snapshot("term-1", None, 10);
+        assert_eq!(snap.total_frames, 2);
+    }
+
+    #[test]
+    fn replay_same_event_for_log_entry_is_deduplicated() {
+        let mut store = TerminalLogStore::new();
+        let record = EventRecord::builder()
+            .event_id("log-1")
+            .sequence(1)
+            .kind(EventKind::LogEntry {
+                level: "info".into(),
+            })
+            .payload(serde_json::json!({
+                "message": "build started",
+                "terminal_session_id": "term-1",
+                "run_id": "run-1",
+                "workspace_id": "ws-1",
+                "command_id": "cmd-1",
+                "issue_id": "iss-1",
+                "sub_issue_id": "sub-1",
+                "harness_session_id": "harness-1",
+            }))
+            .summary("build started")
+            .build();
+        store.ingest_event_record(&record);
+        store.ingest_event_record(&record);
+
+        let snap = store.snapshot("term-1", None, 10);
+        assert_eq!(snap.total_frames, 1);
+        let frame = snap.frames.first().expect("frame");
+        assert_eq!(frame.frame_kind, TerminalFrameKind::Log);
+        assert_eq!(frame.association.command_id.as_deref(), Some("cmd-1"));
+        assert_eq!(frame.association.issue_id.as_deref(), Some("iss-1"));
+        assert_eq!(frame.association.sub_issue_id.as_deref(), Some("sub-1"));
+        assert_eq!(
+            frame.association.harness_session_id.as_deref(),
+            Some("harness-1")
+        );
+    }
+
+    #[test]
     fn sessions_for_run_filters_by_run_id() {
         let mut store = TerminalLogStore::new();
         let mut f = sample_frame(1, "term-a", "x", None);
@@ -411,5 +525,42 @@ mod tests {
         let frame = snap.frames.first().expect("frame");
         assert_eq!(frame.frame_kind, TerminalFrameKind::Log);
         assert_eq!(frame.association.command_id.as_deref(), Some("cmd-1"));
+    }
+
+    #[test]
+    fn log_entry_payload_extracts_association_fields() {
+        let mut store = TerminalLogStore::new();
+        let record = EventRecord::builder()
+            .event_id("log-2")
+            .sequence(2)
+            .kind(EventKind::LogEntry {
+                level: "info".into(),
+            })
+            .payload(serde_json::json!({
+                "message": "nested association",
+                "terminal_session_id": "term-1",
+                "association": {
+                    "run_id": "run-1",
+                    "workspace_id": "ws-1",
+                    "command_id": "cmd-2",
+                    "issue_id": "iss-2",
+                    "sub_issue_id": "sub-2",
+                    "harness_session_id": "harness-2"
+                }
+            }))
+            .summary("nested association")
+            .build();
+        store.ingest_event_record(&record);
+
+        let snap = store.snapshot("term-1", None, 10);
+        assert_eq!(snap.total_frames, 1);
+        let frame = snap.frames.first().expect("frame");
+        assert_eq!(frame.association.command_id.as_deref(), Some("cmd-2"));
+        assert_eq!(frame.association.issue_id.as_deref(), Some("iss-2"));
+        assert_eq!(frame.association.sub_issue_id.as_deref(), Some("sub-2"));
+        assert_eq!(
+            frame.association.harness_session_id.as_deref(),
+            Some("harness-2")
+        );
     }
 }

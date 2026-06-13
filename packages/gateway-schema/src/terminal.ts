@@ -34,6 +34,7 @@ export interface TerminalFrame {
   association: TerminalLogAssociation;
   correlation_id?: string;
   source_event_id?: string;
+  frame_id?: string;
 }
 
 /** Terminal snapshot for REST endpoint. */

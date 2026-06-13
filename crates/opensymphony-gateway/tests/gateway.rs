@@ -2227,6 +2227,7 @@ async fn gateway_terminal_log_associates_frames_and_reconnects() {
         },
         correlation_id: None,
         source_event_id: Some("evt-1".into()),
+        frame_id: Some("f1".into()),
     };
     let record = EventRecord::builder()
         .event_id("evt-1")
@@ -2289,6 +2290,15 @@ async fn gateway_terminal_log_associates_frames_and_reconnects() {
     assert_eq!(session.association.issue_id.as_deref(), Some("iss-1"));
     assert_eq!(session.association.sub_issue_id.as_deref(), Some("sub-1"));
 
+    // A request for a valid stream under a different run must not leak data.
+    let wrong_url = format!("http://{address}/api/v1/runs/run-2/terminal/term-1");
+    let resp = client
+        .get(&wrong_url)
+        .send()
+        .await
+        .expect("fetch wrong run snapshot");
+    assert_eq!(resp.status(), 404);
+
     // Search should find the second frame.
     let url = format!("http://{address}/api/v1/runs/run-1/terminal/term-1/search?q=again");
     let result: opensymphony::opensymphony_gateway_schema::timeline::TerminalSearchResult = client
@@ -2302,6 +2312,15 @@ async fn gateway_terminal_log_associates_frames_and_reconnects() {
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].frame_sequence, 2);
 
+    // Cross-run search should be rejected.
+    let wrong_url = format!("http://{address}/api/v1/runs/run-2/terminal/term-1/search?q=again");
+    let resp = client
+        .get(&wrong_url)
+        .send()
+        .await
+        .expect("fetch wrong run search");
+    assert_eq!(resp.status(), 404);
+
     // Jump to event should resolve the first frame.
     let url = format!("http://{address}/api/v1/runs/run-1/terminal/term-1/jump?event_id=evt-1");
     let jump: opensymphony::opensymphony_gateway_schema::timeline::TerminalJumpResult = client
@@ -2314,6 +2333,16 @@ async fn gateway_terminal_log_associates_frames_and_reconnects() {
         .expect("decode jump result");
     assert!(jump.found);
     assert_eq!(jump.frame_sequence, Some(1));
+
+    // Cross-run jump should be rejected.
+    let wrong_url =
+        format!("http://{address}/api/v1/runs/run-2/terminal/term-1/jump?event_id=evt-1");
+    let resp = client
+        .get(&wrong_url)
+        .send()
+        .await
+        .expect("fetch wrong run jump");
+    assert_eq!(resp.status(), 404);
 
     server_task.abort();
 }

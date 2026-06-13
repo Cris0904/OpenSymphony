@@ -274,7 +274,8 @@ fn terminal_frame_roundtrips() {
             harness_session_id: None,
         },
         correlation_id: None,
-        source_event_id: None,
+        source_event_id: Some("evt-1".into()),
+        frame_id: Some("fid-1".into()),
     };
     let json = must_serialize(&frame);
     let back: TerminalFrame = must_deserialize(&json);
@@ -282,6 +283,8 @@ fn terminal_frame_roundtrips() {
     assert_eq!(back.frame_kind, TerminalFrameKind::Stdout);
     assert_eq!(back.encoding, TerminalEncoding::Utf8);
     assert_eq!(back.content, "hello world\n");
+    assert_eq!(back.source_event_id.as_deref(), Some("evt-1"));
+    assert_eq!(back.frame_id.as_deref(), Some("fid-1"));
 }
 
 #[test]
