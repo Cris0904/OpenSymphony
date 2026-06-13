@@ -155,7 +155,6 @@ pub enum EventKind {
     },
     TaskGraphIssueCreated {
         issue_id: String,
-        parent_identifier: Option<String>,
     },
     TaskGraphIssueUpdated {
         issue_id: String,

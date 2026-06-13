@@ -357,8 +357,6 @@ impl GatewayServer {
         let mutation_state = TaskGraphMutationState {
             journal: self.journal.clone(),
             linear_mutations: self.linear_mutations.clone(),
-            store: self.store.clone(),
-            broker: self.broker.clone(),
         };
         let mutation_router = task_graph_router().with_state(mutation_state);
         router = router.nest("/api/v1/taskgraph", mutation_router);

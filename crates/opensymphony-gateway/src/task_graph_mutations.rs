@@ -796,16 +796,13 @@ pub async fn append_mutation_event_with_op(
             milestone_id: entity_ref.id.clone(),
         },
         (ActionKind::TaskGraphIssue, Created) => {
-            // Created events surface the issue's parent identifier (e.g.
-            // `COE-405`) so downstream caches can reason about where the
-            // new node lives in the dependency graph.
-            let parent_identifier = payload
-                .get("parent_identifier")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_owned());
+            // Top-level issues don't have a parent issue by definition
+            // (sub-issues do, and that's a separate variant). Surface only
+            // the issue_id so consumers don't accidentally key off a
+            // placeholder parent identifier that the issue handler never
+            // sets in the payload.
             EventKind::TaskGraphIssueCreated {
                 issue_id: entity_ref.id.clone(),
-                parent_identifier,
             }
         }
         (ActionKind::TaskGraphIssue, _) => EventKind::TaskGraphIssueUpdated {
@@ -884,16 +881,13 @@ pub fn receipt_status(receipt: &ActionReceipt) -> ActionStatus {
 // directly, which would import the rest of the dependency tree.
 // =============================================================================
 
-use crate::opensymphony_control::SnapshotStore;
-use crate::opensymphony_domain::StreamBroker;
-
-/// State shared by the task graph mutation handlers.
+/// State shared by the task graph mutation handlers. Only fields that the
+/// handlers actually consume live here to keep the dependency surface
+/// minimal and the state struct honest about what it holds.
 #[derive(Clone)]
 pub struct TaskGraphMutationState {
     pub journal: InMemoryEventJournal,
     pub linear_mutations: Option<Arc<dyn LinearMutationClient>>,
-    pub store: SnapshotStore,
-    pub broker: StreamBroker,
 }
 
 impl axum::extract::FromRef<super::GatewayState> for TaskGraphMutationState {
@@ -901,8 +895,6 @@ impl axum::extract::FromRef<super::GatewayState> for TaskGraphMutationState {
         Self {
             journal: state.journal.clone(),
             linear_mutations: state.linear_mutations.clone(),
-            store: state.store.clone(),
-            broker: state.broker.clone(),
         }
     }
 }

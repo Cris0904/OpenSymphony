@@ -275,6 +275,30 @@ async fn start_test_server(client: Arc<FakeLinearClient>) -> (JoinHandle<()>, So
     (handle, addr)
 }
 
+/// Same as `start_test_server_with_journal`, but skips the
+/// `with_linear_mutations(...)` installation so the
+/// `/api/v1/taskgraph/*` routes return 503 on every request.
+async fn start_test_server_without_linear_mutations() -> (JoinHandle<()>, SocketAddr) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let journal = opensymphony::opensymphony_domain::InMemoryEventJournal::new(1024, 64);
+    // Note: do NOT call `.with_linear_mutations(...)`; we rely on the
+    // production wiring's `mutation_client_unavailable()` short-circuit.
+    let server = GatewayServer::with_journal(
+        store,
+        journal,
+        opensymphony::opensymphony_domain::StreamBroker::new(
+            opensymphony::opensymphony_domain::InMemoryEventJournal::new(1024, 64),
+        ),
+    );
+    let handle = tokio::spawn(async move {
+        let _ = server.serve(listener).await;
+    });
+    sleep(Duration::from_millis(25)).await;
+    (handle, addr)
+}
+
 async fn start_test_server_with_journal(
     client: Arc<FakeLinearClient>,
 ) -> (
@@ -861,5 +885,117 @@ async fn issue_journal_payload_renames_milestone_field() {
         payload.get("parent_identifier").is_none(),
         "renamed `milestone_id` payload field must replace the misleading `parent_identifier`"
     );
+    handle.abort();
+}
+
+#[tokio::test]
+async fn taskgraph_routes_return_503_when_no_linear_mutation_client_is_wired() {
+    // When `GatewayServer::with_linear_mutations(...)` is never called, every
+    // `/api/v1/taskgraph/*` endpoint must short-circuit with 503 rather than
+    // attempting to dereference an absent `LinearMutationClient`.
+    let (handle, addr) = start_test_server_without_linear_mutations().await;
+    let client = Client::new();
+
+    // Milestones
+    let resp = client
+        .post(format!("http://{addr}/api/v1/taskgraph/milestones"))
+        .json(&TaskGraphMilestoneRequest {
+            schema_version: "1.0.0".into(),
+            correlation_id: "corr-unavail".into(),
+            op: MilestoneOp::Create,
+            idempotency_key: None,
+            project_id: "proj_1".into(),
+            milestone_id: None,
+            name: "ignored".into(),
+            description: None,
+            target_date: None,
+            sort_order: None,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+
+    // Issues
+    let resp = client
+        .post(format!("http://{addr}/api/v1/taskgraph/issues"))
+        .json(&TaskGraphIssueRequest {
+            schema_version: "1.0.0".into(),
+            correlation_id: "corr-unavail".into(),
+            op: IssueOp::Create,
+            idempotency_key: None,
+            team_id: "team_1".into(),
+            issue_id: None,
+            title: "ignored".into(),
+            description: None,
+            priority: None,
+            estimate: None,
+            assignee_id: None,
+            project_id: None,
+            project_milestone_id: None,
+            label_ids: None,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+
+    // Sub-issues
+    let resp = client
+        .post(format!("http://{addr}/api/v1/taskgraph/sub-issues"))
+        .json(&TaskGraphSubIssueRequest {
+            schema_version: "1.0.0".into(),
+            correlation_id: "corr-unavail".into(),
+            op: SubIssueOp::Create,
+            idempotency_key: None,
+            team_id: "team_1".into(),
+            parent_id: "iss_1".into(),
+            sub_issue_id: None,
+            parent_identifier: "COE-405".into(),
+            title: "ignored".into(),
+            description: None,
+            priority: None,
+            estimate: None,
+            assignee_id: None,
+            project_id: None,
+            project_milestone_id: None,
+            label_ids: None,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+
+    // Relations
+    let resp = client
+        .post(format!("http://{addr}/api/v1/taskgraph/relations"))
+        .json(&TaskGraphRelationRequest {
+            schema_version: "1.0.0".into(),
+            correlation_id: "corr-unavail".into(),
+            idempotency_key: None,
+            relation_type: "blocks".into(),
+            issue_id: "iss_1".into(),
+            related_issue_id: "iss_2".into(),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+
+    // Evidence / comments
+    let resp = client
+        .post(format!("http://{addr}/api/v1/taskgraph/evidence"))
+        .json(&TaskGraphEvidenceRequest {
+            schema_version: "1.0.0".into(),
+            correlation_id: "corr-unavail".into(),
+            idempotency_key: None,
+            issue_id: "iss_1".into(),
+            body: "ignored".into(),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+
     handle.abort();
 }
