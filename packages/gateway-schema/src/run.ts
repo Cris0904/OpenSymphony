@@ -194,6 +194,8 @@ export type DiffLine =
 
 /** A contiguous hunk inside a unified diff. */
 export interface DiffHunk {
+  /** Path of the file this hunk belongs to, relative to the workspace root. */
+  file_path: string;
   header: string;
   start_line: number;
   old_line_count: number;

@@ -72,6 +72,7 @@ export type {
   ApprovalStatus,
   ApprovalActor,
   ApprovalTargetContext,
+  ApprovalRiskLevel,
   ApprovalRiskSummary,
   ApprovalRequest,
   ActionStatus,

@@ -1761,6 +1761,9 @@ async fn gateway_serves_run_diffs_with_modified_files() {
     assert_eq!(added, 10);
     assert_eq!(removed, 3);
     assert_eq!(first_hunk.header, "@@ -1,3 +1,10 @@");
+    assert_eq!(first_hunk.file_path, "COE-301/src/main.rs");
+    let second_hunk = response.hunks.get(1).expect("second hunk");
+    assert_eq!(second_hunk.file_path, "COE-301/src/lib.rs");
 
     server_task.abort();
 }

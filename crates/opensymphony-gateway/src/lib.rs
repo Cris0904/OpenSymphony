@@ -1226,6 +1226,29 @@ fn normalize_path(path: &StdPath) -> PathBuf {
     stack.into_iter().collect()
 }
 
+/// Resolve a workspace-relative path and verify it stays inside the workspace
+/// boundary after normalizing `..` components. Returns `None` for absolute paths
+/// that are not rooted in the workspace, or for paths that escape it. This is a
+/// read-time guard for workspace file fallback paths.
+fn safe_workspace_path(workspace_root: &str, raw_path: &str) -> Option<PathBuf> {
+    let root = normalize_path(StdPath::new(workspace_root));
+    let candidate = normalize_path(&StdPath::new(workspace_root).join(raw_path));
+
+    // Reject absolute paths that are not already inside the workspace root. This
+    // prevents callers from passing `/etc/passwd` or a crafted absolute path
+    // directly. The join call above returns the absolute raw_path when given one,
+    // so normalizing it is enough to detect traversal.
+    if candidate.is_absolute() && !candidate.starts_with(&root) {
+        return None;
+    }
+
+    if candidate == root || candidate.starts_with(&root) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 /// Strip the workspace root from a raw absolute path so that the public API
 /// never leaks a local filesystem path outside the workspace boundary.
 ///
@@ -1925,10 +1948,11 @@ async fn get_run_diffs(
     // synthetic hunk with the line counts from the metadata.
     let mut hunks: Vec<DiffHunk> = Vec::new();
     for fc in &files {
+        let hunk_path = sanitize_file_path(&workspace_root, &fc.path);
         if let Some(diff_text) = &fc.diff {
-            hunks.extend(parse_unified_diff(diff_text));
+            hunks.extend(parse_unified_diff(&hunk_path, diff_text));
         } else {
-            hunks.extend(build_fallback_hunks(fc, &workspace_root));
+            hunks.extend(build_fallback_hunks(&hunk_path, fc, &workspace_root));
         }
     }
 
@@ -1962,7 +1986,7 @@ async fn get_run_diffs(
 /// Parse a unified diff string into line-level hunks. Handles the standard
 /// `@@ -old_start,old_len +new_start,new_len @@` header and ` ` / `+` / `-`
 /// prefixed lines. Lines such as `\ No newline at end of file` are ignored.
-fn parse_unified_diff(diff_text: &str) -> Vec<DiffHunk> {
+fn parse_unified_diff(file_path: &str, diff_text: &str) -> Vec<DiffHunk> {
     let mut hunks = Vec::new();
     let mut current_header: Option<String> = None;
     let mut current_start_line = 0u32;
@@ -1974,6 +1998,7 @@ fn parse_unified_diff(diff_text: &str) -> Vec<DiffHunk> {
         if let Some((_old_start, old_count, new_start, new_count)) = parse_hunk_header(line) {
             if let Some(header) = current_header.take() {
                 hunks.push(DiffHunk {
+                    file_path: file_path.to_owned(),
                     header,
                     start_line: current_start_line,
                     old_line_count: current_old_count,
@@ -2016,6 +2041,7 @@ fn parse_unified_diff(diff_text: &str) -> Vec<DiffHunk> {
 
     if let Some(header) = current_header.take() {
         hunks.push(DiffHunk {
+            file_path: file_path.to_owned(),
             header,
             start_line: current_start_line,
             old_line_count: current_old_count,
@@ -2053,14 +2079,18 @@ fn parse_range(range: &str) -> Option<(u32, u32)> {
 /// For newly created files that exist in the workspace, the file content is
 /// returned as addition lines. For all other cases a synthetic hunk carrying
 /// the line counts from the control-plane metadata is returned.
-fn build_fallback_hunks(fc: &ControlPlaneFileChange, workspace_root: &str) -> Vec<DiffHunk> {
+fn build_fallback_hunks(
+    file_path: &str,
+    fc: &ControlPlaneFileChange,
+    workspace_root: &str,
+) -> Vec<DiffHunk> {
     if fc.diff.is_none() && fc.change_kind == ControlPlaneFileChangeKind::Created {
-        let path = if StdPath::new(&fc.path).is_absolute() {
-            StdPath::new(&fc.path).to_path_buf()
-        } else {
-            StdPath::new(workspace_root).join(&fc.path)
-        };
-        if let Ok(content) = std::fs::read_to_string(&path) {
+        // Only read the file when it resolves safely inside the workspace root. The
+        // path from the control plane may be absolute; safe_workspace_path joins it
+        // with the workspace root and then checks containment after normalization.
+        if let Some(path) = safe_workspace_path(workspace_root, &fc.path)
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
             let lines: Vec<&str> = content.lines().collect();
             let new_count = lines.len() as u32;
             let diff_lines = lines
@@ -2070,6 +2100,7 @@ fn build_fallback_hunks(fc: &ControlPlaneFileChange, workspace_root: &str) -> Ve
                 })
                 .collect();
             return vec![DiffHunk {
+                file_path: file_path.to_owned(),
                 header: format!("@@ -0,0 +1,{} @@", new_count),
                 start_line: 1,
                 old_line_count: 0,
@@ -2082,6 +2113,7 @@ fn build_fallback_hunks(fc: &ControlPlaneFileChange, workspace_root: &str) -> Ve
     let old_start = if fc.lines_removed > 0 { 1 } else { 0 };
     let new_start = if fc.lines_added > 0 { 1 } else { 0 };
     vec![DiffHunk {
+        file_path: file_path.to_owned(),
         header: format!(
             "@@ -{},{} +{},{} @@",
             old_start, fc.lines_removed, new_start, fc.lines_added
@@ -2819,6 +2851,7 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
     struct TestIssueFlags {
         workspace: bool,
         harness: bool,
@@ -2866,5 +2899,182 @@ mod tests {
             cancel_acknowledged: false,
             cancel_failed: false,
         }
+    }
+
+    // Helpers for validation status tests.
+    fn file_change(path: &str) -> ControlPlaneFileChange {
+        ControlPlaneFileChange {
+            path: path.into(),
+            change_kind: ControlPlaneFileChangeKind::Modified,
+            lines_added: 1,
+            lines_removed: 1,
+            diff: None,
+        }
+    }
+
+    fn issue_with_outcome_and_files(
+        runtime_state: ControlPlaneIssueRuntimeState,
+        outcome: ControlPlaneWorkerOutcome,
+        files: Vec<ControlPlaneFileChange>,
+    ) -> ControlPlaneIssueSnapshot {
+        let mut issue = test_issue(runtime_state, TestIssueFlags::default());
+        issue.last_outcome = outcome;
+        issue.modified_files = files;
+        issue
+    }
+
+    #[test]
+    fn validation_status_cancel_failed_overrides_completed() {
+        let mut issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Completed,
+            vec![file_change("src/main.rs")],
+        );
+        issue.cancel_failed = true;
+        assert_eq!(validation_status_for_issue(&issue), ValidationStatus::Error);
+    }
+
+    #[test]
+    fn validation_status_detached_is_pending() {
+        let mut issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Completed,
+            vec![file_change("src/main.rs")],
+        );
+        issue.detached = true;
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Pending
+        );
+    }
+
+    #[test]
+    fn validation_status_completed_is_passed() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Completed,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Passed
+        );
+    }
+
+    #[test]
+    fn validation_status_failed_is_failed() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Failed,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Failed
+        );
+    }
+
+    #[test]
+    fn validation_status_canceled_is_failed() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Canceled,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Failed
+        );
+    }
+
+    #[test]
+    fn validation_status_running_with_files_is_running() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Running
+        );
+    }
+
+    #[test]
+    fn validation_status_running_without_files_is_pending() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Running,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Pending
+        );
+    }
+
+    #[test]
+    fn validation_status_paused_is_pending() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Paused,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Pending
+        );
+    }
+
+    #[test]
+    fn validation_status_retry_queued_is_pending() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::RetryQueued,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Pending
+        );
+    }
+
+    #[test]
+    fn validation_status_releasing_is_pending() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Releasing,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Pending
+        );
+    }
+
+    #[test]
+    fn validation_status_no_files_is_skipped() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Idle,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Skipped
+        );
+    }
+
+    #[test]
+    fn validation_status_idle_with_files_is_pending() {
+        let issue = issue_with_outcome_and_files(
+            ControlPlaneIssueRuntimeState::Idle,
+            ControlPlaneWorkerOutcome::Unknown,
+            vec![file_change("src/main.rs")],
+        );
+        assert_eq!(
+            validation_status_for_issue(&issue),
+            ValidationStatus::Pending
+        );
     }
 }

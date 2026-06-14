@@ -32,9 +32,12 @@ export interface ApprovalTargetContext {
   run_id?: string;
 }
 
+/** Risk level for an approval request. */
+export type ApprovalRiskLevel = "low" | "medium" | "high" | "unknown";
+
 /** Risk summary for an approval request. */
 export interface ApprovalRiskSummary {
-  level: "low" | "medium" | "high" | "unknown";
+  level: ApprovalRiskLevel;
   reasons: string[];
 }
 

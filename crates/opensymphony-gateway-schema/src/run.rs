@@ -271,6 +271,8 @@ pub enum DiffLine {
 /// A contiguous hunk inside a unified diff.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffHunk {
+    /// Path of the file this hunk belongs to, relative to the workspace root.
+    pub file_path: String,
     pub header: String,
     pub start_line: u32,
     pub old_line_count: u32,
