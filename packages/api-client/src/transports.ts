@@ -14,6 +14,10 @@ import type {
   RunLogPage,
   TerminalSearchResult,
   TerminalJumpResult,
+  ChangedFileEntry,
+  FileDiffPage,
+  RunValidationSummary,
+  ApprovalRequest,
 } from "@opensymphony/gateway-schema";
 import { pageCursorFirst } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, GatewayTransportConfig, ActionCapableTransport } from "./index.js";
@@ -97,6 +101,37 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
       `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/logs?${params}`,
     );
     return response as RunLogPage;
+  }
+
+  async runFiles(runId: string): Promise<ChangedFileEntry[]> {
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/files`,
+    ) as { files?: ChangedFileEntry[] };
+    return response.files ?? [];
+  }
+
+  async runDiffs(runId: string, filePath?: string): Promise<FileDiffPage> {
+    const params = new URLSearchParams();
+    if (filePath) params.set("file_path", filePath);
+    const query = params.toString() ? `?${params}` : "";
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/diffs${query}`,
+    );
+    return response as FileDiffPage;
+  }
+
+  async runApprovals(runId: string): Promise<ApprovalRequest[]> {
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/approvals`,
+    ) as { approvals?: ApprovalRequest[] };
+    return response.approvals ?? [];
+  }
+
+  async runValidation(runId: string): Promise<RunValidationSummary> {
+    const response = await this.fetchJson(
+      `${this.baseUri}/api/v1/runs/${encodeURIComponent(runId)}/validation`,
+    );
+    return response as RunValidationSummary;
   }
 
   async terminalSnapshot(
@@ -347,6 +382,64 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
     });
   }
 
+  async rehydrateRun(runId: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `rehydrate-${runId}-${crypto.randomUUID()}`,
+      action_kind: "rehydrate",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `rehydrate-${runId}`,
+    });
+  }
+
+  async commentRun(runId: string, text: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `comment-${runId}-${crypto.randomUUID()}`,
+      action_kind: "comment",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      payload: { text },
+      idempotency_key: `comment-${runId}-${text.slice(0, 40)}`,
+    });
+  }
+
+  async createFollowup(runId: string, payload: unknown): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `followup-${runId}-${crypto.randomUUID()}`,
+      action_kind: "create_followup",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      payload,
+      idempotency_key: `followup-${runId}`,
+    });
+  }
+
+  async approvalDecision(
+    approvalId: string,
+    decision: "approved" | "rejected",
+    explanation?: string,
+  ): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `approval-${approvalId}-${crypto.randomUUID()}`,
+      action_kind: "approval_decision",
+      target_entity: { entity_kind: "approval", entity_id: approvalId },
+      payload: { decision, explanation },
+      idempotency_key: `approval-${approvalId}-${decision}`,
+    });
+  }
+
+  async openWorkspace(runId: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `workspace-${runId}-${crypto.randomUUID()}`,
+      action_kind: "transition_issue",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      payload: { intent: "open_workspace" },
+      idempotency_key: `workspace-${runId}`,
+    });
+  }
+
   // -- Lifecycle --
 
   async close(): Promise<void> {
@@ -560,6 +653,35 @@ export class WebSocketTransport implements GatewayTransport {
     const params = new URLSearchParams({ event_id: eventId });
     return this.get<TerminalJumpResult>(
       `/api/v1/runs/${encodeURIComponent(runId)}/terminal/${encodeURIComponent(terminalId)}/jump?${params.toString()}`,
+    );
+  }
+
+  async runFiles(runId: string): Promise<ChangedFileEntry[]> {
+    const response = await this.get<{ files?: ChangedFileEntry[] }>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/files`,
+    );
+    return response.files ?? [];
+  }
+
+  async runDiffs(runId: string, filePath?: string): Promise<FileDiffPage> {
+    const params = new URLSearchParams();
+    if (filePath) params.set("file_path", filePath);
+    const query = params.toString() ? `?${params.toString()}` : "";
+    return this.get<FileDiffPage>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/diffs${query}`,
+    );
+  }
+
+  async runApprovals(runId: string): Promise<ApprovalRequest[]> {
+    const response = await this.get<{ approvals?: ApprovalRequest[] }>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/approvals`,
+    );
+    return response.approvals ?? [];
+  }
+
+  async runValidation(runId: string): Promise<RunValidationSummary> {
+    return this.get<RunValidationSummary>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/validation`,
     );
   }
 
@@ -988,6 +1110,29 @@ export class TauriChannelTransport implements GatewayTransport {
       terminal_id: terminalId,
       event_id: eventId,
     });
+  }
+
+  async runFiles(runId: string): Promise<ChangedFileEntry[]> {
+    return this.invoke<{ files: ChangedFileEntry[] }>("run_files", {
+      run_id: runId,
+    }).then((r) => r.files ?? []);
+  }
+
+  async runDiffs(runId: string, filePath?: string): Promise<FileDiffPage> {
+    return this.invoke<FileDiffPage>("run_diffs", {
+      run_id: runId,
+      file_path: filePath,
+    });
+  }
+
+  async runApprovals(runId: string): Promise<ApprovalRequest[]> {
+    return this.invoke<{ approvals: ApprovalRequest[] }>("run_approvals", {
+      run_id: runId,
+    }).then((r) => r.approvals ?? []);
+  }
+
+  async runValidation(runId: string): Promise<RunValidationSummary> {
+    return this.invoke<RunValidationSummary>("run_validation", { run_id: runId });
   }
 
   async *events(fromCursor?: { sequence: number; partition: string }): AsyncIterable<GatewayEnvelope> {

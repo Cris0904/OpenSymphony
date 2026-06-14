@@ -11,7 +11,12 @@ export type ActionKind =
   | "transition_issue"
   | "create_followup"
   | "approval_decision"
-  | "publish_plan";
+  | "publish_plan"
+  | "task_graph_milestone"
+  | "task_graph_issue"
+  | "task_graph_sub_issue"
+  | "task_graph_relation"
+  | "task_graph_evidence";
 
 export interface ActionTarget {
   entity_kind: EntityKind;
@@ -26,4 +31,25 @@ export interface ActionDispatch {
   target_entity: ActionTarget;
   payload?: unknown;
   idempotency_key?: string;
+}
+
+/** Outcome returned for a dispatched action. */
+export type ActionStatus =
+  | "accepted"
+  | "rejected"
+  | "queued"
+  | "completed";
+
+/** Classes of follow-up events the caller can expect after an action. */
+export type ExpectedFollowup =
+  | "action_completion"
+  | "run_lifecycle"
+  | "journal_entry"
+  | "snapshot_update";
+
+/** Permission check embedded in a receipt when a capability guard fires. */
+export interface PermissionResult {
+  allowed: boolean;
+  required_capability: string;
+  reason?: string;
 }
