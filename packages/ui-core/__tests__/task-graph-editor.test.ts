@@ -558,6 +558,8 @@ describe("TaskGraphEditor", () => {
 
     await flushUntil(() => root.querySelector(".os-pending-banner") === null);
     expect(root.textContent).toContain("Mutation rejected: Title is not allowed");
+    expect(root.textContent).toContain("Running issue");
+    expect(root.textContent).not.toContain("Rejected title");
 
     await handle.destroy();
   });
@@ -601,6 +603,7 @@ describe("TaskGraphEditor", () => {
 
       await flushUntil(() => root.querySelector(".os-pending-banner") === null);
 
+      expect(root.textContent).toContain("Mutation rejected: Title is not allowed");
       expect(root.textContent).not.toContain("Rejected title");
       expect(root.textContent).toContain("Running issue");
 
