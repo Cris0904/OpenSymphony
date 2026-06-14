@@ -66,13 +66,18 @@ pub use crate::opensymphony_gateway_schema::{
         ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget, ExpectedFollowup,
         PermissionResult,
     },
+    approval::{
+        ApprovalActor, ApprovalKind, ApprovalRequest, ApprovalRiskSummary, ApprovalStatus,
+        ApprovalTargetContext,
+    },
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
     cursor::PageCursor,
     event_journal::{EventPage as GatewayEventPage, JournalError as EventJournalError},
     run::{
         ChangedFileEntry, DiffHunk, DiffLine, FileChangeKind, FileDiffPage, ReleaseReason,
-        RunAction, RunDetail, RunEvent, RunEventPage, RunFilesPage, RunLifecycleState, RunPhase,
-        RunStatus, SafeActions,
+        RunAction, RunDetail, RunDiagnostics, RunEvent, RunEventPage, RunFilesPage,
+        RunLifecycleState, RunLivenessEnvelope, RunPhase, RunProgress, RunStatus,
+        RunStreamLiveness, SafeActions,
     },
     snapshot::{
         DashboardSnapshot, GatewayHealth, GatewayMetrics, ProjectDetail, ProjectIssueSummary,
@@ -80,6 +85,7 @@ pub use crate::opensymphony_gateway_schema::{
         SnapshotEventSummary,
     },
     task_graph::{DiffSummary, TaskGraphRuntimeOverlay, TaskGraphSnapshot, TaskGraphStateCategory},
+    validation::{RunValidationSummary, ValidationCommand, ValidationEvidenceItem},
     version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
 };
 
@@ -411,6 +417,8 @@ impl GatewayServer {
             .route("/api/v1/runs/{run_id}/events", get(get_run_events))
             .route("/api/v1/runs/{run_id}/files", get(get_run_files))
             .route("/api/v1/runs/{run_id}/diffs", get(get_run_diffs))
+            .route("/api/v1/runs/{run_id}/validation", get(get_run_validation))
+            .route("/api/v1/runs/{run_id}/approvals", get(get_run_approvals))
             .route("/api/v1/runs/{run_id}/timeline", get(get_run_timeline))
             .route("/api/v1/runs/{run_id}/logs", get(get_run_logs))
             .route(
@@ -1690,6 +1698,9 @@ async fn get_run_detail(
                     liveness: None,
                     diagnostics: None,
                     safe_actions: SafeActions::default(),
+                    detached: false,
+                    cancel_acknowledged: false,
+                    cancel_failed: false,
                 }),
             );
         }
@@ -1711,18 +1722,22 @@ async fn get_run_detail(
         ControlPlaneIssueRuntimeState::Failed => (RunStatus::Released, RunLifecycleState::Failed),
     };
 
-    let release_reason = match issue.last_outcome {
-        ControlPlaneWorkerOutcome::Completed => Some(ReleaseReason::Completed),
-        ControlPlaneWorkerOutcome::Canceled => Some(ReleaseReason::Cancelled),
-        // When the snapshot indicates a failure and retries are exhausted
-        // (retry_count > 0), treat it as RetryExhausted.  When the issue
-        // failed on the first attempt with no retry queued, treat it as a
-        // terminal tracker state rather than an exhausted-retry signal.
-        ControlPlaneWorkerOutcome::Failed if issue.retry_count > 0 => {
-            Some(ReleaseReason::RetryExhausted)
+    let release_reason = if issue.cancel_failed {
+        Some(ReleaseReason::CancelFailed)
+    } else {
+        match issue.last_outcome {
+            ControlPlaneWorkerOutcome::Completed => Some(ReleaseReason::Completed),
+            ControlPlaneWorkerOutcome::Canceled => Some(ReleaseReason::Cancelled),
+            // When the snapshot indicates a failure and retries are exhausted
+            // (retry_count > 0), treat it as RetryExhausted.  When the issue
+            // failed on the first attempt with no retry queued, treat it as a
+            // terminal tracker state rather than an exhausted-retry signal.
+            ControlPlaneWorkerOutcome::Failed if issue.retry_count > 0 => {
+                Some(ReleaseReason::RetryExhausted)
+            }
+            ControlPlaneWorkerOutcome::Failed => Some(ReleaseReason::TrackerTerminal),
+            _ => None,
         }
-        ControlPlaneWorkerOutcome::Failed => Some(ReleaseReason::TrackerTerminal),
-        _ => None,
     };
 
     (
@@ -1771,10 +1786,17 @@ async fn get_run_detail(
             summary: None,
             blocker: issue.blocked.then(|| "Blocked by dependency".into()),
             error: None,
-            allowed_actions: Vec::new(),
-            liveness: None,
-            diagnostics: None,
-            safe_actions: SafeActions::default(),
+            allowed_actions: allowed_actions_for_issue(&issue),
+            liveness: Some(build_liveness(&issue, &envelope)),
+            diagnostics: Some(RunDiagnostics {
+                harness_scheduler_disagreement: None,
+                cancel_acknowledged: issue.cancel_acknowledged,
+                cancel_failed: issue.cancel_failed,
+            }),
+            safe_actions: safe_actions_for_issue(&issue),
+            detached: issue.detached,
+            cancel_acknowledged: issue.cancel_acknowledged,
+            cancel_failed: issue.cancel_failed,
         }),
     )
 }
@@ -1868,11 +1890,22 @@ async fn get_run_files(
 async fn get_run_diffs(
     State(store): State<SnapshotStore>,
     AxumPath(run_id): AxumPath<String>,
+    Query(query): Query<RunDiffQuery>,
 ) -> impl IntoResponse {
     let envelope = store.current().await;
     let workspace_root = envelope.snapshot.daemon.workspace_root.clone();
     let files: Vec<&ControlPlaneFileChange> = match find_issue_snapshot(&envelope, &run_id) {
-        Some(issue) => issue.modified_files.iter().collect(),
+        Some(issue) => {
+            if let Some(path) = &query.file_path {
+                issue
+                    .modified_files
+                    .iter()
+                    .filter(|fc| sanitize_file_path(&workspace_root, &fc.path) == *path)
+                    .collect()
+            } else {
+                issue.modified_files.iter().collect()
+            }
+        }
         None => {
             return (
                 StatusCode::NOT_FOUND,
@@ -1901,10 +1934,11 @@ async fn get_run_diffs(
             // choke on `@@ -1,0 +1,N @@` or `@@ -1,N +1,0 @@`.
             let old_start = if fc.lines_removed > 0 { 1 } else { 0 };
             let new_start = if fc.lines_added > 0 { 1 } else { 0 };
+            let path = sanitize_file_path(&workspace_root, &fc.path);
             DiffHunk {
                 header: format!(
-                    "@@ -{},{} +{},{} @@",
-                    old_start, fc.lines_removed, new_start, fc.lines_added
+                    "@@ -{},{} +{},{} @@ {}",
+                    old_start, fc.lines_removed, new_start, fc.lines_added, path
                 ),
                 start_line: if fc.lines_removed > 0 { 1 } else { 0 },
                 old_line_count: fc.lines_removed,
@@ -1941,6 +1975,149 @@ async fn get_run_diffs(
     )
 }
 
+async fn get_run_validation(
+    State(store): State<SnapshotStore>,
+    AxumPath(run_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let envelope = store.current().await;
+    let issue = match find_issue_snapshot(&envelope, &run_id) {
+        Some(issue) => issue,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(RunValidationSummary {
+                    schema_version: SchemaVersion::v1(),
+                    run_id,
+                    generated_at: Utc::now(),
+                    overall_status: ApprovalStatus::Pending,
+                    commands: Vec::new(),
+                    evidence: Vec::new(),
+                }),
+            );
+        }
+    };
+
+    let overall_status = if issue.cancel_failed {
+        ApprovalStatus::Failed
+    } else if issue.detached {
+        ApprovalStatus::Pending
+    } else {
+        match issue.last_outcome {
+            ControlPlaneWorkerOutcome::Completed => ApprovalStatus::Passed,
+            ControlPlaneWorkerOutcome::Failed => ApprovalStatus::Failed,
+            ControlPlaneWorkerOutcome::Canceled => ApprovalStatus::Failed,
+            _ => ApprovalStatus::Pending,
+        }
+    };
+
+    let validation_status = build_runtime_overlay(&issue).validation_status;
+
+    let commands = if issue.modified_files.is_empty() {
+        Vec::new()
+    } else {
+        vec![ValidationCommand {
+            command_id: "placeholder".to_owned(),
+            command: "validate".to_owned(),
+            status: overall_status.clone(),
+            exit_code: None,
+            stdout_summary: None,
+            stderr_summary: None,
+        }]
+    };
+
+    let evidence_summary = validation_status
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| format!("Overall status: {overall_status:?}"));
+    let evidence = vec![ValidationEvidenceItem {
+        evidence_id: "ev-1".to_owned(),
+        label: "Validation status".to_owned(),
+        status: overall_status.clone(),
+        summary: evidence_summary,
+        file_path: None,
+        line_number: None,
+        action_triggered: None,
+    }];
+
+    (
+        StatusCode::OK,
+        Json(RunValidationSummary {
+            schema_version: SchemaVersion::v1(),
+            run_id: issue.identifier.clone(),
+            generated_at: Utc::now(),
+            overall_status,
+            commands,
+            evidence,
+        }),
+    )
+}
+
+async fn get_run_approvals(
+    State(store): State<SnapshotStore>,
+    AxumPath(run_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let envelope = store.current().await;
+    let run_id_clone = run_id.clone();
+    let issue = match find_issue_snapshot(&envelope, &run_id) {
+        Some(issue) => issue,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApprovalListPage {
+                    run_id,
+                    approvals: Vec::new(),
+                }),
+            );
+        }
+    };
+
+    let risk_level = if issue.cancel_failed {
+        "high".to_owned()
+    } else if issue.detached {
+        "medium".to_owned()
+    } else {
+        "low".to_owned()
+    };
+
+    let approval = ApprovalRequest {
+        schema_version: SchemaVersion::v1(),
+        approval_id: format!("approval-{}", issue.identifier),
+        run_id: run_id_clone,
+        issue_id: issue.identifier.clone(),
+        kind: ApprovalKind::FileWrite,
+        title: "Pending changes review".to_owned(),
+        description: "Approve pending changes for this run.".to_owned(),
+        proposed_action: None,
+        actor: Some(ApprovalActor {
+            actor_id: "agent".to_owned(),
+            actor_kind: "agent".to_owned(),
+            display_name: Some("OpenHands Agent".to_owned()),
+        }),
+        target_context: Some(ApprovalTargetContext {
+            file_path: issue.modified_files.first().map(|fc| fc.path.clone()),
+            command: None,
+            issue_identifier: Some(issue.identifier.clone()),
+            run_id: Some(issue.identifier.clone()),
+        }),
+        risk_summary: Some(ApprovalRiskSummary {
+            level: risk_level,
+            reasons: vec!["automated risk assessment from runtime state".to_owned()],
+        }),
+        requested_at: Utc::now(),
+        expires_at: None,
+        status: ApprovalStatus::Pending,
+        correlation_id: format!("corr-approval-{}", issue.identifier),
+        decided_at: None,
+    };
+
+    (
+        StatusCode::OK,
+        Json(ApprovalListPage {
+            run_id: issue.identifier.clone(),
+            approvals: vec![approval],
+        }),
+    )
+}
+
 async fn get_run_timeline(
     State(state): State<GatewayState>,
     AxumPath(run_id): AxumPath<String>,
@@ -1956,6 +2133,18 @@ struct RunLogQuery {
     cursor: Option<u64>,
     #[serde(default = "default_terminal_limit")]
     limit: usize,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RunDiffQuery {
+    #[serde(default)]
+    file_path: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ApprovalListPage {
+    run_id: String,
+    approvals: Vec<ApprovalRequest>,
 }
 
 async fn get_run_logs(
@@ -2071,6 +2260,104 @@ struct TerminalSnapshotQuery {
 
 fn default_terminal_limit() -> usize {
     1000
+}
+
+fn allowed_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> Vec<RunAction> {
+    let mut allowed = Vec::new();
+    use ControlPlaneIssueRuntimeState as State;
+    match issue.runtime_state {
+        State::Running | State::Paused => {
+            allowed.push(RunAction::Cancel);
+            allowed.push(RunAction::Pause);
+            allowed.push(RunAction::Resume);
+        }
+        State::Completed | State::Failed => {
+            allowed.push(RunAction::Retry);
+            allowed.push(RunAction::Rehydrate);
+        }
+        State::Idle => {
+            allowed.push(RunAction::Retry);
+        }
+        _ => {}
+    }
+    if issue.detached {
+        allowed.push(RunAction::Detach);
+    }
+    allowed
+}
+
+fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
+    use ControlPlaneIssueRuntimeState as State;
+    use ControlPlaneWorkerOutcome as Outcome;
+
+    let (retry, cancel, rehydrate, detach) = match issue.runtime_state {
+        State::Idle => (false, false, false, false),
+        State::Running => (false, true, false, true),
+        State::Paused => (false, true, false, true),
+        State::RetryQueued => (false, false, false, false),
+        State::Releasing => (false, false, false, false),
+        State::Completed => {
+            let safe_rehydrate = matches!(
+                issue.last_outcome,
+                Outcome::Completed | Outcome::Failed | Outcome::Canceled
+            );
+            (true, false, safe_rehydrate, false)
+        }
+        State::Failed => {
+            let safe_rehydrate = matches!(issue.last_outcome, Outcome::Failed | Outcome::Canceled);
+            (true, false, safe_rehydrate, false)
+        }
+    };
+
+    SafeActions {
+        retry,
+        cancel,
+        rehydrate,
+        detach,
+    }
+}
+
+fn build_liveness(
+    issue: &ControlPlaneIssueSnapshot,
+    _envelope: &SnapshotEnvelope,
+) -> RunLivenessEnvelope {
+    let phase = match issue.runtime_state {
+        ControlPlaneIssueRuntimeState::Running => RunPhase::Active,
+        ControlPlaneIssueRuntimeState::Paused => RunPhase::Quiet,
+        ControlPlaneIssueRuntimeState::Idle => RunPhase::Quiet,
+        ControlPlaneIssueRuntimeState::RetryQueued => RunPhase::RetryQueued,
+        ControlPlaneIssueRuntimeState::Releasing => RunPhase::Completed,
+        ControlPlaneIssueRuntimeState::Completed => RunPhase::Completed,
+        ControlPlaneIssueRuntimeState::Failed => RunPhase::Completed,
+    };
+    let stream = if issue.detached {
+        RunStreamLiveness::Detached
+    } else if issue.cancel_failed {
+        RunStreamLiveness::Degraded
+    } else if issue.cancel_acknowledged {
+        RunStreamLiveness::Healthy
+    } else {
+        RunStreamLiveness::Stalled
+    };
+    let latest = if issue.recent_events.is_empty() {
+        None
+    } else {
+        issue.recent_events.last().map(|evt| RunProgress {
+            sequence: 1,
+            event_id: evt.event_id.clone(),
+            happened_at: evt.happened_at,
+            kind: evt.kind.clone(),
+            summary: evt.summary.clone(),
+        })
+    };
+    RunLivenessEnvelope {
+        phase,
+        stream,
+        latest_progress: latest,
+        harness_acknowledged: issue.cancel_acknowledged,
+        cancel_failed: issue.cancel_failed,
+        detached: issue.detached,
+    }
 }
 
 async fn get_terminal_snapshot(

@@ -114,6 +114,17 @@ pub struct ControlPlaneIssueSnapshot {
     pub output_tokens: u64,
     #[serde(default)]
     pub cache_read_tokens: u64,
+    /// True when the harness has been detached from the run (local operator or
+    /// host requested disconnect without a clean terminal state).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub detached: bool,
+    /// True when the harness acknowledged a cancel/force-stop request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancel_acknowledged: bool,
+    /// True when a cancel/force-stop request was not acknowledged and the run
+    /// ended in a cancel-failed state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancel_failed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

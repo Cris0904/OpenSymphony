@@ -18,6 +18,7 @@ use opensymphony::opensymphony_gateway::{
 use opensymphony::opensymphony_gateway_schema::action::{
     ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget,
 };
+use opensymphony::opensymphony_gateway_schema::approval::ApprovalStatus;
 use opensymphony::opensymphony_gateway_schema::envelope::EntityKind;
 use tokio::net::TcpListener;
 use url::Url;
@@ -69,6 +70,9 @@ fn fixture_snapshot(step: u64) -> DaemonSnapshot {
             input_tokens: 1024,
             output_tokens: 512,
             cache_read_tokens: 256,
+            cancel_acknowledged: false,
+            cancel_failed: false,
+            detached: false,
         }],
         recent_events: vec![RecentEvent {
             happened_at: now,
@@ -139,6 +143,9 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_read_tokens: 0,
+                cancel_acknowledged: false,
+                cancel_failed: false,
+                detached: false,
             },
             // Completed issue with events and modified files
             IssueSnapshot {
@@ -188,6 +195,9 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 input_tokens: 2048,
                 output_tokens: 1024,
                 cache_read_tokens: 256,
+                cancel_acknowledged: false,
+                cancel_failed: false,
+                detached: false,
             },
             // Failed issue, first attempt (no retries exhausted)
             IssueSnapshot {
@@ -211,6 +221,9 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 input_tokens: 512,
                 output_tokens: 128,
                 cache_read_tokens: 0,
+                cancel_acknowledged: false,
+                cancel_failed: false,
+                detached: false,
             },
             // RetryQueued issue: queued but NOT eligible (not idle)
             IssueSnapshot {
@@ -234,6 +247,9 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 input_tokens: 256,
                 output_tokens: 64,
                 cache_read_tokens: 0,
+                cancel_acknowledged: false,
+                cancel_failed: false,
+                detached: false,
             },
             // Blocked Idle issue: NOT eligible AND NOT queued
             IssueSnapshot {
@@ -257,6 +273,9 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_read_tokens: 0,
+                cancel_acknowledged: false,
+                cancel_failed: false,
+                detached: false,
             },
         ],
         recent_events: vec![RecentEvent {
@@ -1569,6 +1588,72 @@ async fn gateway_returns_404_for_unknown_run_diffs() {
     server_task.abort();
 }
 
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_validation() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "http://{address}/api/v1/runs/UNKNOWN-999/validation"
+        ))
+        .send()
+        .await
+        .expect("fetch unknown run validation");
+
+    assert_eq!(resp.status(), 404);
+    let body: opensymphony::opensymphony_gateway_schema::validation::RunValidationSummary =
+        resp.json().await.expect("decode 404 run validation body");
+    assert_eq!(body.run_id, "UNKNOWN-999");
+    assert!(body.commands.is_empty());
+    assert!(body.evidence.is_empty());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_404_for_unknown_run_approvals() {
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "http://{address}/api/v1/runs/UNKNOWN-999/approvals"
+        ))
+        .send()
+        .await
+        .expect("fetch unknown run approvals");
+
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = resp.json().await.expect("decode 404 run approvals body");
+    assert_eq!(body["run_id"].as_str(), Some("UNKNOWN-999"));
+    assert!(body["approvals"].as_array().map_or(true, |a| a.is_empty()));
+
+    server_task.abort();
+}
+
 // ── Rich fixture tests (non-Running states, file/diff data) ────────────────────
 
 #[tokio::test]
@@ -1637,6 +1722,83 @@ async fn gateway_serves_run_diffs_with_modified_files() {
     assert_eq!(response.hunks.len(), 2);
     assert_eq!(response.total_lines_added, 52);
     assert_eq!(response.total_lines_removed, 3);
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_validation_with_modified_files() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-301/validation"))
+        .send()
+        .await
+        .expect("fetch run validation with data")
+        .json::<opensymphony::opensymphony_gateway_schema::validation::RunValidationSummary>()
+        .await
+        .expect("decode run validation");
+
+    assert_eq!(response.run_id, "COE-301");
+    assert_eq!(response.overall_status, ApprovalStatus::Passed);
+    assert_eq!(response.commands.len(), 1);
+    assert_eq!(response.commands[0].status, ApprovalStatus::Passed);
+    assert!(!response.evidence.is_empty());
+
+    server_task.abort();
+}
+
+#[tokio::test]
+async fn gateway_serves_run_approvals_with_context() {
+    let store = SnapshotStore::new(fixture_snapshot_rich(0));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{address}/api/v1/runs/COE-301/approvals"))
+        .send()
+        .await
+        .expect("fetch run approvals with data")
+        .json::<serde_json::Value>()
+        .await
+        .expect("decode run approvals");
+
+    assert_eq!(response["run_id"].as_str(), Some("COE-301"));
+    let approvals = response["approvals"].as_array().expect("approvals array");
+    assert_eq!(approvals.len(), 1);
+    let approval = &approvals[0];
+    assert_eq!(approval["kind"].as_str(), Some("file_write"));
+    assert_eq!(approval["status"].as_str(), Some("pending"));
+    let actor = approval["actor"].as_object().expect("approval actor");
+    assert_eq!(actor["actor_id"].as_str(), Some("agent"));
+    let context = approval["target_context"]
+        .as_object()
+        .expect("target context");
+    assert_eq!(context["issue_identifier"].as_str(), Some("COE-301"));
+    assert!(context["file_path"].is_string());
+    assert!(approval["risk_summary"].is_object());
 
     server_task.abort();
 }

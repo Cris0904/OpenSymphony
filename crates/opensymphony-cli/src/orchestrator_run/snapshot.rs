@@ -209,6 +209,9 @@ fn map_issue(
             .as_ref()
             .map(|conversation| conversation.cache_read_tokens)
             .unwrap_or(0),
+        detached: false,
+        cancel_acknowledged: false,
+        cancel_failed: false,
     }
 }
 

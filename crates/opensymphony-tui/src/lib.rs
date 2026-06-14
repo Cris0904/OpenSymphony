@@ -4041,6 +4041,9 @@ mod tests {
                         input_tokens: 1024 + (index as u64 * 100),
                         output_tokens: 512 + (index as u64 * 50),
                         cache_read_tokens: 256 + (index as u64 * 25),
+                        cancel_acknowledged: false,
+                        cancel_failed: false,
+                        detached: false,
                     })
                     .collect(),
                 recent_events: vec![RecentEvent {
