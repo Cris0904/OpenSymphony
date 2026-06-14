@@ -2238,7 +2238,11 @@ fn allowed_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> Vec<RunAction
     if issue.server_base_url.is_some() || !issue.conversation_id_suffix.is_empty() {
         allowed.push(RunAction::Debug);
     }
-    if issue.detached {
+    // Detach is meaningful when the run is not already detached and the stream
+    // is not healthy (stalled, degraded, etc.). This mirrors the safety check in
+    // safe_actions_for_issue.
+    let stream = build_liveness(issue).stream;
+    if !issue.detached && !matches!(stream, RunStreamLiveness::Healthy) {
         allowed.push(RunAction::Detach);
     }
     allowed
@@ -2605,8 +2609,28 @@ mod tests {
     }
 
     #[test]
-    fn allowed_actions_adds_detach_when_detached() {
-        let issue = test_issue(
+    fn allowed_actions_detach_matches_stream_health() {
+        let stalled = test_issue(
+            ControlPlaneIssueRuntimeState::RetryQueued,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: false,
+            },
+        );
+        assert!(allowed_actions_for_issue(&stalled).contains(&RunAction::Detach));
+
+        let healthy = test_issue(
+            ControlPlaneIssueRuntimeState::Running,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: false,
+            },
+        );
+        assert!(!allowed_actions_for_issue(&healthy).contains(&RunAction::Detach));
+
+        let already_detached = test_issue(
             ControlPlaneIssueRuntimeState::Running,
             TestIssueFlags {
                 workspace: false,
@@ -2614,8 +2638,7 @@ mod tests {
                 detached: true,
             },
         );
-        let actions = allowed_actions_for_issue(&issue);
-        assert!(actions.contains(&RunAction::Detach));
+        assert!(!allowed_actions_for_issue(&already_detached).contains(&RunAction::Detach));
     }
 
     #[test]

@@ -2182,6 +2182,56 @@ async fn gateway_dispatches_action_and_returns_receipt() {
     server_task.abort();
 }
 
+/// E2E evidence: open_workspace and debug actions are accepted as dispatchable
+/// action kinds and correlated to the target issue.
+#[tokio::test]
+async fn gateway_dispatches_open_workspace_and_debug_actions() {
+    let store = SnapshotStore::new(fixture_snapshot(1));
+    let server = GatewayServer::new(store.clone());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{address}/api/v1/actions/dispatch");
+
+    for (kind, correlation_id) in [
+        (ActionKind::OpenWorkspace, "corr_open_workspace"),
+        (ActionKind::Debug, "corr_debug"),
+    ] {
+        let dispatch = ActionDispatch {
+            schema_version: Default::default(),
+            correlation_id: correlation_id.to_string(),
+            action_kind: kind,
+            target_entity: ActionTarget {
+                entity_kind: EntityKind::Issue,
+                entity_id: "COE-255".to_string(),
+            },
+            payload: None,
+            idempotency_key: None,
+        };
+        let response = client
+            .post(&url)
+            .json(&dispatch)
+            .send()
+            .await
+            .expect("POST /api/v1/actions/dispatch should respond");
+        assert_eq!(response.status(), 200, "{kind} should be accepted");
+        let body: ActionReceipt = response.json().await.expect("should not be None");
+        assert_eq!(body.status, ActionStatus::Accepted);
+        assert_eq!(body.correlation_id, correlation_id);
+    }
+
+    server_task.abort();
+}
+
 #[tokio::test]
 async fn gateway_run_timeline_groups_runtime_events() {
     use opensymphony::opensymphony_domain::InMemoryEventJournal as DomainJournal;

@@ -154,6 +154,8 @@ impl ActionHandler {
             ActionKind::Comment => validate_comment(&action, issue.as_ref(), &action_id),
             ActionKind::Pause => validate_pause(&action, issue.as_ref(), &action_id),
             ActionKind::Resume => validate_resume(&action, issue.as_ref(), &action_id),
+            ActionKind::OpenWorkspace => validate_generic(&action, issue.as_ref(), &action_id),
+            ActionKind::Debug => validate_generic(&action, issue.as_ref(), &action_id),
             ActionKind::TransitionIssue => validate_generic(&action, issue.as_ref(), &action_id),
             ActionKind::CreateFollowup => validate_generic(&action, issue.as_ref(), &action_id),
             ActionKind::ApprovalDecision => validate_generic(&action, issue.as_ref(), &action_id),
@@ -387,12 +389,12 @@ fn validate_resume(
 
 /// Generic action validation for actions that do not require runtime state gating.
 ///
-/// Actions validated here (`TransitionIssue`, `CreateFollowup`, `ApprovalDecision`,
-/// `PublishPlan`) are inherently safe because they operate on the issue tracker or
-/// planning layer rather than the active harness runtime. They do not mutate scheduler
-/// state and are therefore accepted for any valid issue snapshot. If a future action
-/// needs runtime state gating, it should be promoted from `validate_generic` to a
-/// dedicated validator (e.g., `validate_pause`, `validate_resume`).
+/// Actions validated here (`OpenWorkspace`, `Debug`, `TransitionIssue`, `CreateFollowup`,
+/// `ApprovalDecision`, `PublishPlan`) are inherently safe because they operate on the
+/// issue tracker, planning layer, or local UI rather than the active harness runtime.
+/// They do not mutate scheduler state and are therefore accepted for any valid issue
+/// snapshot. If a future action needs runtime state gating, it should be promoted from
+/// `validate_generic` to a dedicated validator (e.g., `validate_pause`, `validate_resume`).
 fn validate_generic(
     action: &ActionDispatch,
     issue: Option<&ControlPlaneIssueSnapshot>,
