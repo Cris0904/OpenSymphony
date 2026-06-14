@@ -348,11 +348,12 @@ export function updateArtifactContent(
   content: string,
 ): PlanningWorkspaceState {
   const trimmed = content.trim();
-  let newRevisionId: string | null = null;
+  let selectedRevisionId: string | null = state.selectedRevisionId;
   const artifacts = state.artifacts.map((artifact) => {
     if (artifact.artifact_id !== artifactId) return artifact;
     const latest = artifact.revisions[artifact.revisions.length - 1];
     if (latest && latest.content === trimmed) {
+      selectedRevisionId = latest.revision_id;
       return artifact;
     }
     const now = new Date().toISOString();
@@ -361,7 +362,7 @@ export function updateArtifactContent(
       created_at: now,
       content: trimmed,
     };
-    newRevisionId = newRevision.revision_id;
+    selectedRevisionId = newRevision.revision_id;
     return {
       ...artifact,
       updated_at: now,
@@ -371,7 +372,7 @@ export function updateArtifactContent(
   return {
     ...state,
     artifacts,
-    selectedRevisionId: newRevisionId ?? state.selectedRevisionId,
+    selectedRevisionId,
   };
 }
 

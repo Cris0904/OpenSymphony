@@ -5,7 +5,12 @@
  */
 
 import { renderOpenSymphonyApp } from "../src/app-shell.js";
-import { emptyPlanningWorkspaceState, hasDependencyCycle, validatePlanningWorkspace } from "../src/planning-workspace.js";
+import {
+  emptyPlanningWorkspaceState,
+  hasDependencyCycle,
+  updateArtifactContent,
+  validatePlanningWorkspace,
+} from "../src/planning-workspace.js";
 import { MockGatewayTransport } from "@opensymphony/api-client";
 import { schemaVersionV1 } from "@opensymphony/gateway-schema";
 import type {
@@ -556,5 +561,52 @@ describe("PlanningWorkspace", () => {
     expect(messages[0].message).toContain("A");
     expect(messages[0].message).toContain("B");
     expect(messages[0].message).toContain("C");
+  });
+
+  it("reports dangling blocked_by references", () => {
+    const base = emptyPlanningWorkspaceState();
+    const a = {
+      schema_version: schemaVersionV1(),
+      node_id: "a",
+      kind: "issue" as const,
+      identifier: "A",
+      title: "A",
+      state: "Todo",
+      state_category: "todo" as const,
+      parent_id: undefined,
+      children: [],
+      blocked_by: ["missing"],
+    };
+    const state = { ...base, nodes: [a] };
+    const messages = validatePlanningWorkspace(state).filter(
+      (m) => m.message_id.includes("-dangling-"),
+    );
+    expect(messages.length).toBe(1);
+    expect(messages[0].level).toBe("error");
+    expect(messages[0].message).toContain("missing");
+    expect(messages[0].field_ref).toEqual({ kind: "dependency", id: "a" });
+  });
+
+  it("does not create a new artifact revision when content is unchanged", () => {
+    const base = emptyPlanningWorkspaceState();
+    const artifact = {
+      schema_version: schemaVersionV1(),
+      artifact_id: "art-1",
+      session_id: base.session_id,
+      kind: "intake" as const,
+      title: "Intake",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      approved: false,
+      published_to_tracker: false,
+      revisions: [
+        { revision_id: "rev-1", created_at: new Date().toISOString(), content: "same content" },
+      ],
+    };
+    const state = { ...base, artifacts: [artifact], selectedArtifactId: "art-1" };
+    const next = updateArtifactContent(state, "art-1", "same content");
+    expect(next.artifacts[0].revisions.length).toBe(1);
+    expect(next.artifacts[0].revisions[0].revision_id).toBe("rev-1");
+    expect(next.selectedRevisionId).toBe("rev-1");
   });
 });
