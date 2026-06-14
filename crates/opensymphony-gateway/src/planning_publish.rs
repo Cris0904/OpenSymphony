@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process;
 use std::sync::Arc;
 
 use axum::{
@@ -19,8 +20,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use chrono::Utc;
-use tokio::sync::RwLock;
+use chrono::{Duration, Utc};
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use super::task_graph_mutations::{
@@ -102,10 +103,66 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Write a file atomically by creating a sibling temp file and then renaming it
+/// into place. This keeps the original file intact if the write is interrupted
+/// so retries can read a valid receipt rather than a truncated one.
+async fn atomic_write_file(path: &Path, contents: &str) -> Result<(), PublishError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("receipt.yaml");
+    let temp_path = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    tokio::fs::write(&temp_path, contents)
+        .await
+        .map_err(|e| PublishError::ReceiptWrite(e.to_string()))?;
+    tokio::fs::rename(&temp_path, path)
+        .await
+        .map_err(|e| PublishError::ReceiptWrite(e.to_string()))?;
+    Ok(())
+}
+
+/// Drafts older than this are eligible for eviction on new draft creation.
+const DRAFT_TTL_SECONDS: i64 = 24 * 60 * 60;
+
+/// Remove draft entries (and their per-draft locks) that are older than the
+/// TTL. Drafts that are currently inside the publish critical section are
+/// skipped because their per-draft lock is held.
+fn evict_stale_drafts_and_locks(
+    drafts: &mut BTreeMap<String, Draft>,
+    locks: &mut BTreeMap<String, Arc<Mutex<()>>>,
+    cutoff: chrono::DateTime<Utc>,
+) {
+    let mut keys_to_remove = Vec::new();
+    for (key, draft) in drafts.iter() {
+        if draft.created_at < cutoff {
+            keys_to_remove.push(key.clone());
+        }
+    }
+    for key in keys_to_remove {
+        // Only evict if the per-draft lock is not currently held by a publish.
+        if let Some(lock) = locks.get(&key)
+            && lock.try_lock().is_err()
+        {
+            continue;
+        }
+        drafts.remove(&key);
+        locks.remove(&key);
+    }
+}
+
 /// Shared state for the `/api/v1/planning/*` endpoints.
 #[derive(Clone)]
 pub struct PlanningPublishState {
     drafts: Arc<RwLock<BTreeMap<String, Draft>>>,
+    /// Per-draft mutex that serializes the publish critical section for a
+    /// single draft id. The outer map is only held while acquiring the per-draft
+    /// lock, so the critical section itself does not block unrelated drafts.
+    draft_locks: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     pub(crate) linear_mutations: Option<Arc<dyn LinearMutationClient>>,
 }
 
@@ -113,6 +170,7 @@ impl std::fmt::Debug for PlanningPublishState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlanningPublishState")
             .field("drafts", &self.drafts)
+            .field("draft_locks", &"<BTreeMap<String, Mutex<()>>>")
             .field("linear_mutations", &"<dyn LinearMutationClient>")
             .finish()
     }
@@ -129,6 +187,7 @@ impl PlanningPublishState {
     pub fn new() -> Self {
         Self {
             drafts: Arc::new(RwLock::new(BTreeMap::new())),
+            draft_locks: Arc::new(Mutex::new(BTreeMap::new())),
             linear_mutations: None,
         }
     }
@@ -143,6 +202,7 @@ pub(crate) struct Draft {
     existing_receipt: YamlPublishReceipt,
     can_publish: bool,
     parsed_tasks: BTreeMap<TaskId, ParsedTask>,
+    created_at: chrono::DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -225,8 +285,18 @@ async fn planning_draft_handler(
                 existing_receipt,
                 can_publish,
                 parsed_tasks,
+                created_at: Utc::now(),
             };
-            state.drafts.write().await.insert(draft_id, draft);
+            // Insert the new draft and evict stale drafts/locks in one critical
+            // section to avoid unbounded growth in long-running processes.
+            let now = Utc::now();
+            let cutoff = now - Duration::seconds(DRAFT_TTL_SECONDS);
+            {
+                let mut locks = state.draft_locks.lock().await;
+                let mut drafts = state.drafts.write().await;
+                drafts.insert(draft_id, draft);
+                evict_stale_drafts_and_locks(&mut drafts, &mut locks, cutoff);
+            }
             (StatusCode::OK, Json(preview)).into_response()
         }
         Err(err) => err.into_response(),
@@ -246,39 +316,65 @@ async fn planning_publish_handler(
         None => return PublishError::MutationClientUnavailable.into_response(),
     };
 
-    let draft = match state.drafts.read().await.get(&request.draft_id).cloned() {
-        Some(d) => d,
-        None => return PublishError::DraftNotFound(request.draft_id).into_response(),
+    let draft_id = request.draft_id.clone();
+
+    // Serialize publish operations for a single draft id. The outer map is only
+    // held while acquiring the per-draft lock, so unrelated drafts can still
+    // publish concurrently.
+    let lock = {
+        let mut locks = state.draft_locks.lock().await;
+        locks
+            .entry(draft_id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     };
 
-    // Regenerate the draft immediately before publish so that any partial
-    // receipt written by a previous attempt is picked up and already-created
-    // entities are emitted as updates instead of duplicated creates.
-    let original_draft_id = draft.draft_id.clone();
-    let draft = match generate_draft(draft.request.clone()).await {
-        Ok((manifest, parsed_tasks, entities, existing_receipt, _validation, can_publish)) => {
-            Draft {
-                draft_id: original_draft_id,
-                request: draft.request,
-                manifest,
-                entities,
-                existing_receipt,
-                can_publish,
-                parsed_tasks,
+    let response = {
+        let _guard = lock.lock().await;
+
+        let draft = match state.drafts.read().await.get(&draft_id).cloned() {
+            Some(d) => d,
+            None => return PublishError::DraftNotFound(draft_id).into_response(),
+        };
+
+        // Regenerate the draft immediately before publish so that any partial
+        // receipt written by a previous attempt is picked up and already-created
+        // entities are emitted as updates instead of duplicated creates.
+        let original_draft_id = draft.draft_id.clone();
+        let draft = match generate_draft(draft.request.clone()).await {
+            Ok((manifest, parsed_tasks, entities, existing_receipt, _validation, can_publish)) => {
+                Draft {
+                    draft_id: original_draft_id,
+                    request: draft.request,
+                    manifest,
+                    entities,
+                    existing_receipt,
+                    can_publish,
+                    parsed_tasks,
+                    created_at: draft.created_at,
+                }
             }
+            Err(err) => return err.into_response(),
+        };
+
+        if !draft.can_publish {
+            let response = rejected_response(&draft, &request, "draft validation failed");
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(response)).into_response();
         }
-        Err(err) => return err.into_response(),
+
+        let response = match execute_publish(draft, client, &request.correlation_id).await {
+            Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+            Err(err) => err.into_response(),
+        };
+
+        // After the receipt is safely written, the draft is consumed and can be
+        // removed to avoid unbounded growth in long-running gateway processes.
+        state.drafts.write().await.remove(&draft_id);
+        response
     };
 
-    if !draft.can_publish {
-        let response = rejected_response(&draft, &request, "draft validation failed");
-        return (StatusCode::UNPROCESSABLE_ENTITY, Json(response)).into_response();
-    }
-
-    match execute_publish(draft, client, &request.correlation_id).await {
-        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(err) => err.into_response(),
-    }
+    state.draft_locks.lock().await.remove(&draft_id);
+    response
 }
 
 async fn generate_draft(
@@ -1133,9 +1229,7 @@ async fn execute_publish(
     )?;
     let yaml = serde_yaml::to_string(&running_receipt)
         .map_err(|e| PublishError::ReceiptWrite(e.to_string()))?;
-    tokio::fs::write(&receipt_path, yaml)
-        .await
-        .map_err(|e| PublishError::ReceiptWrite(e.to_string()))?;
+    atomic_write_file(&receipt_path, &yaml).await?;
 
     let status = if failures.is_empty() {
         "published"

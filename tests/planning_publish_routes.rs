@@ -401,6 +401,24 @@ fn draft_request(repo_root: &str) -> LinearDraftRequest {
     }
 }
 
+fn draft_request_with_paths(
+    repo_root: &str,
+    manifest_path: &str,
+    receipt_path: &str,
+) -> LinearDraftRequest {
+    LinearDraftRequest {
+        schema_version: SchemaVersion::v1(),
+        correlation_id: "draft-corr-1".into(),
+        manifest_path: manifest_path.into(),
+        repo_root: repo_root.into(),
+        project_id: "proj_1".into(),
+        team_id: "team_1".into(),
+        linear_project: "test-project".into(),
+        publish_receipt_path: receipt_path.into(),
+        existing_receipt_path: None,
+    }
+}
+
 #[tokio::test]
 async fn draft_returns_entities_and_validation_summary() {
     let dir = TempDir::new().unwrap();
@@ -706,9 +724,27 @@ async fn publish_retry_uses_updates_and_does_not_duplicate() {
         .unwrap();
     assert_eq!(first.status, "published");
 
+    // A successful publish consumes the draft. Re-drafting from the same
+    // manifest is the supported way to retry; the existing receipt on disk
+    // causes the second run to emit updates instead of duplicates.
+    let second_draft: LinearDraftPreview = Client::new()
+        .post(format!("http://{addr}/api/v1/planning/draft"))
+        .json(&draft_req)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_publish_req = LinearPublishRequest {
+        schema_version: SchemaVersion::v1(),
+        draft_id: second_draft.draft_id,
+        correlation_id: "pub-corr-1".into(),
+        approved: true,
+    };
     let second: LinearPublishResponse = Client::new()
         .post(format!("http://{addr}/api/v1/planning/publish"))
-        .json(&publish_req)
+        .json(&second_publish_req)
         .send()
         .await
         .unwrap()
@@ -770,4 +806,81 @@ async fn publish_missing_draft_returns_404() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn draft_rejects_absolute_manifest_path() {
+    let dir = TempDir::new().unwrap();
+    let repo_root = write_fixture_task_package(&dir).await;
+    let (_handle, addr) = start_test_server(FakeLinearClient::new()).await;
+
+    let req = draft_request_with_paths(&repo_root, "/etc/passwd", "docs/tasks/linear-publish.yaml");
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/planning/draft"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("path must be relative")
+    );
+}
+
+#[tokio::test]
+async fn draft_rejects_dotdot_manifest_path() {
+    let dir = TempDir::new().unwrap();
+    let repo_root = write_fixture_task_package(&dir).await;
+    let (_handle, addr) = start_test_server(FakeLinearClient::new()).await;
+
+    let req = draft_request_with_paths(
+        &repo_root,
+        "../../../etc/passwd",
+        "docs/tasks/linear-publish.yaml",
+    );
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/planning/draft"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("path escapes repo_root")
+    );
+}
+
+#[tokio::test]
+async fn draft_rejects_dotdot_receipt_path() {
+    let dir = TempDir::new().unwrap();
+    let repo_root = write_fixture_task_package(&dir).await;
+    let (_handle, addr) = start_test_server(FakeLinearClient::new()).await;
+
+    let req = draft_request_with_paths(
+        &repo_root,
+        "docs/tasks/task-package.yaml",
+        "../../../etc/cron.d/opensymphony",
+    );
+    let resp = Client::new()
+        .post(format!("http://{addr}/api/v1/planning/draft"))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("path escapes repo_root")
+    );
 }
