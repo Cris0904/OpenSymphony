@@ -88,7 +88,7 @@ export function emptyPlanningWorkspaceState(): PlanningWorkspaceState {
     session_id: "",
     project_id: "",
     title: "",
-    activeTab: "conversation",
+    activeTab: "artifact",
     messages: [],
     composerDraft: "",
     artifacts: [],
