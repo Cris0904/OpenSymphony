@@ -2244,7 +2244,7 @@ fn allowed_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> Vec<RunAction
     allowed
 }
 
-fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
+pub(crate) fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
     use ControlPlaneIssueRuntimeState as State;
     use ControlPlaneWorkerOutcome as Outcome;
 
@@ -2616,6 +2616,53 @@ mod tests {
         );
         let actions = allowed_actions_for_issue(&issue);
         assert!(actions.contains(&RunAction::Detach));
+    }
+
+    #[test]
+    fn safe_actions_for_healthy_running_issue_allows_cancel_forbids_detach() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::Running,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: false,
+            },
+        );
+        let safe = safe_actions_for_issue(&issue);
+        assert!(safe.cancel);
+        assert!(!safe.retry);
+        assert!(!safe.rehydrate);
+        assert!(!safe.detach, "detach must be unsafe on a healthy running issue");
+    }
+
+    #[test]
+    fn safe_actions_for_stalled_issue_allows_detach() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::RetryQueued,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: false,
+            },
+        );
+        let safe = safe_actions_for_issue(&issue);
+        assert!(safe.detach, "detach must be safe when the stream is stalled");
+        assert!(!safe.cancel);
+        assert!(!safe.retry);
+    }
+
+    #[test]
+    fn safe_actions_for_already_detached_issue_forbids_detach() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::Running,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: true,
+            },
+        );
+        let safe = safe_actions_for_issue(&issue);
+        assert!(!safe.detach, "detach must be unsafe when the issue is already detached");
     }
 
     struct TestIssueFlags {

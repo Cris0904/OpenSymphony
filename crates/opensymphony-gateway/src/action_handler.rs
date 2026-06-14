@@ -8,13 +8,13 @@ use uuid::Uuid;
 
 use crate::opensymphony_domain::{
     ControlPlaneDaemonSnapshot, ControlPlaneIssueRuntimeState, ControlPlaneIssueSnapshot,
-    ControlPlaneWorkerOutcome, InMemoryEventJournal, SnapshotEnvelope,
+    InMemoryEventJournal, SnapshotEnvelope,
 };
 use crate::opensymphony_gateway_schema::{
     action::{ActionDispatch, ActionKind, ActionReceipt, ActionStatus, PermissionResult},
     envelope::{EntityKind, EntityRef},
     event_journal::{EventActor, EventKind, EventRecord},
-    run::{RunAction, SafeActions},
+    run::RunAction,
 };
 
 pub struct ValidatedAction {
@@ -199,39 +199,8 @@ fn find_issue_by_id(
         .cloned()
 }
 
-fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
-    use ControlPlaneIssueRuntimeState as State;
-    use ControlPlaneWorkerOutcome as Outcome;
-
-    let (retry, cancel, rehydrate, detach) = match issue.runtime_state {
-        State::Idle => (false, false, false, false),
-        State::Running => (false, true, false, true),
-        State::Paused => (false, true, false, true),
-        State::RetryQueued => (false, false, false, false),
-        State::Releasing => (false, false, false, false),
-        State::Completed => {
-            let safe_rehydrate = matches!(
-                issue.last_outcome,
-                Outcome::Completed | Outcome::Failed | Outcome::Canceled
-            );
-            (true, false, safe_rehydrate, false)
-        }
-        State::Failed => {
-            let safe_rehydrate = matches!(issue.last_outcome, Outcome::Failed | Outcome::Canceled);
-            (true, false, safe_rehydrate, false)
-        }
-    };
-
-    SafeActions {
-        retry,
-        cancel,
-        rehydrate,
-        detach,
-    }
-}
-
 fn is_run_action_safe(issue: &ControlPlaneIssueSnapshot, action: RunAction) -> bool {
-    let safe = safe_actions_for_issue(issue);
+    let safe = super::safe_actions_for_issue(issue);
     match action {
         RunAction::Retry => safe.retry,
         RunAction::Cancel => safe.cancel,

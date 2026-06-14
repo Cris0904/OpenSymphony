@@ -1,4 +1,5 @@
 import type { RunAction, RunDetail, SafeActions, ActionReceipt } from "@opensymphony/gateway-schema";
+import { escapeHtml, escapeAttr } from "./html.js";
 
 /** Display model for a single action button in the run action bar. */
 export interface ActionBarItem {
@@ -33,8 +34,7 @@ export function buildActionBarItems(run: RunDetail): ActionBarItem[] {
     }
     // Duplicate-run retry prevention: retry on an active/owned run is unsafe
     // and should be blocked unless explicitly allowed by the safe_actions gate.
-    if (action === "retry" && enabled && !safeAction) {
-      enabled = false;
+    if (action === "retry" && allowedAction && !safeAction) {
       warning = `Prevented duplicate-run retry: run is ${phase ?? run.status}`;
     }
     items.push({ action, label, enabled, warning });
@@ -62,10 +62,10 @@ export function renderActionBar(
   const buttons = items
     .map((item) => {
       const warning = item.warning
-        ? `<span class="os-action-warning" data-testid="action-warning" data-action="${item.action}">${escapeHtml(item.warning)}</span>`
+        ? `<span class="os-action-warning" data-testid="action-warning" data-action="${escapeAttr(item.action)}">${escapeHtml(item.warning)}</span>`
         : "";
       return `<div class="os-action-item">
-        <button class="os-run-action" data-testid="run-action-button" data-action="${item.action}" ${item.enabled ? "" : "disabled"}>${item.label}</button>
+        <button class="os-run-action" data-testid="run-action-button" data-action="${escapeAttr(item.action)}" ${item.enabled ? "" : "disabled"}>${escapeHtml(item.label)}</button>
         ${warning}
       </div>`;
     })
@@ -78,9 +78,9 @@ export function renderActionReceipt(receipt: ActionReceipt): string {
   const events = receipt.expected_followup.length
     ? receipt.expected_followup.map((e) => `<span class="os-expected-event">${escapeHtml(e)}</span>`).join(" ")
     : "none";
-  return `<div class="os-action-receipt" data-testid="action-receipt" data-action-id="${receipt.action_id}" data-status="${receipt.status}">
-    <span class="os-action-id">${receipt.action_id}</span>
-    <span class="os-receipt-status os-receipt-status-${receipt.status}">${receipt.status}</span>
+  return `<div class="os-action-receipt" data-testid="action-receipt" data-action-id="${escapeAttr(receipt.action_id)}" data-status="${escapeAttr(receipt.status)}">
+    <span class="os-action-id">${escapeHtml(receipt.action_id)}</span>
+    <span class="os-receipt-status os-receipt-status-${escapeAttr(receipt.status)}">${escapeHtml(receipt.status)}</span>
     <span class="os-expected-events">expected: ${events}</span>
     ${receipt.reason ? `<span class="os-receipt-reason">${escapeHtml(receipt.reason)}</span>` : ""}
   </div>`;
@@ -97,20 +97,12 @@ export function renderAuditTrailEntry(
     details?: string;
   },
 ): string {
-  return `<div class="os-audit-trail-entry" data-testid="audit-trail-entry" data-action="${event.action}" data-status="${event.status}">
-    <span class="os-audit-timestamp">${event.timestamp}</span>
+  return `<div class="os-audit-trail-entry" data-testid="audit-trail-entry" data-action="${escapeAttr(event.action)}" data-status="${escapeAttr(event.status)}">
+    <span class="os-audit-timestamp">${escapeHtml(event.timestamp)}</span>
     <span class="os-audit-actor">${escapeHtml(event.actor)}</span>
-    <span class="os-audit-action">${event.action}</span>
+    <span class="os-audit-action">${escapeHtml(event.action)}</span>
     <span class="os-audit-target">${escapeHtml(event.target)}</span>
-    <span class="os-audit-status os-audit-status-${event.status}">${event.status}</span>
+    <span class="os-audit-status os-audit-status-${escapeAttr(event.status)}">${escapeHtml(event.status)}</span>
     ${event.details ? `<span class="os-audit-details">${escapeHtml(event.details)}</span>` : ""}
   </div>`;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }

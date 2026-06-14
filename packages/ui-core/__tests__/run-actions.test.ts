@@ -76,7 +76,7 @@ describe("buildActionBarItems", () => {
     });
     const retry = buildActionBarItems(run).find((i) => i.action === "retry");
     expect(retry?.enabled).toBe(false);
-    expect(retry?.warning).toMatch(/duplicate-run retry|Unsafe to retry/);
+    expect(retry?.warning).toMatch(/Prevented duplicate-run retry/);
   });
 
   it("disables actions not advertised by the gateway", () => {
@@ -154,6 +154,19 @@ describe("renderActionReceipt", () => {
     expect(html).toContain("action_completion");
     expect(html).toContain("run_lifecycle");
   });
+
+  it("escapes dynamic attribute values", () => {
+    const malicious: ActionReceipt = {
+      ...receipt,
+      action_id: 'action-"-onclick',
+      status: 'accepted" data-x',
+    };
+    const html = renderActionReceipt(malicious);
+    expect(html).toContain('data-action-id="action-&quot;-onclick"');
+    expect(html).toContain('data-status="accepted&quot; data-x"');
+    expect(html).not.toContain('data-action-id="action-"-onclick"');
+    expect(html).not.toContain('data-status="accepted" data-x"');
+  });
 });
 
 describe("renderAuditTrailEntry", () => {
@@ -171,5 +184,18 @@ describe("renderAuditTrailEntry", () => {
     expect(html).toContain("cancel");
     expect(html).toContain("acknowledged by harness");
     expect(html).toContain("accepted");
+  });
+
+  it("escapes dynamic action and status values", () => {
+    const html = renderAuditTrailEntry({
+      timestamp: "2025-09-01T00:00:00Z",
+      actor: "operator",
+      action: 'cancel"-x',
+      target: "run-1",
+      status: 'accepted"-x',
+      details: "acknowledged by harness",
+    });
+    expect(html).toContain('data-action="cancel&quot;-x"');
+    expect(html).toContain('data-status="accepted&quot;-x"');
   });
 });
