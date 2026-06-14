@@ -737,6 +737,17 @@ async fn publish_retry_uses_updates_and_does_not_duplicate() {
     assert_eq!(sub_calls.len(), 2);
     assert!(matches!(sub_calls[0].0.op, SubIssueOp::Create));
     assert!(matches!(sub_calls[1].0.op, SubIssueOp::Update));
+    drop(sub_calls);
+
+    // Relations and evidence comments are skipped on retry because the
+    // persisted receipt already records their IDs, so call counts stay the
+    // same as the first publish.
+    let relation_calls = client.calls.relation.lock().await;
+    assert_eq!(relation_calls.len(), 1);
+    drop(relation_calls);
+
+    let evidence_calls = client.calls.evidence.lock().await;
+    assert_eq!(evidence_calls.len(), 3);
 }
 
 #[tokio::test]
