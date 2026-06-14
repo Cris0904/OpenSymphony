@@ -1649,7 +1649,7 @@ async fn gateway_returns_404_for_unknown_run_approvals() {
     assert_eq!(resp.status(), 404);
     let body: serde_json::Value = resp.json().await.expect("decode 404 run approvals body");
     assert_eq!(body["run_id"].as_str(), Some("UNKNOWN-999"));
-    assert!(body["approvals"].as_array().map_or(true, |a| a.is_empty()));
+    assert!(body["approvals"].as_array().is_none_or(|a| a.is_empty()));
 
     server_task.abort();
 }

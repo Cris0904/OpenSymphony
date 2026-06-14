@@ -1786,14 +1786,14 @@ async fn get_run_detail(
             summary: None,
             blocker: issue.blocked.then(|| "Blocked by dependency".into()),
             error: None,
-            allowed_actions: allowed_actions_for_issue(&issue),
-            liveness: Some(build_liveness(&issue, &envelope)),
+            allowed_actions: allowed_actions_for_issue(issue),
+            liveness: Some(build_liveness(issue, &envelope)),
             diagnostics: Some(RunDiagnostics {
                 harness_scheduler_disagreement: None,
                 cancel_acknowledged: issue.cancel_acknowledged,
                 cancel_failed: issue.cancel_failed,
             }),
-            safe_actions: safe_actions_for_issue(&issue),
+            safe_actions: safe_actions_for_issue(issue),
             detached: issue.detached,
             cancel_acknowledged: issue.cancel_acknowledged,
             cancel_failed: issue.cancel_failed,
@@ -2010,7 +2010,7 @@ async fn get_run_validation(
         }
     };
 
-    let validation_status = build_runtime_overlay(&issue).validation_status;
+    let validation_status = build_runtime_overlay(issue).validation_status;
 
     let commands = if issue.modified_files.is_empty() {
         Vec::new()
@@ -2018,7 +2018,7 @@ async fn get_run_validation(
         vec![ValidationCommand {
             command_id: "placeholder".to_owned(),
             command: "validate".to_owned(),
-            status: overall_status.clone(),
+            status: overall_status,
             exit_code: None,
             stdout_summary: None,
             stderr_summary: None,
@@ -2031,7 +2031,7 @@ async fn get_run_validation(
     let evidence = vec![ValidationEvidenceItem {
         evidence_id: "ev-1".to_owned(),
         label: "Validation status".to_owned(),
-        status: overall_status.clone(),
+        status: overall_status,
         summary: evidence_summary,
         file_path: None,
         line_number: None,
