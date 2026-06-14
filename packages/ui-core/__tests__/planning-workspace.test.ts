@@ -5,7 +5,7 @@
  */
 
 import { renderOpenSymphonyApp } from "../src/app-shell.js";
-import { hasDependencyCycle } from "../src/planning-workspace.js";
+import { emptyPlanningWorkspaceState, hasDependencyCycle, validatePlanningWorkspace } from "../src/planning-workspace.js";
 import { MockGatewayTransport } from "@opensymphony/api-client";
 import { schemaVersionV1 } from "@opensymphony/gateway-schema";
 import type {
@@ -504,5 +504,57 @@ describe("PlanningWorkspace", () => {
     const nodeMap = new Map([a, b, c].map((n) => [n.node_id, n]));
 
     expect(hasDependencyCycle(nodeMap, "a")).toBe(true);
+  });
+
+  it("reports each dependency cycle only once", () => {
+    const base = emptyPlanningWorkspaceState("project-1");
+    const a = {
+      schema_version: schemaVersionV1(),
+      node_id: "a",
+      kind: "issue" as const,
+      identifier: "A",
+      title: "A",
+      state: "Todo",
+      state_category: "todo" as const,
+      parent_id: undefined,
+      children: [],
+      blocked_by: ["b"],
+    };
+    const b = {
+      schema_version: schemaVersionV1(),
+      node_id: "b",
+      kind: "issue" as const,
+      identifier: "B",
+      title: "B",
+      state: "Todo",
+      state_category: "todo" as const,
+      parent_id: undefined,
+      children: [],
+      blocked_by: ["c"],
+    };
+    const c = {
+      schema_version: schemaVersionV1(),
+      node_id: "c",
+      kind: "issue" as const,
+      identifier: "C",
+      title: "C",
+      state: "Todo",
+      state_category: "todo" as const,
+      parent_id: undefined,
+      children: [],
+      blocked_by: ["a"],
+    };
+    const state = {
+      ...base,
+      nodes: [a, b, c],
+      activeTab: "validation" as const,
+    };
+    const messages = validatePlanningWorkspace(state).filter(
+      (m) => m.message_id.includes("-cycle"),
+    );
+    expect(messages.length).toBe(1);
+    expect(messages[0].message).toContain("A");
+    expect(messages[0].message).toContain("B");
+    expect(messages[0].message).toContain("C");
   });
 });

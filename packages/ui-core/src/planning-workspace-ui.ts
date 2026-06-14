@@ -31,8 +31,7 @@ export const emptyPlanningEditState: PlanningEditState = {
   state: "",
 };
 
-const tabLabels: Record<PlanningWorkspaceTab, string> = {
-  conversation: "Conversation",
+const tabLabels: Record<Exclude<PlanningWorkspaceTab, "conversation">, string> = {
   artifact: "Artifact",
   hierarchy: "Hierarchy",
   dependencies: "Dependencies",
@@ -56,7 +55,7 @@ export function renderPlanningWorkspace(
           <span class="os-meta">${escapeHtml(state.session_id)} • ${escapeHtml(state.project_id)}</span>
         </div>
         <div class="os-plan-tabs">
-          ${(Object.keys(tabLabels) as PlanningWorkspaceTab[])
+          ${(Object.keys(tabLabels) as (Exclude<PlanningWorkspaceTab, "conversation">)[])
             .map((tab) => renderTab(tab, state.activeTab, validationCount))
             .join("")}
         </div>
@@ -73,7 +72,7 @@ export function renderPlanningWorkspace(
   `;
 }
 
-function renderTab(tab: PlanningWorkspaceTab, active: PlanningWorkspaceTab, validationCount: number): string {
+function renderTab(tab: Exclude<PlanningWorkspaceTab, "conversation">, active: PlanningWorkspaceTab, validationCount: number): string {
   const isActive = tab === active ? "os-plan-tab-active" : "";
   const badge = tab === "validation" && validationCount > 0
     ? `<span class="os-badge os-badge-blocked">${validationCount}</span>`
@@ -87,8 +86,6 @@ function renderActiveTab(
   validationMessages: PlanningValidationMessage[],
 ): string {
   switch (state.activeTab) {
-    case "conversation":
-      return renderConversationFocus(state);
     case "artifact":
       return renderArtifactEditor(state);
     case "hierarchy":
@@ -101,6 +98,8 @@ function renderActiveTab(
       return renderValidationPanel(validationMessages);
     case "diff":
       return renderDiffEditor(state);
+    case "conversation":
+      return renderConversationFocus(state);
     default:
       return "";
   }

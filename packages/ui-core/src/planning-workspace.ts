@@ -419,7 +419,7 @@ export function addPlanningNode(
       nodes[parentIdx] = { ...parent, children: [...parent.children, nodeId] };
     }
   }
-  return { ...state, nodes, selectedNodeId: nodeId, expandedNodeIds: new Set(state.expandedNodeIds).add(nodeId) };
+  return { ...state, nodes: rebuildChildren(nodes), selectedNodeId: nodeId, expandedNodeIds: new Set(state.expandedNodeIds).add(nodeId) };
 }
 
 export function updatePlanningNode(
@@ -473,7 +473,7 @@ export function movePlanningNode(
     }
     return n;
   });
-  return { ...state, nodes };
+  return { ...state, nodes: rebuildChildren(nodes) };
 }
 
 export function removePlanningNode(
@@ -493,7 +493,7 @@ export function removePlanningNode(
     }));
   return {
     ...state,
-    nodes,
+    nodes: rebuildChildren(nodes),
     selectedNodeId: state.selectedNodeId === nodeId ? null : state.selectedNodeId,
   };
 }
@@ -608,13 +608,18 @@ export function validatePlanningWorkspace(
   }
 
   const nodeMap = new Map(state.nodes.map((n) => [n.node_id, n]));
+  const reportedCycleNodes = new Set<string>();
   for (const node of state.nodes) {
-    if (hasDependencyCycle(nodeMap, node.node_id)) {
+    if (reportedCycleNodes.has(node.node_id)) continue;
+    const cycle = findDependencyCycle(nodeMap, node.node_id);
+    if (cycle) {
+      for (const id of cycle) reportedCycleNodes.add(id);
+      const identifiers = cycle.map((id) => nodeMap.get(id)?.identifier ?? id);
       messages.push({
-        message_id: `val-${node.node_id}-cycle`,
+        message_id: `val-${cycle[0]}-cycle`,
         level: "error",
-        message: `${node.identifier} participates in a dependency cycle.`,
-        field_ref: { kind: "dependency", id: node.node_id },
+        message: "Dependency cycle: " + identifiers.join(", "),
+        field_ref: { kind: "dependency", id: cycle[0] },
       });
     }
   }
@@ -727,27 +732,57 @@ export function getArtifactDepths(nodes: PlanningNode[]): Map<string, number> {
   return depths;
 }
 
+function findDependencyCycle(
+  nodeMap: Map<string, PlanningNode>,
+  startId: string,
+): string[] | null {
+  const path: string[] = [];
+  const pathIndex = new Map<string, number>();
+  const visited = new Set<string>();
+  function dfs(nodeId: string): string[] | null {
+    if (pathIndex.has(nodeId)) {
+      const idx = pathIndex.get(nodeId)!;
+      return path.slice(idx);
+    }
+    if (visited.has(nodeId)) return null;
+    visited.add(nodeId);
+    pathIndex.set(nodeId, path.length);
+    path.push(nodeId);
+    const node = nodeMap.get(nodeId);
+    if (node) {
+      for (const dep of node.blocked_by) {
+        const cycle = dfs(dep);
+        if (cycle) return cycle;
+      }
+    }
+    path.pop();
+    pathIndex.delete(nodeId);
+    return null;
+  }
+  return dfs(startId);
+}
+
 export function hasDependencyCycle(
   nodeMap: Map<string, PlanningNode>,
   startId: string,
 ): boolean {
-  const path = new Set<string>();
-  const visited = new Set<string>();
-  function dfs(nodeId: string): boolean {
-    if (path.has(nodeId)) return true;
-    if (visited.has(nodeId)) return false;
-    visited.add(nodeId);
-    path.add(nodeId);
-    const node = nodeMap.get(nodeId);
-    if (node) {
-      for (const dep of node.blocked_by) {
-        if (dfs(dep)) return true;
-      }
+  return findDependencyCycle(nodeMap, startId) !== null;
+}
+
+function rebuildChildren(nodes: PlanningNode[]): PlanningNode[] {
+  const childrenByParent = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (node.parent_id) {
+      const list = childrenByParent.get(node.parent_id) ?? [];
+      list.push(node.node_id);
+      childrenByParent.set(node.parent_id, list);
     }
-    path.delete(nodeId);
-    return false;
   }
-  return dfs(startId);
+  return nodes.map((node) => {
+    const children = childrenByParent.get(node.node_id);
+    if (children === undefined) return node;
+    return { ...node, children };
+  });
 }
 
 function collectDescendants(nodes: PlanningNode[], nodeId: string): string[] {

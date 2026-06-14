@@ -263,6 +263,9 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
   }
 
   private loadPlanningWorkspace(projectId: string | null): void {
+    // The fixture planning session is loaded once so the UI renders immediately.
+    // Subsequent gateway/project changes only update the project_id; the workspace
+    // session (messages, edits, criteria) is intentionally kept across project switches.
     if (this.state.planningWorkspace && this.state.planningWorkspace.session_id) {
       return;
     }
@@ -1358,8 +1361,13 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       parentId,
       `New ${kind.replace(/_/g, " ")}`,
     );
-    const newNode = this.state.planningWorkspace.nodes[this.state.planningWorkspace.nodes.length - 1];
-    this.state.planningEdit = { nodeId: newNode.node_id, title: newNode.title, state: newNode.state };
+    const newNodeId = this.state.planningWorkspace.selectedNodeId;
+    const newNode = newNodeId
+      ? this.state.planningWorkspace.nodes.find((n) => n.node_id === newNodeId)
+      : undefined;
+    this.state.planningEdit = newNode
+      ? { nodeId: newNode.node_id, title: newNode.title, state: newNode.state }
+      : { ...emptyPlanningEditState };
     this.render();
   }
 
