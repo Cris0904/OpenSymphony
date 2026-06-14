@@ -322,12 +322,7 @@ copy that guide into the target repository.
 
 ## Current model
 
-- COE-394 contributed: PR #89: COE-394: Frontend workspace and shared schemas (merge `68d86ff`)
-- COE-395 contributed: PR #88: COE-395: Expand planning artifact schema and session service (merge `c1d8be9`)
-- COE-397 contributed: PR #101: feat(COE-397): Gateway API Client, Transport Adapters, and Reducers (merge `dd84490`)
-- COE-398 contributed: PR #93: feat: add Tauri desktop shell and security capabilities (COE-398) (merge `6641d8d`)
-- COE-399 contributed: PR #94: COE-399: Linear read coverage, schema drift validation, and task graph cache (merge `db4e2e6`)
-- COE-400 contributed: PR #114: feat(openhands): add event normalization and runtime mirror (COE-400) (merge `a8f9f3b`)
+- COE-452 contributed: PR #122: COE-452: Add DuckDB prebuilt developer build mode (merge `6ce8edd`)
 
 ## Important invariants
 
@@ -344,54 +339,10 @@ copy that guide into the target repository.
 
 ## Recent changes
 
-- COE-394: Frontend Workspace And Shared Schemas
-- COE-395: Planning Artifact Schema And Session Service
-- COE-397: Gateway API Client, Transport Adapters, And Reducers
-- COE-398: Tauri Shell And Security Capabilities
-- COE-399: Linear Read Coverage And Task Graph Cache
-- COE-400: OpenHands Event Normalization And Runtime Mirror
-- COE-402: App Shell, Dashboard, Task Graph, And Run Views
-- COE-403: Terminal And Log Renderer Prototype
-- COE-404: Desktop Connection Profiles And Daemon Management
-- COE-405: Linear Milestone, Issue, And Sub-Issue Mutations
-- COE-406: Repository, Linear, And Research Analysis
-- COE-409: Desktop Settings, Keychain, And Native Actions
-- COE-410: Desktop Local Stream Optimization
-- COE-411: Task Graph Editor And Runtime Overlay UI
-- COE-412: Runtime Timeline And Terminal/Log Association
-- COE-413: Implementation Plan Generator Stage
-- COE-414: Diff, Validation, Approval, And Run Action Views
-- COE-415: Milestone, Issue, And Sub-Issue Compiler
-- COE-416: Dependency Graph And Plan Checks
-- COE-417: Planning Workspace UI
-- COE-434: Long-running harness liveness and scheduler/runtime ownership contract
-- COE-435: Long-running run observability fixtures and client-facing diagnostics
-- COE-449: Desktop alpha recovery: replace stubs with functional app
+- COE-452: DuckDB Prebuilt Developer Build Mode
 
 ## Source refs
 
-- COE-394
-- COE-395
-- COE-397
-- COE-398
-- COE-399
-- COE-400
-- COE-402
-- COE-403
-- COE-404
-- COE-405
-- COE-406
-- COE-409
-- COE-410
-- COE-411
-- COE-412
-- COE-413
-- COE-414
-- COE-415
-- COE-416
-- COE-417
-- COE-434
-- COE-435
-- COE-449
+- COE-452
 
 <!-- END OPENSYMPHONY MANAGED MEMORY SYNC -->

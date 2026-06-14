@@ -66,11 +66,20 @@ opensymphony` and `opensymphony update` turnkey even when the memory database is
 enabled.
 
 Power users who want to avoid compiling bundled DuckDB may install a system
-DuckDB development package and build without default features:
+DuckDB development package and build without default features. On the
+macOS/Homebrew development host, install and pin DuckDB once:
 
 ```bash
-# macOS with Homebrew
 brew install duckdb
+brew pin duckdb
+```
+
+Homebrew currently provides `duckdb`, not a versioned `duckdb@...` formula.
+Pinning keeps the verified local version from moving during routine Homebrew
+upgrades. The expected version for this release line is DuckDB `1.5.3`. To
+build manually against that system library:
+
+```bash
 export DUCKDB_LIB_DIR="$(brew --prefix duckdb)/lib"
 export DUCKDB_INCLUDE_DIR="$(brew --prefix duckdb)/include"
 export DYLD_LIBRARY_PATH="$DUCKDB_LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
@@ -92,22 +101,32 @@ release exists.
 
 ## 3. Recommended validation commands
 
-For fast iterative development inside this repository, use the developer aliases
-that download and reuse a prebuilt libduckdb instead of compiling bundled
-DuckDB:
+For fast iterative development inside this repository on the macOS/Homebrew
+host, use the system-linked developer aliases:
 
 ```bash
 cargo fmt --check
+cargo check-system-duckdb
+cargo test-system-duckdb
+cargo test-system-duckdb --test memory
+cargo clippy-system-duckdb
+```
+
+If system DuckDB is unavailable, use the portable downloaded fallback aliases:
+
+```bash
 cargo check-dev
 cargo test-dev
-cargo test-dev --test memory
 cargo clippy-dev
 ```
 
-The aliases set `DUCKDB_DOWNLOAD_LIB=1` only for the aliased command and use
-`--no-default-features --features duckdb-prebuilt`. Release-sensitive,
-packaging, and dependency work should still include the default bundled-mode
-checks so `cargo install opensymphony` remains turnkey for users:
+The system aliases set `DUCKDB_LIB_DIR`, `DUCKDB_INCLUDE_DIR`, and
+`DYLD_LIBRARY_PATH` for the aliased command. The fallback aliases set
+`DUCKDB_DOWNLOAD_LIB=1` only for the aliased command. Both alias families use
+`--no-default-features --features duckdb-prebuilt`. If a downloaded fallback
+command must override `CARGO_TARGET_DIR`, use an absolute path. Release-
+sensitive, packaging, and dependency work should still include the default
+bundled-mode checks so `cargo install opensymphony` remains turnkey for users:
 
 ```bash
 cargo fmt --check
@@ -220,11 +239,11 @@ GitHub access should be fixed before live capture is retried.
 enabled. Normal builds use DuckDB's bundled native library so operators do not
 need to install DuckDB separately, at the cost of heavier Rust compile time and
 a larger binary. Repository development can opt into the `duckdb-prebuilt`
-feature through `cargo check-dev`, `cargo test-dev`, and `cargo clippy-dev`;
-those aliases set `DUCKDB_DOWNLOAD_LIB=1` so
-`libduckdb-sys` downloads and reuses a prebuilt native library in
-`target/duckdb-download`. Treat that native dependency as part of the hosted
-deployment threat model before enabling memory in a multi-tenant service.
+feature through the system-linked `cargo check-system-duckdb`,
+`cargo test-system-duckdb`, and `cargo clippy-system-duckdb` aliases, or the
+downloaded fallback `cargo check-dev`, `cargo test-dev`, and `cargo clippy-dev`
+aliases. Treat that native dependency as part of the hosted deployment threat
+model before enabling memory in a multi-tenant service.
 Memory capture does not archive Linear issues.
 
 Read commands such as `memory status`, `memory brief`, `memory related`, and
@@ -311,12 +330,7 @@ repo-local GraphQL helper assets copied by `opensymphony init`.
 
 ## Current model
 
-- COE-389 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
-- COE-390 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
-- COE-391 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
-- COE-392 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
-- COE-393 contributed: PR #91: feat: Event Journal and Stream Broker (COE-393) (merge `1183bc6`)
-- COE-394 contributed: PR #89: COE-394: Frontend workspace and shared schemas (merge `68d86ff`)
+- COE-452 contributed: PR #122: COE-452: Add DuckDB prebuilt developer build mode (merge `6ce8edd`)
 
 ## Important invariants
 
@@ -333,68 +347,10 @@ repo-local GraphQL helper assets copied by `opensymphony init`.
 
 ## Recent changes
 
-- COE-389: Current Gateway Inventory And Vocabulary
-- COE-390: Gateway Schemas And Stream Feasibility
-- COE-391: Gateway Module, Capabilities, And Dashboard Snapshot
-- COE-392: Task Graph, Run Detail, File, And Diff Read APIs
-- COE-393: Event Journal And Stream Broker
-- COE-394: Frontend Workspace And Shared Schemas
-- COE-395: Planning Artifact Schema And Session Service
-- COE-396: Action Receipts And Initial Run Actions
-- COE-397: Gateway API Client, Transport Adapters, And Reducers
-- COE-398: Tauri Shell And Security Capabilities
-- COE-399: Linear Read Coverage And Task Graph Cache
-- COE-400: OpenHands Event Normalization And Runtime Mirror
-- COE-402: App Shell, Dashboard, Task Graph, And Run Views
-- COE-403: Terminal And Log Renderer Prototype
-- COE-404: Desktop Connection Profiles And Daemon Management
-- COE-405: Linear Milestone, Issue, And Sub-Issue Mutations
-- COE-406: Repository, Linear, And Research Analysis
-- COE-409: Desktop Settings, Keychain, And Native Actions
-- COE-410: Desktop Local Stream Optimization
-- COE-411: Task Graph Editor And Runtime Overlay UI
-- COE-412: Runtime Timeline And Terminal/Log Association
-- COE-413: Implementation Plan Generator Stage
-- COE-414: Diff, Validation, Approval, And Run Action Views
-- COE-415: Milestone, Issue, And Sub-Issue Compiler
-- COE-416: Dependency Graph And Plan Checks
-- COE-417: Planning Workspace UI
-- COE-434: Long-running harness liveness and scheduler/runtime ownership contract
-- COE-435: Long-running run observability fixtures and client-facing diagnostics
-- COE-448: Multi-repo memory server and deterministic context
-- COE-449: Desktop alpha recovery: replace stubs with functional app
+- COE-452: DuckDB Prebuilt Developer Build Mode
 
 ## Source refs
 
-- COE-389
-- COE-390
-- COE-391
-- COE-392
-- COE-393
-- COE-394
-- COE-395
-- COE-396
-- COE-397
-- COE-398
-- COE-399
-- COE-400
-- COE-402
-- COE-403
-- COE-404
-- COE-405
-- COE-406
-- COE-409
-- COE-410
-- COE-411
-- COE-412
-- COE-413
-- COE-414
-- COE-415
-- COE-416
-- COE-417
-- COE-434
-- COE-435
-- COE-448
-- COE-449
+- COE-452
 
 <!-- END OPENSYMPHONY MANAGED MEMORY SYNC -->

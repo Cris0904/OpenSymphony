@@ -138,21 +138,41 @@ Fake server, live tests, doctor command, packaging.
 
 ## Required checks
 
-Fast iterative checks can use the developer aliases. The aliases set
-`DUCKDB_DOWNLOAD_LIB=1` only for the aliased command and build with
-`--no-default-features --features duckdb-prebuilt`:
+Fast iterative checks on a macOS/Homebrew development machine should use the
+system-linked DuckDB aliases. They build with `--no-default-features --features
+duckdb-prebuilt` and point Cargo at `/opt/homebrew/opt/duckdb` for the aliased
+command. The expected native DuckDB version is `1.5.3`, matching the pinned
+Rust `duckdb` and `libduckdb-sys` dependency line.
 
 ```bash
 cargo fmt --check
+cargo check-system-duckdb
+cargo test-system-duckdb
+cargo clippy-system-duckdb
+```
+
+Install and pin DuckDB once on the host:
+
+```bash
+brew install duckdb
+brew pin duckdb
+```
+
+Homebrew does not currently provide a versioned `duckdb@...` formula. Pinning
+prevents routine Homebrew upgrades from moving the system library after it has
+been verified. If Homebrew DuckDB is unavailable, use the portable downloaded
+fallback aliases:
+
+```bash
 cargo check-dev
 cargo test-dev
 cargo clippy-dev
 ```
 
-These aliases download and reuse a prebuilt DuckDB library inside the checkout's
-Cargo target directory. They do not require a system DuckDB install. Use a
-system-linked DuckDB only when intentionally testing the power-user install path
-documented in [Operations](operations.md).
+The fallback aliases download and reuse a prebuilt DuckDB library inside the
+checkout's Cargo target directory. If you override `CARGO_TARGET_DIR` for a
+fallback command, use an absolute path; the normal target directory does not
+need an override.
 
 Before release-sensitive, packaging, or dependency changes, also run the default
 bundled-mode checks:
@@ -170,10 +190,12 @@ cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo clippy-dev
+cargo clippy-system-duckdb
 
 # Full tests
 cargo test
 cargo test-dev
+cargo test-system-duckdb
 
 # CLI-focused checks
 cargo test --test init
@@ -238,12 +260,7 @@ Breaking changes in this line include:
 
 ## Current model
 
-- COE-394 contributed: PR #89: COE-394: Frontend workspace and shared schemas (merge `68d86ff`)
-- COE-395 contributed: PR #88: COE-395: Expand planning artifact schema and session service (merge `c1d8be9`)
-- COE-397 contributed: PR #101: feat(COE-397): Gateway API Client, Transport Adapters, and Reducers (merge `dd84490`)
-- COE-398 contributed: PR #93: feat: add Tauri desktop shell and security capabilities (COE-398) (merge `6641d8d`)
-- COE-399 contributed: PR #94: COE-399: Linear read coverage, schema drift validation, and task graph cache (merge `db4e2e6`)
-- COE-400 contributed: PR #114: feat(openhands): add event normalization and runtime mirror (COE-400) (merge `a8f9f3b`)
+- COE-452 contributed: PR #122: COE-452: Add DuckDB prebuilt developer build mode (merge `6ce8edd`)
 
 ## Important invariants
 
@@ -260,56 +277,10 @@ Breaking changes in this line include:
 
 ## Recent changes
 
-- COE-394: Frontend Workspace And Shared Schemas
-- COE-395: Planning Artifact Schema And Session Service
-- COE-397: Gateway API Client, Transport Adapters, And Reducers
-- COE-398: Tauri Shell And Security Capabilities
-- COE-399: Linear Read Coverage And Task Graph Cache
-- COE-400: OpenHands Event Normalization And Runtime Mirror
-- COE-402: App Shell, Dashboard, Task Graph, And Run Views
-- COE-403: Terminal And Log Renderer Prototype
-- COE-404: Desktop Connection Profiles And Daemon Management
-- COE-405: Linear Milestone, Issue, And Sub-Issue Mutations
-- COE-406: Repository, Linear, And Research Analysis
-- COE-409: Desktop Settings, Keychain, And Native Actions
-- COE-410: Desktop Local Stream Optimization
-- COE-411: Task Graph Editor And Runtime Overlay UI
-- COE-412: Runtime Timeline And Terminal/Log Association
-- COE-413: Implementation Plan Generator Stage
-- COE-414: Diff, Validation, Approval, And Run Action Views
-- COE-415: Milestone, Issue, And Sub-Issue Compiler
-- COE-416: Dependency Graph And Plan Checks
-- COE-417: Planning Workspace UI
-- COE-434: Long-running harness liveness and scheduler/runtime ownership contract
-- COE-435: Long-running run observability fixtures and client-facing diagnostics
-- COE-448: Multi-repo memory server and deterministic context
-- COE-449: Desktop alpha recovery: replace stubs with functional app
+- COE-452: DuckDB Prebuilt Developer Build Mode
 
 ## Source refs
 
-- COE-394
-- COE-395
-- COE-397
-- COE-398
-- COE-399
-- COE-400
-- COE-402
-- COE-403
-- COE-404
-- COE-405
-- COE-406
-- COE-409
-- COE-410
-- COE-411
-- COE-412
-- COE-413
-- COE-414
-- COE-415
-- COE-416
-- COE-417
-- COE-434
-- COE-435
-- COE-448
-- COE-449
+- COE-452
 
 <!-- END OPENSYMPHONY MANAGED MEMORY SYNC -->
