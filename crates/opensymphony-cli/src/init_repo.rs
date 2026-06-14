@@ -188,16 +188,8 @@ impl InitArgs {
     fn ai_pr_review_requested_by_flags(&self) -> bool {
         self.ai_pr_review
             || self.configure_github
-            || self.ai_review_config_flags_present()
+            || self.ai_review_config_plan_from_flags().requested_by_flags
             || self.ai_review_secret_flags_present()
-    }
-
-    fn ai_review_config_flags_present(&self) -> bool {
-        self.ai_review_provider_kind.is_some()
-            || self.ai_review_model_id.is_some()
-            || self.ai_review_base_url.is_some()
-            || self.ai_review_style.is_some()
-            || self.ai_review_require_evidence.is_some()
     }
 
     fn ai_review_secret_flags_present(&self) -> bool {
@@ -207,30 +199,42 @@ impl InitArgs {
     }
 
     fn ai_review_config_from_flags(&self) -> AiReviewConfig {
-        let provider_kind = self
+        self.ai_review_config_plan_from_flags().config
+    }
+
+    fn ai_review_config_plan_from_flags(&self) -> AiReviewConfigPlan {
+        let provider_kind_override = self
             .ai_review_provider_kind
-            .map(AiReviewProviderKindArg::as_str)
+            .map(AiReviewProviderKindArg::as_str);
+        let model_id_override = trimmed_non_empty(self.ai_review_model_id.as_deref());
+        let base_url_override = trimmed_non_empty(self.ai_review_base_url.as_deref());
+        let style_override = trimmed_non_empty(self.ai_review_style.as_deref());
+
+        let provider_kind = provider_kind_override
             .unwrap_or(DEFAULT_AI_REVIEW_PROVIDER_KIND)
             .to_string();
         let base_url = if provider_kind == "openai-compatible" {
-            Some(
-                trimmed_non_empty(self.ai_review_base_url.as_deref())
-                    .unwrap_or_else(|| DEFAULT_AI_REVIEW_BASE_URL.to_string()),
-            )
+            Some(base_url_override.unwrap_or_else(|| DEFAULT_AI_REVIEW_BASE_URL.to_string()))
         } else {
             None
         };
 
-        AiReviewConfig {
-            provider_kind,
-            model_id: trimmed_non_empty(self.ai_review_model_id.as_deref())
-                .unwrap_or_else(|| DEFAULT_AI_REVIEW_MODEL_ID.to_string()),
-            base_url,
-            style: trimmed_non_empty(self.ai_review_style.as_deref())
-                .unwrap_or_else(|| DEFAULT_AI_REVIEW_STYLE.to_string()),
-            require_evidence: self
-                .ai_review_require_evidence
-                .unwrap_or(DEFAULT_AI_REVIEW_REQUIRE_EVIDENCE == "true"),
+        AiReviewConfigPlan {
+            config: AiReviewConfig {
+                provider_kind,
+                model_id: model_id_override
+                    .unwrap_or_else(|| DEFAULT_AI_REVIEW_MODEL_ID.to_string()),
+                base_url,
+                style: style_override.unwrap_or_else(|| DEFAULT_AI_REVIEW_STYLE.to_string()),
+                require_evidence: self
+                    .ai_review_require_evidence
+                    .unwrap_or(DEFAULT_AI_REVIEW_REQUIRE_EVIDENCE == "true"),
+            },
+            requested_by_flags: provider_kind_override.is_some()
+                || self.ai_review_model_id.is_some()
+                || self.ai_review_base_url.is_some()
+                || self.ai_review_style.is_some()
+                || self.ai_review_require_evidence.is_some(),
         }
     }
 }
@@ -373,6 +377,12 @@ struct AiReviewConfig {
     base_url: Option<String>,
     style: String,
     require_evidence: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AiReviewConfigPlan {
+    config: AiReviewConfig,
+    requested_by_flags: bool,
 }
 
 impl Default for AiReviewConfig {
@@ -2205,12 +2215,12 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AiReviewConfig, AiReviewProviderKindArg, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL,
-        DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS, GitRemoteDetection, InitArgs, InitCommandError,
-        PromptUi, comparable_text, custom_codereview_guide_contents, customize_workflow,
-        git_remote_url, github_repo_slug_from_remote, normalize_github_repo_slug,
-        prompt_ai_review_config, prompt_for_missing_llm_env, prompt_yes_no,
-        resolve_ai_review_secret, select_remote_name, shell_single_quote,
+        AiReviewConfig, AiReviewProviderKindArg, DEFAULT_AI_REVIEW_MODEL_ID, DEFAULT_LLM_BASE_URL,
+        DEFAULT_LLM_MODEL, DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS, GitRemoteDetection, InitArgs,
+        InitCommandError, PromptUi, comparable_text, custom_codereview_guide_contents,
+        customize_workflow, git_remote_url, github_repo_slug_from_remote,
+        normalize_github_repo_slug, prompt_ai_review_config, prompt_for_missing_llm_env,
+        prompt_yes_no, resolve_ai_review_secret, select_remote_name, shell_single_quote,
         template_fetch_timeout_from_env,
     };
 
@@ -2502,6 +2512,23 @@ hooks:
 
         args.validate()
             .expect("empty string overrides should fall back to defaults");
+        assert_eq!(
+            args.ai_review_config_from_flags(),
+            AiReviewConfig::default()
+        );
+    }
+
+    #[test]
+    fn ai_review_request_detection_comes_from_config_plan() {
+        let args = InitArgs {
+            ai_review_model_id: Some(DEFAULT_AI_REVIEW_MODEL_ID.to_string()),
+            ..InitArgs::default()
+        };
+
+        assert!(
+            args.ai_pr_review_requested_by_flags(),
+            "an explicit AI review config flag should request scaffolding even when it resolves to the default config"
+        );
         assert_eq!(
             args.ai_review_config_from_flags(),
             AiReviewConfig::default()

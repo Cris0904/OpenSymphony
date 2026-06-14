@@ -234,6 +234,110 @@ async fn init_non_interactive_fails_before_writing_without_conflict_policy() {
 }
 
 #[tokio::test]
+async fn init_non_interactive_conflict_policy_skip_preserves_existing_files() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+    fs::write(repo.path().join("WORKFLOW.md"), "user workflow\n")
+        .expect("existing workflow should write");
+
+    let mut child = spawn_init_child(
+        repo.path(),
+        server.base_url(),
+        &[
+            "--non-interactive",
+            "--linear-project-slug",
+            "demo-project",
+            "--conflict-policy",
+            "skip",
+        ],
+    );
+    write_stdin(&mut child, "").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "non-interactive skip policy should succeed: stdout={stdout}, stderr={stderr}",
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should still exist"),
+        "user workflow\n",
+        "skip should preserve the existing conflicting file"
+    );
+    assert!(
+        repo.path().join("AGENTS.md").is_file(),
+        "skip policy should still allow non-conflicting files to be created"
+    );
+    assert!(
+        stdout.contains("Skipped:") && stdout.contains("- WORKFLOW.md"),
+        "stdout should report the skipped conflicting file: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Choose [s]kip"),
+        "non-interactive skip should not prompt for conflict resolution: {stdout}",
+    );
+}
+
+#[tokio::test]
+async fn init_non_interactive_conflict_policy_overwrite_replaces_existing_files() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+    fs::write(repo.path().join("WORKFLOW.md"), "user workflow\n")
+        .expect("existing workflow should write");
+
+    let mut child = spawn_init_child(
+        repo.path(),
+        server.base_url(),
+        &[
+            "--non-interactive",
+            "--linear-project-slug",
+            "demo-project",
+            "--conflict-policy",
+            "overwrite",
+        ],
+    );
+    write_stdin(&mut child, "").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "non-interactive overwrite policy should succeed: stdout={stdout}, stderr={stderr}",
+    );
+    let workflow =
+        fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should exist");
+    assert!(
+        workflow.contains("project_slug: \"demo-project\"")
+            && workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."),
+        "overwrite should replace the workflow with customized template content: {workflow}",
+    );
+    assert!(
+        !workflow.contains("user workflow"),
+        "overwrite should remove the old conflicting file content: {workflow}",
+    );
+    assert!(
+        stdout.contains("Overwritten:") && stdout.contains("- WORKFLOW.md"),
+        "stdout should report the overwritten conflicting file: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Choose [s]kip"),
+        "non-interactive overwrite should not prompt for conflict resolution: {stdout}",
+    );
+}
+
+#[tokio::test]
 async fn init_can_scaffold_ai_pr_review_and_print_fallback_commands_when_gh_cannot_access_repo() {
     let server = TemplateServer::start().await;
     let repo = TempDir::new().expect("temp repo should exist");
@@ -433,7 +537,7 @@ async fn init_can_scaffold_ai_pr_review_and_configure_github_with_gh() {
 }
 
 #[tokio::test]
-async fn init_can_commit_and_push_bootstrap_changes_when_requested() {
+async fn init_non_interactive_can_commit_and_push_bootstrap_changes_when_requested() {
     let server = TemplateServer::start().await;
     let repo = TempDir::new().expect("temp repo should exist");
     let remote = TempDir::new().expect("temp remote should exist");
@@ -447,8 +551,17 @@ async fn init_can_commit_and_push_bootstrap_changes_when_requested() {
     fs::write(repo.path().join("scratch.txt"), "do not commit\n")
         .expect("scratch file should write");
 
-    let mut child = spawn_init_child(repo.path(), server.base_url(), &[]);
-    write_stdin(&mut child, "\ndemo-project\nyes\n").await;
+    let mut child = spawn_init_child(
+        repo.path(),
+        server.base_url(),
+        &[
+            "--non-interactive",
+            "--linear-project-slug",
+            "demo-project",
+            "--commit-and-push",
+        ],
+    );
+    write_stdin(&mut child, "").await;
 
     let output = child
         .wait_with_output()
@@ -464,6 +577,10 @@ async fn init_can_commit_and_push_bootstrap_changes_when_requested() {
     assert!(
         stdout.contains("Committed and pushed OpenSymphony bootstrap changes"),
         "stdout should confirm the git publish step: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Commit and push these OpenSymphony bootstrap changes"),
+        "non-interactive commit/push should not prompt before publishing: {stdout}",
     );
 
     let subject = git_stdout(repo.path(), &["log", "-1", "--pretty=%s"]);
