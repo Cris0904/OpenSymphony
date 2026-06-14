@@ -189,6 +189,7 @@ fn map_issue(
                         happened_at: timestamp_to_datetime(activity.happened_at),
                         kind: activity.kind.clone(),
                         summary: activity.summary.clone(),
+                        sequence: activity.sequence,
                     })
                     .collect()
             })
@@ -397,6 +398,7 @@ tracker:
                     happened_at: ts(1_000 + index),
                     kind: "ActionEvent".to_owned(),
                     summary: format!("summary {index}"),
+                    sequence: index,
                 },
             )
             .collect();
@@ -470,6 +472,7 @@ tracker:
                     cache_read_tokens: 0,
                     total_tokens: 0,
                     runtime_seconds: 0,
+                    next_activity_sequence: 0,
                 }),
                 retry: None,
                 last_worker_outcome: None,

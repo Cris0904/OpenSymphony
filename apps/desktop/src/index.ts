@@ -257,6 +257,12 @@ function asActionCapableTransport(
   if ("dispatchAction" in transport) {
     return transport as ActionCapableTransport;
   }
+  // Fallback: when the inner transport is not action-capable (e.g. a plain
+  // read-only channel), open a separate loopback HTTP connection to the
+  // gateway for action dispatch. This is intentional for desktop because the
+  // Tauri channel implementation is action-capable; the HTTP fallback is the
+  // documented baseline and preserves the same auth/CORS contract as the
+  // desktop app's own loopback server.
   return new HttpGatewayTransport({
     baseUri: baseUrl || DEFAULT_GATEWAY_URL,
     transport: "loopback_http",
