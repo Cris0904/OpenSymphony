@@ -2013,7 +2013,13 @@ async fn get_run_logs(
                     .and_then(|a| a.get("command_id"))
                     .and_then(|v| v.as_str())
                     .map(String::from);
-                ("stdout".to_string(), message, session_id, command_id)
+                let level = payload
+                    .and_then(|p| p.get("frame_kind"))
+                    .and_then(|v| v.as_str())
+                    .map(terminal_frame_kind_to_level)
+                    .unwrap_or("stdout")
+                    .to_string();
+                (level, message, session_id, command_id)
             }
             _ => continue,
         };
@@ -2041,6 +2047,18 @@ async fn get_run_logs(
             entries,
         }),
     )
+}
+
+fn terminal_frame_kind_to_level(kind: &str) -> &'static str {
+    match kind {
+        "stderr" => "stderr",
+        "log" => "log",
+        "prompt" => "prompt",
+        "status" => "status",
+        "end_of_stream" => "end_of_stream",
+        "stdout" => "stdout",
+        _ => "stdout",
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]

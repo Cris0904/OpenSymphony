@@ -2372,3 +2372,218 @@ async fn gateway_terminal_log_associates_frames_and_reconnects() {
 
     server_task.abort();
 }
+
+#[tokio::test]
+async fn gateway_serves_run_logs_with_levels_and_pagination() {
+    use opensymphony::opensymphony_domain::InMemoryEventJournal as DomainJournal;
+    use opensymphony::opensymphony_gateway_schema::envelope::{EntityKind, EntityRef};
+    use opensymphony::opensymphony_gateway_schema::event_journal::{
+        EventActor, EventKind, EventRecord,
+    };
+    use opensymphony::opensymphony_gateway_schema::terminal::{
+        TerminalEncoding, TerminalFrame, TerminalFrameKind, TerminalLogAssociation,
+    };
+    use opensymphony::opensymphony_gateway_schema::timeline::RunLogPage;
+    use opensymphony::opensymphony_gateway_schema::version::SchemaVersion;
+
+    let store = SnapshotStore::new(fixture_snapshot(0));
+    let journal = DomainJournal::new(100, 64);
+    let broker = opensymphony::opensymphony_domain::StreamBroker::new(journal.clone());
+    let server = GatewayServer::with_journal(store, journal.clone(), broker);
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let address = listener.local_addr().expect("test listener address");
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(listener)
+            .await
+            .expect("test gateway server should serve")
+    });
+
+    let association = TerminalLogAssociation {
+        run_id: "run-1".into(),
+        workspace_id: "ws-1".into(),
+        command_id: Some("cmd-a".into()),
+        issue_id: Some("iss-1".into()),
+        sub_issue_id: Some("sub-1".into()),
+        harness_session_id: Some("harness-1".into()),
+    };
+
+    async fn append(
+        journal: opensymphony::opensymphony_domain::InMemoryEventJournal,
+        sequence: u64,
+        event_id: &str,
+        kind: EventKind,
+        summary: &str,
+        payload: serde_json::Value,
+    ) {
+        let record = EventRecord::builder()
+            .event_id(event_id)
+            .sequence(sequence)
+            .actor(EventActor::system("test"))
+            .entity_ref(EntityRef {
+                kind: EntityKind::Run,
+                id: "run-1".into(),
+                identifier: None,
+            })
+            .kind(kind)
+            .summary(summary)
+            .payload(payload)
+            .build();
+        journal.append(record).await.expect("append");
+    }
+
+    append(
+        journal.clone(),
+        1,
+        "evt-log-1",
+        EventKind::LogEntry {
+            level: "info".into(),
+        },
+        "log line",
+        serde_json::json!({
+            "message": "info log line",
+            "terminal_session_id": "term-1",
+            "command_id": "cmd-a",
+        }),
+    )
+    .await;
+
+    let stdout_frame = TerminalFrame {
+        schema_version: SchemaVersion::v1(),
+        frame_sequence: 2,
+        stream_id: "term-1".into(),
+        run_id: "run-1".into(),
+        terminal_session_id: "term-1".into(),
+        frame_kind: TerminalFrameKind::Stdout,
+        encoding: TerminalEncoding::Utf8,
+        content: "stdout line".into(),
+        timestamp: Utc::now(),
+        association: association.clone(),
+        correlation_id: None,
+        source_event_id: Some("evt-stdout-1".into()),
+        frame_id: Some("f-stdout".into()),
+    };
+    append(
+        journal.clone(),
+        2,
+        "evt-stdout-1",
+        EventKind::TerminalFrame {
+            frame_id: "f-stdout".into(),
+        },
+        "stdout frame",
+        serde_json::to_value(&stdout_frame).expect("serialize stdout frame"),
+    )
+    .await;
+
+    let stderr_frame = TerminalFrame {
+        schema_version: SchemaVersion::v1(),
+        frame_sequence: 3,
+        stream_id: "term-1".into(),
+        run_id: "run-1".into(),
+        terminal_session_id: "term-1".into(),
+        frame_kind: TerminalFrameKind::Stderr,
+        encoding: TerminalEncoding::Utf8,
+        content: "stderr line".into(),
+        timestamp: Utc::now(),
+        association: association.clone(),
+        correlation_id: None,
+        source_event_id: Some("evt-stderr-1".into()),
+        frame_id: Some("f-stderr".into()),
+    };
+    append(
+        journal.clone(),
+        3,
+        "evt-stderr-1",
+        EventKind::TerminalFrame {
+            frame_id: "f-stderr".into(),
+        },
+        "stderr frame",
+        serde_json::to_value(&stderr_frame).expect("serialize stderr frame"),
+    )
+    .await;
+
+    let log_frame = TerminalFrame {
+        schema_version: SchemaVersion::v1(),
+        frame_sequence: 4,
+        stream_id: "term-1".into(),
+        run_id: "run-1".into(),
+        terminal_session_id: "term-1".into(),
+        frame_kind: TerminalFrameKind::Log,
+        encoding: TerminalEncoding::Utf8,
+        content: "frame log line".into(),
+        timestamp: Utc::now(),
+        association,
+        correlation_id: None,
+        source_event_id: Some("evt-log-frame-1".into()),
+        frame_id: Some("f-log".into()),
+    };
+    append(
+        journal.clone(),
+        4,
+        "evt-log-frame-1",
+        EventKind::TerminalFrame {
+            frame_id: "f-log".into(),
+        },
+        "log frame",
+        serde_json::to_value(&log_frame).expect("serialize log frame"),
+    )
+    .await;
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{address}/api/v1/runs/run-1/logs?cursor=0&limit=2");
+    let page: RunLogPage = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch run logs page 1")
+        .json()
+        .await
+        .expect("decode run log page");
+
+    assert_eq!(page.run_id, "run-1");
+    assert_eq!(page.entries.len(), 2);
+    assert_eq!(page.next_cursor, Some(3));
+    assert_eq!(page.entries[0].sequence, 1);
+    assert_eq!(page.entries[0].level, "info");
+    assert_eq!(page.entries[0].message, "info log line");
+    assert_eq!(page.entries[1].sequence, 2);
+    assert_eq!(page.entries[1].level, "stdout");
+    assert_eq!(page.entries[1].message, "stdout line");
+
+    let url = format!("http://{address}/api/v1/runs/run-1/logs?cursor=3&limit=2");
+    let page: RunLogPage = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch run logs page 2")
+        .json()
+        .await
+        .expect("decode run log page");
+
+    assert_eq!(page.entries.len(), 2);
+    assert_eq!(page.entries[0].sequence, 3);
+    assert_eq!(page.entries[0].level, "stderr");
+    assert_eq!(page.entries[0].message, "stderr line");
+    assert_eq!(page.entries[1].sequence, 4);
+    assert_eq!(page.entries[1].level, "log");
+    assert_eq!(page.entries[1].message, "frame log line");
+    assert_eq!(page.next_cursor, Some(5));
+
+    // A subsequent request with the next cursor returns an empty page, signaling
+    // the end of the log stream.
+    let url = format!("http://{address}/api/v1/runs/run-1/logs?cursor=5&limit=2");
+    let page: RunLogPage = client
+        .get(&url)
+        .send()
+        .await
+        .expect("fetch run logs tail page")
+        .json()
+        .await
+        .expect("decode run log tail page");
+    assert!(page.entries.is_empty());
+    assert!(page.next_cursor.is_none());
+
+    server_task.abort();
+}
