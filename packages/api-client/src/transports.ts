@@ -18,6 +18,10 @@ import type {
   FileDiffPage,
   RunValidationSummary,
   ApprovalRequest,
+  LinearDraftRequest,
+  LinearDraftPreview,
+  LinearPublishRequest,
+  LinearPublishResponse,
 } from "@opensymphony/gateway-schema";
 import { pageCursorFirst } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, GatewayTransportConfig, ActionCapableTransport } from "./index.js";
@@ -448,6 +452,24 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
       target_entity: { entity_kind: "run", entity_id: runId },
       idempotency_key: `debug-${runId}`,
     });
+  }
+
+  // -- Planning draft / publish --
+
+  async draftPlanning(request: LinearDraftRequest): Promise<LinearDraftPreview> {
+    const response = await this.fetchJson(`${this.baseUri}/api/v1/planning/draft`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    return response as LinearDraftPreview;
+  }
+
+  async publishPlanning(request: LinearPublishRequest): Promise<LinearPublishResponse> {
+    const response = await this.fetchJson(`${this.baseUri}/api/v1/planning/publish`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    return response as LinearPublishResponse;
   }
 
   // -- Lifecycle --

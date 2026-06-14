@@ -1,4 +1,4 @@
-import type { PlanningArtifactKind } from "@opensymphony/gateway-schema";
+import type { LinearDraftPreview, LinearPublishResponse, PlanningArtifactKind } from "@opensymphony/gateway-schema";
 import { schemaVersionV1 } from "@opensymphony/gateway-schema";
 import { generateId } from "./id.js";
 
@@ -61,7 +61,8 @@ export type PlanningWorkspaceTab =
   | "dependencies"
   | "criteria"
   | "validation"
-  | "diff";
+  | "diff"
+  | "publish";
 
 export interface PlanningWorkspaceState {
   session_id: string;
@@ -81,6 +82,11 @@ export interface PlanningWorkspaceState {
   criteria: { id: string; text: string; checked: boolean }[];
   verification: { id: string; text: string; checked: boolean }[];
   pendingMutations: Set<string>;
+  draftPreview?: LinearDraftPreview;
+  draftError?: string;
+  publishResponse?: LinearPublishResponse;
+  publishApproved: boolean;
+  publishInFlight: boolean;
 }
 
 export function emptyPlanningWorkspaceState(): PlanningWorkspaceState {
@@ -102,6 +108,11 @@ export function emptyPlanningWorkspaceState(): PlanningWorkspaceState {
     criteria: [],
     verification: [],
     pendingMutations: new Set(),
+    draftPreview: undefined,
+    draftError: undefined,
+    publishResponse: undefined,
+    publishApproved: false,
+    publishInFlight: false,
   };
 }
 
@@ -319,6 +330,11 @@ export function buildFixturePlanningWorkspaceState(
       { id: "ver-2", text: "Run keyboard navigation and focus checks.", checked: false },
     ],
     pendingMutations: new Set(),
+    draftPreview: undefined,
+    draftError: undefined,
+    publishResponse: undefined,
+    publishApproved: false,
+    publishInFlight: false,
   };
 }
 

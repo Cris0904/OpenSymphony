@@ -26,6 +26,10 @@ const GATEWAY_SRC = path.join(
   REPO_ROOT,
   "crates/opensymphony-gateway/src/lib.rs",
 );
+const PLANNING_ROUTER_SRC = path.join(
+  REPO_ROOT,
+  "crates/opensymphony-gateway/src/planning_publish.rs",
+);
 
 /**
  * The HTTP and WebSocket paths the api-client transports call. The
@@ -80,6 +84,16 @@ const EXPECTED_PATHS: ReadonlyArray<{
     description: "Gateway WebSocket event stream",
     tsSource: "/api/v1/streams/events",
     rustPath: "/api/v1/streams/events",
+  },
+  {
+    description: "Planning draft preview",
+    tsSource: "/api/v1/planning/draft",
+    rustPath: "/api/v1/planning/draft",
+  },
+  {
+    description: "Planning publish",
+    tsSource: "/api/v1/planning/publish",
+    rustPath: "/api/v1/planning/publish",
   },
 ];
 
@@ -194,14 +208,44 @@ function extractRouterBlock(source: string): string {
   return source.slice(startIdx, endIdx + 1);
 }
 
+/**
+ * Returns the child path under a nested parent for a full route path.
+ * For example, `/api/v1/planning/draft` with parent `/api/v1/planning`
+ * returns `/draft`.
+ */
+function relativeNestedPath(parentPath: string, fullPath: string): string {
+  if (!fullPath.startsWith(parentPath)) return "";
+  return fullPath.slice(parentPath.length) || "/";
+}
+
+/**
+ * Checks whether a route is reachable through a nested router declared in
+ * the main router block. Used for routes like `/api/v1/planning/*` which
+ * are registered in a dedicated `planning_router()` and mounted via
+ * `nest_service` or `nest` in the gateway's `router()` function.
+ */
+function isNestedRouteRouted(
+  routerBlock: string,
+  nestedRouterSource: string,
+  rustPath: string,
+): boolean {
+  // Only planning routes use the dedicated nested router in this repo.
+  if (!rustPath.startsWith("/api/v1/planning")) return false;
+  if (!routerBlock.includes("/api/v1/planning")) return false;
+  const childPath = relativeNestedPath("/api/v1/planning", rustPath);
+  return nestedRouterSource.includes(`"${childPath}"`);
+}
+
 describe("api-client -> Rust gateway route contract", () => {
   let transportsSource: string;
   let routerBlock: string;
+  let planningRouterSource: string;
 
   beforeAll(() => {
     transportsSource = fs.readFileSync(TRANSPORTS_SRC, "utf-8");
     const gatewaySource = fs.readFileSync(GATEWAY_SRC, "utf-8");
     routerBlock = extractRouterBlock(gatewaySource);
+    planningRouterSource = fs.readFileSync(PLANNING_ROUTER_SRC, "utf-8");
   });
 
   it("keeps transports.ts and the Rust router in sync for every REST/SSE/WS path", () => {
@@ -216,7 +260,11 @@ describe("api-client -> Rust gateway route contract", () => {
         );
       }
       // 2. Confirm the matching Rust route is still registered.
-      if (!routerBlock.includes(`"${entry.rustPath}"`)) {
+      //    Direct routes live in the main router block; nested routes are
+      //    mounted via nest/nest_service and verified against the child router.
+      const directlyRouted = routerBlock.includes(`"${entry.rustPath}"`);
+      const nestedRouted = isNestedRouteRouted(routerBlock, planningRouterSource, entry.rustPath);
+      if (!directlyRouted && !nestedRouted) {
         missing.push({ description: entry.description, rustPath: entry.rustPath });
       }
     }

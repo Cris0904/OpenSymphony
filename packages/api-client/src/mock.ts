@@ -22,6 +22,10 @@ import type {
   FileDiffPage,
   RunValidationSummary,
   ApprovalRequest,
+  LinearDraftRequest,
+  LinearDraftPreview,
+  LinearPublishRequest,
+  LinearPublishResponse,
 } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, ActionCapableTransport } from "./index.js";
 import { stableHash, stableHashJson } from "./util.js";
@@ -43,6 +47,8 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   private mockEvents: GatewayEnvelope[] = [];
   private mockTerminalFrames: Map<string, GatewayEnvelope[]> = new Map();
   private mockActionReceipts: Map<string, ActionReceipt> = new Map();
+  private mockDraftPreviews: Map<string, LinearDraftPreview> = new Map();
+  private mockPublishResponses: Map<string, LinearPublishResponse> = new Map();
   private closedFlag = false;
 
   // Stream health simulation.
@@ -66,6 +72,8 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
     events?: GatewayEnvelope[];
     terminalFrames?: { runId: string; frames: GatewayEnvelope[] }[];
     actionReceipts?: { correlationId: string; receipt: ActionReceipt }[];
+    draftPreviews?: { correlationId: string; preview: LinearDraftPreview }[];
+    publishResponses?: { correlationId: string; response: LinearPublishResponse }[];
     streamHealthy?: boolean;
   }) {
     this.baseUri = opts?.baseUri ?? "http://mock-gateway.local";
@@ -159,6 +167,14 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
 
     for (const ar of opts?.actionReceipts ?? []) {
       this.mockActionReceipts.set(ar.correlationId, ar.receipt);
+    }
+
+    for (const dp of opts?.draftPreviews ?? []) {
+      this.mockDraftPreviews.set(dp.correlationId, dp.preview);
+    }
+
+    for (const pr of opts?.publishResponses ?? []) {
+      this.mockPublishResponses.set(pr.correlationId, pr.response);
     }
 
     this.streamHealthyFlag = opts?.streamHealthy ?? true;
@@ -515,6 +531,44 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
     });
   }
 
+  // -- Planning draft / publish --
+
+  async draftPlanning(request: LinearDraftRequest): Promise<LinearDraftPreview> {
+    const draftId = request.correlation_id;
+    return this.mockDraftPreviews.get(draftId) ?? {
+      schema_version: request.schema_version,
+      draft_id: draftId,
+      correlation_id: request.correlation_id,
+      planning_wave: "mock-wave",
+      linear_project: request.linear_project,
+      project_id: request.project_id,
+      team_id: request.team_id,
+      manifest_path: request.manifest_path,
+      publish_receipt_path: request.publish_receipt_path,
+      validation: { ok: true, error_count: 0, warning_count: 0, errors: [], warnings: [] },
+      entities: [],
+      can_publish: true,
+    };
+  }
+
+  async publishPlanning(request: LinearPublishRequest): Promise<LinearPublishResponse> {
+    const draftId = request.correlation_id;
+    return this.mockPublishResponses.get(draftId) ?? {
+      schema_version: request.schema_version,
+      draft_id: request.draft_id,
+      correlation_id: request.correlation_id,
+      status: "published",
+      failures: [],
+      receipt: {
+        planning_wave: "mock-wave",
+        linear_project: "mock-project",
+        published_at: new Date().toISOString(),
+        milestones: [],
+        tasks: [],
+      },
+    };
+  }
+
   // -- Lifecycle --
 
   async close(): Promise<void> {
@@ -574,6 +628,16 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
   /** Set mock validation summary for a run. */
   setRunValidation(runId: string, summary: RunValidationSummary): void {
     this.mockRunValidation.set(runId, summary);
+  }
+
+  /** Set a mock draft preview response keyed by correlation id. */
+  setDraftPreview(correlationId: string, preview: LinearDraftPreview): void {
+    this.mockDraftPreviews.set(correlationId, preview);
+  }
+
+  /** Set a mock publish response keyed by correlation id. */
+  setPublishResponse(correlationId: string, response: LinearPublishResponse): void {
+    this.mockPublishResponses.set(correlationId, response);
   }
 
   /** Set stream health status for testing degraded scenarios. */

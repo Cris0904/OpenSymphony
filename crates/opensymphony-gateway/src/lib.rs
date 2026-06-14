@@ -38,8 +38,13 @@ use crate::opensymphony_gateway_schema::{
 };
 
 pub mod action_handler;
+pub mod planning_publish;
 pub mod task_graph_mutations;
 use action_handler::ActionHandler;
+// Re-export the planning publish router and state at the gateway crate level so
+// integration tests and host wiring can use them via
+// `opensymphony::opensymphony_gateway::PlanningPublishState` etc.
+pub use planning_publish::{PlanningPublishState, planning_router};
 // Re-export the task-graph mutation types at the gateway crate level so
 // integration tests and host wiring can use them via
 // `opensymphony::opensymphony_gateway::TaskGraphMilestoneRequest` etc.
@@ -248,6 +253,7 @@ pub struct GatewayServer {
     broker: StreamBroker,
     web_assets_dir: Option<String>,
     linear_mutations: Option<Arc<dyn LinearMutationClient>>,
+    planning_state: PlanningPublishState,
     terminal_ingest_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -259,6 +265,7 @@ impl Clone for GatewayServer {
             broker: self.broker.clone(),
             web_assets_dir: self.web_assets_dir.clone(),
             linear_mutations: self.linear_mutations.clone(),
+            planning_state: self.planning_state.clone(),
             // Each cloned server owns its own ingest handle. The task is tied
             // to the specific server instance that spawned it, so Drop aborts
             // reliably without depending on Arc uniqueness.
@@ -278,6 +285,7 @@ impl std::fmt::Debug for GatewayServer {
                 "linear_mutations",
                 &self.linear_mutations.as_ref().map(|_| "..."),
             )
+            .field("planning_state", &"<planning_state>")
             .field("terminal_ingest_handle", &"<handle>")
             .finish()
     }
@@ -306,6 +314,7 @@ impl GatewayServer {
             store,
             web_assets_dir: None,
             linear_mutations: None,
+            planning_state: PlanningPublishState::new(),
             terminal_ingest_handle: Mutex::new(None),
         }
     }
@@ -322,6 +331,7 @@ impl GatewayServer {
             broker,
             web_assets_dir: None,
             linear_mutations: None,
+            planning_state: PlanningPublishState::new(),
             terminal_ingest_handle: Mutex::new(None),
         }
     }
@@ -338,7 +348,8 @@ impl GatewayServer {
     /// adapter wired in (tests inject fakes; production wires
     /// `LinearClientMutationAdapter`).
     pub fn with_linear_mutations(mut self, client: Option<Arc<dyn LinearMutationClient>>) -> Self {
-        self.linear_mutations = client;
+        self.linear_mutations = client.clone();
+        self.planning_state.linear_mutations = client;
         self
     }
 
@@ -450,6 +461,12 @@ impl GatewayServer {
         };
         let mutation_router = task_graph_router().with_state(mutation_state);
         router = router.nest("/api/v1/taskgraph", mutation_router);
+
+        // Merge in the `/api/v1/planning/*` draft/publish routers. The planning
+        // router carries its own state (draft cache + mutation client) so the
+        // gateway state type stays focused on the control-plane surface.
+        let planning_router = planning_router().with_state(self.planning_state.clone());
+        router = router.nest_service("/api/v1/planning", planning_router);
 
         router.with_state(state)
     }

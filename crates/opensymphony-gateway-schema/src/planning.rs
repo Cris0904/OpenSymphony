@@ -340,6 +340,7 @@ impl PlanningWave {
 
 /// Matches the structure of `docs/tasks/linear-publish.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LinearPublishReceipt {
     pub planning_wave: String,
     pub linear_project: String,
@@ -350,6 +351,7 @@ pub struct LinearPublishReceipt {
 
 /// A milestone entry inside a publish receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishedMilestone {
     pub name: String,
     pub milestone_id: String,
@@ -357,6 +359,7 @@ pub struct PublishedMilestone {
 
 /// A task entry inside a publish receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishedTask {
     pub task_id: String,
     pub issue: String,
@@ -440,4 +443,165 @@ impl LinearPublishReceipt {
         serde_yaml::to_string(&yaml)
             .expect("LinearPublishReceipt yaml serialization should never fail")
     }
+}
+
+// ─── Linear Draft Preview & Publish ──────────────────────────────────────────
+
+/// Operation a draft entity will perform against Linear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearDraftOperation {
+    Create,
+    Update,
+}
+
+/// Kind of Linear entity the draft will touch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearDraftEntityKind {
+    Milestone,
+    Issue,
+    SubIssue,
+    Relation,
+    Comment,
+}
+
+/// One entry in the draft preview: the exact mutation payload, the source task,
+/// and any warnings that should be surfaced before publish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearDraftEntity {
+    pub entity_id: String,
+    pub kind: LinearDraftEntityKind,
+    pub op: LinearDraftOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// The exact JSON mutation payload that would be sent to Linear.
+    pub payload: Value,
+}
+
+/// A single validation message for the draft preview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanValidationMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub field: String,
+    pub message: String,
+}
+
+/// Summary of manifest and task-file validation results included in the draft.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanValidationSummary {
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<PlanValidationMessage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<PlanValidationMessage>,
+}
+
+/// Request to generate a Linear draft preview from a task package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearDraftRequest {
+    pub schema_version: SchemaVersion,
+    pub correlation_id: String,
+    /// Absolute or repository-root-relative path to `docs/tasks/task-package.yaml`.
+    pub manifest_path: String,
+    /// Repository root used to resolve relative task file paths.
+    pub repo_root: String,
+    /// Linear project UUID used for milestone/issue mutations.
+    pub project_id: String,
+    /// Linear team UUID used for issue/sub-issue mutations.
+    pub team_id: String,
+    /// Linear project slug stored in the publish receipt.
+    pub linear_project: String,
+    /// Path where the publish receipt YAML should be written.
+    pub publish_receipt_path: String,
+    /// Optional existing receipt to read for resume/update behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_receipt_path: Option<String>,
+}
+
+/// Draft preview response returned by `POST /api/v1/planning/draft`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearDraftPreview {
+    pub schema_version: SchemaVersion,
+    pub draft_id: String,
+    pub correlation_id: String,
+    pub planning_wave: String,
+    pub linear_project: String,
+    pub project_id: String,
+    pub team_id: String,
+    pub manifest_path: String,
+    pub publish_receipt_path: String,
+    pub validation: PlanValidationSummary,
+    pub entities: Vec<LinearDraftEntity>,
+    pub can_publish: bool,
+}
+
+/// Approval-gated publish request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearPublishRequest {
+    pub schema_version: SchemaVersion,
+    pub draft_id: String,
+    pub correlation_id: String,
+    /// Publish only proceeds when this flag is explicitly `true`.
+    pub approved: bool,
+}
+
+/// Status of a single published task in the response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearPublishResult {
+    pub task_id: String,
+    pub issue: Option<String>,
+    pub issue_id: Option<String>,
+    pub url: Option<String>,
+    pub file: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Failure for a single entity during a partial publish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearPublishFailure {
+    pub entity_id: String,
+    pub kind: LinearDraftEntityKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_task_id: Option<String>,
+    pub error: String,
+}
+
+/// Response from `POST /api/v1/planning/publish`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearPublishResponse {
+    pub schema_version: SchemaVersion,
+    pub draft_id: String,
+    pub correlation_id: String,
+    pub status: String,
+    pub receipt: LinearPublishReceipt,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<LinearPublishFailure>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<LinearPublishResult>,
 }

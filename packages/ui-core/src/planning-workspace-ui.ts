@@ -1,4 +1,5 @@
 import { escapeHtml, escapeAttr } from "./task-graph-editor.js";
+import type { LinearDraftEntity, LinearDraftPreview, LinearPublishResponse } from "@opensymphony/gateway-schema";
 import type {
   PlanningArtifactRevision,
   PlanningArtifactWithRevisions,
@@ -38,6 +39,7 @@ const tabLabels: Record<Exclude<PlanningWorkspaceTab, "conversation">, string> =
   criteria: "Acceptance & Verification",
   validation: "Validation",
   diff: "Diff",
+  publish: "Publish",
 };
 
 export function renderPlanningWorkspace(
@@ -98,6 +100,8 @@ function renderActiveTab(
       return renderValidationPanel(validationMessages);
     case "diff":
       return renderDiffEditor(state);
+    case "publish":
+      return renderPublishTab(state);
     default:
       return "";
   }
@@ -416,6 +420,122 @@ function renderDiffEditor(state: PlanningWorkspaceState): string {
       </label>
     </div>
     <div class="os-plan-diff">${diffRows || `<div class="os-empty">Select two revisions to compare</div>`}</div>
+  `;
+}
+
+function renderPublishTab(state: PlanningWorkspaceState): string {
+  const { draftPreview, draftError, publishResponse, publishApproved, publishInFlight } = state;
+
+  if (draftError) {
+    return `
+      <div class="os-section-head"><h3>Publish Draft</h3></div>
+      <div class="os-plan-validation-row os-plan-validation-error">${escapeHtml(draftError)}</div>
+      <div class="os-planning-actions">
+        <button type="button" data-plan-generate-draft ${publishInFlight ? "disabled" : ""}>Retry Draft</button>
+      </div>
+    `;
+  }
+
+  if (publishResponse) {
+    const receipt = publishResponse.receipt;
+    const statusClass = publishResponse.failures.length > 0 ? "os-plan-validation-warning" : "os-plan-validation-info";
+    const failures = publishResponse.failures.map((f) => `
+      <div class="os-plan-validation-row os-plan-validation-error">
+        <strong>${escapeHtml(f.kind)}</strong> ${escapeHtml(f.entity_id)}: ${escapeHtml(f.error)}
+      </div>
+    `).join("");
+    return `
+      <div class="os-section-head"><h3>Publish Result</h3></div>
+      <div class="os-plan-validation-row ${statusClass}">Status: ${escapeHtml(publishResponse.status)}</div>
+      <div class="os-plan-validation-row os-plan-validation-info">Wave: ${escapeHtml(receipt.planning_wave)} • Project: ${escapeHtml(receipt.linear_project)} • Published at ${escapeHtml(receipt.published_at)}</div>
+      <div class="os-planning-actions">
+        <button type="button" data-plan-generate-draft>New Draft</button>
+      </div>
+      ${receipt.milestones.length ? `
+        <div class="os-section-head"><h4>Milestones</h4></div>
+        <ul class="os-plan-checklist">${receipt.milestones.map((m) => `<li>${escapeHtml(m.name)} <code>${escapeHtml(m.milestone_id)}</code></li>`).join("")}</ul>
+      ` : ""}
+      ${receipt.tasks.length ? `
+        <div class="os-section-head"><h4>Tasks</h4></div>
+        <ul class="os-plan-checklist">${receipt.tasks.map((t) => `<li>${escapeHtml(t.task_id)} → ${escapeHtml(t.issue)} <code>${escapeHtml(t.issue_id)}</code></li>`).join("")}</ul>
+      ` : ""}
+      ${failures ? `<div class="os-section-head"><h4>Failures</h4></div>${failures}` : ""}
+    `;
+  }
+
+  if (!draftPreview) {
+    return `
+      <div class="os-section-head"><h3>Publish Draft</h3></div>
+      <div class="os-empty">No draft preview yet. Generate a preview to see exact Linear entities before publishing.</div>
+      <div class="os-planning-actions">
+        <button type="button" data-plan-generate-draft ${publishInFlight ? "disabled" : ""}>Generate Draft</button>
+      </div>
+    `;
+  }
+
+  const validation = draftPreview.validation;
+  const validationClass = validation.ok ? (validation.warning_count > 0 ? "os-plan-validation-warning" : "os-plan-validation-info") : "os-plan-validation-error";
+  const validationSummary = `${validation.ok ? "OK" : "Blocked"} • ${validation.error_count} error(s) • ${validation.warning_count} warning(s)`;
+
+  const entitiesByKind: Record<string, LinearDraftEntity[]> = {};
+  for (const e of draftPreview.entities) {
+    const key = e.kind.replace(/_/g, " ");
+    (entitiesByKind[key] ??= []).push(e);
+  }
+
+  const entitySections = Object.entries(entitiesByKind).map(([kind, entities]) => {
+    const rows = entities.map((e) => {
+      const op = e.op === "create" ? "+" : "↻";
+      const meta = [
+        e.milestone ? `milestone: ${e.milestone}` : "",
+        e.parent_id ? `parent: ${e.parent_id}` : "",
+        e.blocked_by.length ? `blocked by: ${e.blocked_by.join(", ")}` : "",
+        e.blocks.length ? `blocks: ${e.blocks.join(", ")}` : "",
+      ].filter(Boolean).join(" • ");
+      const warnings = e.warnings.map((w) => `<div class="os-plan-validation-row os-plan-validation-warning">${escapeHtml(w.field)}: ${escapeHtml(w.message)}</div>`).join("");
+      return `
+        <li class="os-plan-checklist-row">
+          <span class="os-node-kind">${op} ${escapeHtml(kind)}</span>
+          <strong>${escapeHtml(e.title)}</strong>
+          ${meta ? `<div class="os-meta">${escapeHtml(meta)}</div>` : ""}
+          ${warnings}
+        </li>
+      `;
+    }).join("");
+    return `
+      <div class="os-section-head"><h4>${escapeHtml(kind.replace(/\b\w/g, (c) => c.toUpperCase()))}</h4></div>
+      <ul class="os-plan-checklist">${rows || `<li class="os-empty">No ${escapeHtml(kind)} entities</li>`}</ul>
+    `;
+  }).join("");
+
+  const warnings = draftPreview.validation.warnings.map((w) => `<div class="os-plan-validation-row os-plan-validation-warning">${escapeHtml(w.field)}: ${escapeHtml(w.message)}</div>`).join("");
+  const errors = draftPreview.validation.errors.map((e) => `<div class="os-plan-validation-row os-plan-validation-error">${escapeHtml(e.field)}: ${escapeHtml(e.message)}</div>`).join("");
+
+  const publishDisabled = !draftPreview.can_publish || !publishApproved || publishInFlight;
+
+  return `
+    <div class="os-section-head"><h3>Publish Draft</h3></div>
+    <div class="os-plan-validation-row ${validationClass}">${escapeHtml(validationSummary)}</div>
+    <div class="os-planning-actions">
+      <button type="button" data-plan-generate-draft ${publishInFlight ? "disabled" : ""}>Regenerate Draft</button>
+    </div>
+    <div class="os-section-head"><h4>Manifest</h4></div>
+    <div class="os-meta">Wave: ${escapeHtml(draftPreview.planning_wave)} • Project: ${escapeHtml(draftPreview.linear_project)} • Team: ${escapeHtml(draftPreview.team_id)}</div>
+    <div class="os-meta">Manifest: ${escapeHtml(draftPreview.manifest_path)}</div>
+    <div class="os-meta">Receipt path: ${escapeHtml(draftPreview.publish_receipt_path)}</div>
+    ${entitySections}
+    ${warnings || errors ? `
+      <div class="os-section-head"><h4>Warnings & Errors</h4></div>
+      ${errors}${warnings}
+    ` : ""}
+    <div class="os-planning-actions os-planning-publish-actions">
+      <label class="os-plan-checklist-row">
+        <input type="checkbox" data-plan-publish-approved ${publishApproved ? "checked" : ""} />
+        <span>I approve publishing these entities to Linear</span>
+      </label>
+      <button type="button" data-plan-publish-action ${publishDisabled ? "disabled" : ""}>${publishInFlight ? "Publishing..." : "Publish to Linear"}</button>
+      <button type="button" data-plan-publish-cancel ${publishInFlight ? "disabled" : ""}>Cancel</button>
+    </div>
   `;
 }
 

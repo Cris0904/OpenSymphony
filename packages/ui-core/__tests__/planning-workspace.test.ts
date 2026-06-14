@@ -11,11 +11,13 @@ import {
   updateArtifactContent,
   validatePlanningWorkspace,
 } from "../src/planning-workspace.js";
+import { renderPlanningWorkspace } from "../src/planning-workspace-ui.js";
 import { MockGatewayTransport } from "@opensymphony/api-client";
 import { schemaVersionV1 } from "@opensymphony/gateway-schema";
 import type {
   DashboardSnapshot,
   GatewayCapabilities,
+  LinearDraftPreview,
   TaskGraphSnapshot,
 } from "@opensymphony/gateway-schema";
 
@@ -608,5 +610,80 @@ describe("PlanningWorkspace", () => {
     expect(next.artifacts[0].revisions.length).toBe(1);
     expect(next.artifacts[0].revisions[0].revision_id).toBe("rev-1");
     expect(next.selectedRevisionId).toBe("rev-1");
+  });
+
+  it("renders the publish tab with draft preview entities and validation summary", () => {
+    const base = emptyPlanningWorkspaceState();
+    const draftPreview: LinearDraftPreview = {
+      schema_version: schemaVersionV1(),
+      draft_id: "draft-1",
+      correlation_id: "corr-1",
+      planning_wave: "rich-client-hosted-mode",
+      linear_project: "OpenSymphony",
+      project_id: "opensymphony-local",
+      team_id: "team-1",
+      manifest_path: "docs/tasks/task-package.yaml",
+      publish_receipt_path: "docs/tasks/linear-publish.yaml",
+      validation: {
+        ok: true,
+        error_count: 0,
+        warning_count: 1,
+        errors: [],
+        warnings: [{ field: "issue-2", message: "Missing description" }],
+      },
+      entities: [
+        {
+          entity_id: "ms-1",
+          kind: "milestone",
+          op: "create",
+          source_task_id: "task-1",
+          source_file: "docs/tasks/milestone.md",
+          title: "M9: Collaborative Planning Alpha",
+          blocked_by: [],
+          blocks: [],
+          warnings: [],
+          payload: {},
+        },
+        {
+          entity_id: "issue-1",
+          kind: "issue",
+          op: "create",
+          source_task_id: "task-2",
+          source_file: "docs/tasks/issue.md",
+          title: "Implement draft preview",
+          milestone: "M9: Collaborative Planning Alpha",
+          blocked_by: [],
+          blocks: ["issue-2"],
+          warnings: [],
+          payload: {},
+        },
+        {
+          entity_id: "issue-2",
+          kind: "issue",
+          op: "create",
+          source_task_id: "task-3",
+          source_file: "docs/tasks/issue.md",
+          title: "Wire publish endpoint",
+          milestone: "M9: Collaborative Planning Alpha",
+          blocked_by: ["issue-1"],
+          blocks: [],
+          warnings: [{ field: "description", message: "Missing description" }],
+          payload: {},
+        },
+      ],
+      can_publish: true,
+    };
+    const state = { ...base, activeTab: "publish" as const, draftPreview, publishApproved: true };
+    const html = renderPlanningWorkspace(state, { nodeId: null, title: "", state: "" });
+    expect(html).toContain("Publish Draft");
+    expect(html).toContain("M9: Collaborative Planning Alpha");
+    expect(html).toContain("Implement draft preview");
+    expect(html).toContain("Wire publish endpoint");
+    expect(html).toContain("0 error(s)");
+    expect(html).toContain("1 warning(s)");
+    expect(html).toContain("Missing description");
+    expect(html).toContain("Publish to Linear");
+    expect(html).toContain('data-plan-publish-action');
+    expect(html).toContain('data-plan-publish-approved');
   });
 });

@@ -5,6 +5,12 @@ import type {
   ActionReceipt,
   GatewayTransport,
 } from "@opensymphony/api-client";
+import type {
+  LinearDraftPreview,
+  LinearDraftRequest,
+  LinearPublishRequest,
+  LinearPublishResponse,
+} from "@opensymphony/gateway-schema";
 
 export interface BrowserTransportAdapter extends ActionCapableTransport {
   connect(token?: string): Promise<void>;
@@ -149,6 +155,14 @@ class BrowserTransport implements BrowserTransportAdapter {
 
   debugRun(runId: string): Promise<ActionReceipt> {
     return this.inner.debugRun(runId);
+  }
+
+  draftPlanning(request: LinearDraftRequest): Promise<LinearDraftPreview> {
+    return this.inner.draftPlanning(request);
+  }
+
+  publishPlanning(request: LinearPublishRequest): Promise<LinearPublishResponse> {
+    return this.inner.publishPlanning(request);
   }
 
   async connect(_token?: string): Promise<void> {

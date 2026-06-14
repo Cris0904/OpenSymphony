@@ -6,7 +6,13 @@ import {
   type ActionReceipt,
   type GatewayTransport,
 } from "@opensymphony/api-client";
-import type { ConnectionProfile } from "@opensymphony/gateway-schema";
+import type {
+  ConnectionProfile,
+  LinearDraftPreview,
+  LinearDraftRequest,
+  LinearPublishRequest,
+  LinearPublishResponse,
+} from "@opensymphony/gateway-schema";
 import {
   renderOpenSymphonyApp,
   type EditableProfileInput,
@@ -188,6 +194,14 @@ class DesktopTransportAdapter implements TauriTransportAdapter {
 
   debugRun(runId: string): Promise<ActionReceipt> {
     return this.actionInner.debugRun(runId);
+  }
+
+  draftPlanning(request: LinearDraftRequest): Promise<LinearDraftPreview> {
+    return this.actionInner.draftPlanning(request);
+  }
+
+  publishPlanning(request: LinearPublishRequest): Promise<LinearPublishResponse> {
+    return this.actionInner.publishPlanning(request);
   }
 
   async attach(): Promise<void> {

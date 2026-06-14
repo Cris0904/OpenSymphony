@@ -83,7 +83,25 @@ export type {
 } from "./approval.js";
 
 // planning
-export type { PlanningArtifactKind, PlanningArtifact, PlanningSessionStatus, PlanningSessionSummary } from "./planning.js";
+export type {
+  PlanningArtifactKind,
+  PlanningArtifact,
+  PlanningSessionStatus,
+  PlanningSessionSummary,
+  LinearDraftEntityKind,
+  LinearDraftOperation,
+  PlanValidationMessage,
+  PlanValidationSummary,
+  LinearDraftEntity,
+  LinearDraftRequest,
+  LinearDraftPreview,
+  LinearPublishFailure,
+  LinearPublishRequest,
+  PublishedMilestone,
+  PublishedTask,
+  LinearPublishReceipt,
+  LinearPublishResponse,
+} from "./planning.js";
 
 // capability
 export type { AuthMode, TransportCapability, FeatureCapability, GatewayCapabilities } from "./capability.js";

@@ -27,6 +27,10 @@ import type {
   RunPhase,
   SafeActions,
   RunLifecycleState,
+  LinearDraftRequest,
+  LinearDraftPreview,
+  LinearPublishRequest,
+  LinearPublishResponse,
 } from "@opensymphony/gateway-schema";
 
 export {
@@ -88,6 +92,8 @@ export interface ActionCapableTransport extends GatewayTransport {
   approvalDecision(approvalId: string, decision: "approved" | "rejected", explanation?: string): Promise<ActionReceipt>;
   openWorkspace(runId: string): Promise<ActionReceipt>;
   debugRun(runId: string): Promise<ActionReceipt>;
+  draftPlanning(request: LinearDraftRequest): Promise<LinearDraftPreview>;
+  publishPlanning(request: LinearPublishRequest): Promise<LinearPublishResponse>;
 }
 
 export interface GatewayTransportConfig {
@@ -152,4 +158,8 @@ export type {
   RunPhase,
   SafeActions,
   RunLifecycleState,
+  LinearDraftRequest,
+  LinearDraftPreview,
+  LinearPublishRequest,
+  LinearPublishResponse,
 };
