@@ -40,8 +40,6 @@ export interface PlanningNode {
   parent_id?: string;
   children: string[];
   blocked_by: string[];
-  acceptance_criteria: string[];
-  verification: string[];
   comment_count?: number;
 }
 
@@ -283,8 +281,6 @@ export function buildFixturePlanningWorkspaceState(
         state_category: "in_progress",
         children: ["plan-issue-1"],
         blocked_by: [],
-        acceptance_criteria: ["Workspace UI mounts with all panes."],
-        verification: ["Component tests pass."],
       },
       {
         schema_version: sv,
@@ -297,8 +293,6 @@ export function buildFixturePlanningWorkspaceState(
         parent_id: "plan-milestone",
         children: ["plan-sub-1"],
         blocked_by: [],
-        acceptance_criteria: ["Users can edit all required artifacts."],
-        verification: ["Keyboard navigation checks pass."],
       },
       {
         schema_version: sv,
@@ -311,8 +305,6 @@ export function buildFixturePlanningWorkspaceState(
         parent_id: "plan-issue-1",
         children: [],
         blocked_by: [],
-        acceptance_criteria: [],
-        verification: [],
       },
     ],
     selectedNodeId: "plan-issue-1",
@@ -418,8 +410,6 @@ export function addPlanningNode(
     parent_id: parentId ?? undefined,
     children: [],
     blocked_by: [],
-    acceptance_criteria: [],
-    verification: [],
   };
   const nodes = [...state.nodes, newNode];
   if (parentId) {
@@ -435,7 +425,7 @@ export function addPlanningNode(
 export function updatePlanningNode(
   state: PlanningWorkspaceState,
   nodeId: string,
-  changes: Partial<Pick<PlanningNode, "title" | "state" | "acceptance_criteria" | "verification">>,
+  changes: Partial<Pick<PlanningNode, "title" | "state">>,
 ): PlanningWorkspaceState {
   const nodes = state.nodes.map((node) => {
     if (node.node_id !== nodeId) return node;
@@ -445,8 +435,6 @@ export function updatePlanningNode(
       updated.state = changes.state;
       updated.state_category = stateToCategory(changes.state);
     }
-    if (changes.acceptance_criteria !== undefined) updated.acceptance_criteria = changes.acceptance_criteria;
-    if (changes.verification !== undefined) updated.verification = changes.verification;
     return updated;
   });
   return { ...state, nodes };
@@ -621,25 +609,6 @@ export function validatePlanningWorkspace(
 
   const nodeMap = new Map(state.nodes.map((n) => [n.node_id, n]));
   for (const node of state.nodes) {
-    if (node.kind === "issue" || node.kind === "sub_issue") {
-      if (node.acceptance_criteria.length === 0) {
-        messages.push({
-          message_id: `val-${node.node_id}-no-criteria`,
-          level: "warning",
-          message: `${node.identifier} has no acceptance criteria.`,
-          field_ref: { kind: "node", id: node.node_id, sub_id: "criteria" },
-        });
-      }
-      if (node.verification.length === 0) {
-        messages.push({
-          message_id: `val-${node.node_id}-no-verification`,
-          level: "warning",
-          message: `${node.identifier} has no verification expectations.`,
-          field_ref: { kind: "node", id: node.node_id, sub_id: "verification" },
-        });
-      }
-    }
-
     if (hasDependencyCycle(nodeMap, node.node_id)) {
       messages.push({
         message_id: `val-${node.node_id}-cycle`,
@@ -762,17 +731,20 @@ export function hasDependencyCycle(
   nodeMap: Map<string, PlanningNode>,
   startId: string,
 ): boolean {
+  const path = new Set<string>();
   const visited = new Set<string>();
   function dfs(nodeId: string): boolean {
-    if (nodeId === startId && visited.size > 0) return true;
+    if (path.has(nodeId)) return true;
     if (visited.has(nodeId)) return false;
     visited.add(nodeId);
+    path.add(nodeId);
     const node = nodeMap.get(nodeId);
-    if (!node) return false;
-    for (const dep of node.blocked_by) {
-      if (dfs(dep)) return true;
+    if (node) {
+      for (const dep of node.blocked_by) {
+        if (dfs(dep)) return true;
+      }
     }
-    visited.delete(nodeId);
+    path.delete(nodeId);
     return false;
   }
   return dfs(startId);

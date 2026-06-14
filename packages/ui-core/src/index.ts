@@ -46,7 +46,6 @@ export {
   buildFixturePlanningWorkspaceState,
   computeArtifactDiff,
   emptyPlanningWorkspaceState,
-  movePlanningNode,
   removePlanningNode,
   removeCriterion,
   removeVerification,
