@@ -77,17 +77,13 @@ Suggested gates:
 
 Current implementation:
 
-- `cargo check-system-duckdb`, `cargo test-system-duckdb`, and
-  `cargo clippy-system-duckdb` are the preferred aliases for iterative
-  OpenSymphony development on the macOS/Homebrew host. They build with
-  `--no-default-features --features duckdb-prebuilt` and link against the
-  pinned Homebrew DuckDB installation, avoiding both bundled source
-  compilation and per-workspace DuckDB downloads.
-- `cargo check-dev`, `cargo test-dev`, and `cargo clippy-dev` are portable
-  fallback aliases for iterative OpenSymphony development. They set
-  `DUCKDB_DOWNLOAD_LIB=1` only for the aliased command so the native DuckDB
-  library is downloaded into `target/duckdb-download` and reused across
-  rebuilds in the same target directory.
+- `cargo check-dev`, `cargo test-dev`, and `cargo clippy-dev` are repository
+  aliases for iterative OpenSymphony development. The aliases set
+  `DUCKDB_DOWNLOAD_LIB=1` only for the aliased command and build with
+  `--no-default-features --features duckdb-prebuilt` so the native DuckDB
+  library is downloaded into
+  `target/duckdb-download` and reused across rebuilds in the same target
+  directory.
 - `cargo test` exercises the full root package, including the fake-server contract suite from `tests/fake_server_contract.rs`
 - `cargo test --test linear_client` exercises fixture-backed GraphQL normalization, parent/child hierarchy extraction, personal-API-key auth headers, required API-key/project/state configuration validation, issue URL/raw-priority preservation, full label pagination, raw workflow-state type preservation alongside normalized kinds, non-archived candidate polling, archived terminal cleanup reads, archived by-ID state refresh, GraphQL 400/429 rate-limit retries including reset-header handling, retryable 5xx GraphQL error envelopes, project-scoped by-ID state refresh, and tracker error mapping against a local stub server
 - `cargo test --test hierarchy_selection --test scheduler` exercises blocker-aware and hierarchy-aware dispatch filtering, leaf-before-parent ordering, cached per-state capacity limiting, continuation retry, exponential failure backoff, runtime-event-fed stall detection, terminal cleanup/release, active-state reconciliation, and manifest-backed workspace recovery against fake tracker/workspace/worker backends
@@ -375,7 +371,12 @@ That document covers:
 
 ## Current model
 
-- COE-452 contributed: PR #122: COE-452: Add DuckDB prebuilt developer build mode (merge `6ce8edd`)
+- COE-389 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
+- COE-390 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
+- COE-391 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
+- COE-392 contributed: PR #85: docs: gateway inventory, domain vocabulary, and DTO boundary checklist (COE-389) (merge `3ed56af`)
+- COE-393 contributed: PR #91: feat: Event Journal and Stream Broker (COE-393) (merge `1183bc6`)
+- COE-394 contributed: PR #89: COE-394: Frontend workspace and shared schemas (merge `68d86ff`)
 
 ## Important invariants
 
@@ -392,10 +393,66 @@ That document covers:
 
 ## Recent changes
 
-- COE-452: DuckDB Prebuilt Developer Build Mode
+- COE-389: Current Gateway Inventory And Vocabulary
+- COE-390: Gateway Schemas And Stream Feasibility
+- COE-391: Gateway Module, Capabilities, And Dashboard Snapshot
+- COE-392: Task Graph, Run Detail, File, And Diff Read APIs
+- COE-393: Event Journal And Stream Broker
+- COE-394: Frontend Workspace And Shared Schemas
+- COE-395: Planning Artifact Schema And Session Service
+- COE-396: Action Receipts And Initial Run Actions
+- COE-397: Gateway API Client, Transport Adapters, And Reducers
+- COE-398: Tauri Shell And Security Capabilities
+- COE-399: Linear Read Coverage And Task Graph Cache
+- COE-400: OpenHands Event Normalization And Runtime Mirror
+- COE-402: App Shell, Dashboard, Task Graph, And Run Views
+- COE-403: Terminal And Log Renderer Prototype
+- COE-404: Desktop Connection Profiles And Daemon Management
+- COE-405: Linear Milestone, Issue, And Sub-Issue Mutations
+- COE-406: Repository, Linear, And Research Analysis
+- COE-409: Desktop Settings, Keychain, And Native Actions
+- COE-410: Desktop Local Stream Optimization
+- COE-411: Task Graph Editor And Runtime Overlay UI
+- COE-412: Runtime Timeline And Terminal/Log Association
+- COE-413: Implementation Plan Generator Stage
+- COE-414: Diff, Validation, Approval, And Run Action Views
+- COE-415: Milestone, Issue, And Sub-Issue Compiler
+- COE-416: Dependency Graph And Plan Checks
+- COE-417: Planning Workspace UI
+- COE-434: Long-running harness liveness and scheduler/runtime ownership contract
+- COE-435: Long-running run observability fixtures and client-facing diagnostics
+- COE-449: Desktop alpha recovery: replace stubs with functional app
 
 ## Source refs
 
-- COE-452
+- COE-389
+- COE-390
+- COE-391
+- COE-392
+- COE-393
+- COE-394
+- COE-395
+- COE-396
+- COE-397
+- COE-398
+- COE-399
+- COE-400
+- COE-402
+- COE-403
+- COE-404
+- COE-405
+- COE-406
+- COE-409
+- COE-410
+- COE-411
+- COE-412
+- COE-413
+- COE-414
+- COE-415
+- COE-416
+- COE-417
+- COE-434
+- COE-435
+- COE-449
 
 <!-- END OPENSYMPHONY MANAGED MEMORY SYNC -->

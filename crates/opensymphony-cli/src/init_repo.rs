@@ -86,7 +86,7 @@ pub struct InitArgs {
     #[arg(
         long,
         value_name = "URL",
-        help = "AI review base URL for openai-compatible providers"
+        help = "AI review base URL; only valid with --ai-review-provider-kind openai-compatible"
     )]
     ai_review_base_url: Option<String>,
     #[arg(long, value_name = "STYLE", help = "AI review style")]
@@ -171,6 +171,19 @@ impl InitArgs {
                     .to_string(),
             ));
         }
+        if matches!(
+            self.ai_review_provider_kind,
+            Some(AiReviewProviderKindArg::LitellmNative)
+        ) && self
+            .ai_review_base_url
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(InitCommandError::InvalidArgument(
+                "--ai-review-base-url can only be used with --ai-review-provider-kind openai-compatible"
+                    .to_string(),
+            ));
+        }
 
         Ok(())
     }
@@ -178,12 +191,20 @@ impl InitArgs {
     fn ai_pr_review_requested_by_flags(&self) -> bool {
         self.ai_pr_review
             || self.configure_github
-            || self.ai_review_provider_kind.is_some()
+            || self.ai_review_config_flags_present()
+            || self.ai_review_secret_flags_present()
+    }
+
+    fn ai_review_config_flags_present(&self) -> bool {
+        self.ai_review_provider_kind.is_some()
             || self.ai_review_model_id.is_some()
             || self.ai_review_base_url.is_some()
             || self.ai_review_style.is_some()
             || self.ai_review_require_evidence.is_some()
-            || self.ai_review_secret_env.is_some()
+    }
+
+    fn ai_review_secret_flags_present(&self) -> bool {
+        self.ai_review_secret_env.is_some()
             || self.reuse_llm_api_key_for_ai_review_secret
             || self.skip_ai_review_secret
     }
@@ -309,6 +330,8 @@ pub(crate) enum InitCommandError {
     InvalidArgument(String),
     #[error("initialization aborted")]
     AbortedByUser,
+    #[error("initialization aborted by --conflict-policy abort for existing `{path}`")]
+    ConflictPolicyAbort { path: String },
     #[error("failed to initialize project memory: {0}")]
     MemoryInit(#[from] crate::opensymphony_memory::MemoryError),
 }
@@ -1013,7 +1036,11 @@ where
             planned.action = match policy {
                 InitConflictPolicy::Skip => PlannedAction::Skip,
                 InitConflictPolicy::Overwrite => PlannedAction::Overwrite,
-                InitConflictPolicy::Abort => return Err(InitCommandError::AbortedByUser),
+                InitConflictPolicy::Abort => {
+                    return Err(InitCommandError::ConflictPolicyAbort {
+                        path: display_path.to_string(),
+                    });
+                }
             };
             continue;
         }
@@ -1755,22 +1782,16 @@ where
         .map(str::trim)
         .filter(|name| !name.is_empty())
     {
-        return env_lookup
-            .get(env_name)
-            .map(Some)
-            .ok_or_else(|| InitCommandError::MissingEnvVar {
-                name: env_name.to_string(),
-                flag: "--ai-review-secret-env",
-            });
+        return require_non_empty_env(env_lookup, env_name, "--ai-review-secret-env").map(Some);
     }
 
     if args.reuse_llm_api_key_for_ai_review_secret {
-        return env_lookup.get("LLM_API_KEY").map(Some).ok_or_else(|| {
-            InitCommandError::MissingEnvVar {
-                name: "LLM_API_KEY".to_string(),
-                flag: "--reuse-llm-api-key-for-ai-review-secret",
-            }
-        });
+        return require_non_empty_env(
+            env_lookup,
+            "LLM_API_KEY",
+            "--reuse-llm-api-key-for-ai-review-secret",
+        )
+        .map(Some);
     }
 
     if args.skip_ai_review_secret {
@@ -1785,6 +1806,29 @@ where
     }
 
     prompt_ai_review_secret(ui, env_lookup)
+}
+
+fn require_non_empty_env<E>(
+    env_lookup: &E,
+    name: &str,
+    flag: &'static str,
+) -> Result<String, InitCommandError>
+where
+    E: EnvLookup,
+{
+    let value = env_lookup
+        .get(name)
+        .ok_or_else(|| InitCommandError::MissingEnvVar {
+            name: name.to_string(),
+            flag,
+        })?;
+    if value.trim().is_empty() {
+        return Err(InitCommandError::MissingEnvVar {
+            name: name.to_string(),
+            flag,
+        });
+    }
+    Ok(value)
 }
 
 fn prompt_ai_review_secret<R, W, E>(
@@ -2161,11 +2205,13 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS,
-        GitRemoteDetection, InitArgs, PromptUi, comparable_text, custom_codereview_guide_contents,
-        customize_workflow, git_remote_url, github_repo_slug_from_remote,
-        normalize_github_repo_slug, prompt_ai_review_config, prompt_for_missing_llm_env,
-        prompt_yes_no, select_remote_name, shell_single_quote, template_fetch_timeout_from_env,
+        AiReviewProviderKindArg, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL,
+        DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS, GitRemoteDetection, InitArgs, InitCommandError,
+        PromptUi, comparable_text, custom_codereview_guide_contents, customize_workflow,
+        git_remote_url, github_repo_slug_from_remote, normalize_github_repo_slug,
+        prompt_ai_review_config, prompt_for_missing_llm_env, prompt_yes_no,
+        resolve_ai_review_secret, select_remote_name, shell_single_quote,
+        template_fetch_timeout_from_env,
     };
 
     struct StubEnvironment {
@@ -2399,6 +2445,70 @@ hooks:
         assert_eq!(config.base_url, None);
         assert_eq!(config.style, "custom");
         assert!(!config.require_evidence);
+    }
+
+    #[test]
+    fn init_args_reject_litellm_native_base_url_override() {
+        let args = InitArgs {
+            ai_review_provider_kind: Some(AiReviewProviderKindArg::LitellmNative),
+            ai_review_base_url: Some("https://example.com/unused".to_string()),
+            ..InitArgs::default()
+        };
+
+        let error = args.validate().expect_err("base URL should be rejected");
+
+        assert!(matches!(
+            error,
+            InitCommandError::InvalidArgument(message)
+                if message.contains("--ai-review-base-url can only be used")
+        ));
+    }
+
+    #[test]
+    fn ai_review_secret_env_rejects_empty_values() {
+        let env = StubEnvironment {
+            values: BTreeMap::from([("AI_SECRET".to_string(), "   ".to_string())]),
+        };
+        let mut output = Vec::new();
+        let mut ui = PromptUi::new(&b""[..], &mut output);
+        let args = InitArgs {
+            non_interactive: true,
+            ai_review_secret_env: Some("AI_SECRET".to_string()),
+            ..InitArgs::default()
+        };
+
+        let error = resolve_ai_review_secret(&mut ui, &env, &args)
+            .expect_err("empty secret env should fail");
+
+        assert!(matches!(
+            error,
+            InitCommandError::MissingEnvVar { name, flag }
+                if name == "AI_SECRET" && flag == "--ai-review-secret-env"
+        ));
+    }
+
+    #[test]
+    fn ai_review_secret_reuse_rejects_empty_llm_api_key() {
+        let env = StubEnvironment {
+            values: BTreeMap::from([("LLM_API_KEY".to_string(), String::new())]),
+        };
+        let mut output = Vec::new();
+        let mut ui = PromptUi::new(&b""[..], &mut output);
+        let args = InitArgs {
+            non_interactive: true,
+            reuse_llm_api_key_for_ai_review_secret: true,
+            ..InitArgs::default()
+        };
+
+        let error = resolve_ai_review_secret(&mut ui, &env, &args)
+            .expect_err("empty reused LLM_API_KEY should fail");
+
+        assert!(matches!(
+            error,
+            InitCommandError::MissingEnvVar { name, flag }
+                if name == "LLM_API_KEY"
+                    && flag == "--reuse-llm-api-key-for-ai-review-secret"
+        ));
     }
 
     #[test]

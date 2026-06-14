@@ -186,7 +186,10 @@ The system aliases set `DUCKDB_LIB_DIR`, `DUCKDB_INCLUDE_DIR`, and
 with `--no-default-features --features duckdb-prebuilt`. `cargo fmt` is
 unaffected because it does not compile dependencies. If a fallback command must
 override `CARGO_TARGET_DIR`, use the default target directory or an absolute
-path. Before release-sensitive, packaging, or dependency changes, also run the
+path. Because the system aliases link whatever Homebrew exposes at
+`/opt/homebrew/opt/duckdb`, verify `duckdb --version` is still the expected
+`1.5.3` after any Homebrew upgrade or unpin before trusting system-linked test
+results. Before release-sensitive, packaging, or dependency changes, also run the
 default bundled-mode validation commands such as
 `cargo clippy --all-targets -- -D warnings` and `cargo test`.
 
