@@ -14,6 +14,10 @@ import type {
   TaskGraphUpdatePayload,
   TaskGraphDependencyPayload,
   TaskGraphCommentPayload,
+  RunTimeline,
+  RunLogPage,
+  TerminalSearchResult,
+  TerminalJumpResult,
 } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, ActionCapableTransport } from "./index.js";
 
@@ -164,9 +168,18 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
     return page;
   }
 
+  async runTimeline(_runId: string): Promise<RunTimeline> {
+    throw new Error("MockGatewayTransport.runTimeline not implemented");
+  }
+
+  async runLogs(_runId: string, _cursor?: number, _limit?: number): Promise<RunLogPage> {
+    throw new Error("MockGatewayTransport.runLogs not implemented");
+  }
+
   async terminalSnapshot(
     runId: string,
     terminalId: string,
+    _cursor?: number,
   ): Promise<TerminalSnapshot> {
     const key = `${runId}:${terminalId}`;
     const snap = this.mockTerminalSnapshot.get(key);
@@ -174,6 +187,22 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       throw new Error(`Mock terminal snapshot not found: ${key}`);
     }
     return snap;
+  }
+
+  async terminalSearch(
+    _runId: string,
+    _terminalId: string,
+    _query: string,
+  ): Promise<TerminalSearchResult> {
+    throw new Error("MockGatewayTransport.terminalSearch not implemented");
+  }
+
+  async terminalJumpToEvent(
+    _runId: string,
+    _terminalId: string,
+    _eventId: string,
+  ): Promise<TerminalJumpResult> {
+    throw new Error("MockGatewayTransport.terminalJumpToEvent not implemented");
   }
 
   // -- Event streams (deterministic replay) --
