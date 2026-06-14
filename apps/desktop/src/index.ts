@@ -1,6 +1,9 @@
 import {
   HttpGatewayTransport,
   TransportFactory,
+  type ActionCapableTransport,
+  type ActionDispatch,
+  type ActionReceipt,
   type GatewayTransport,
 } from "@opensymphony/api-client";
 import type { ConnectionProfile } from "@opensymphony/gateway-schema";
@@ -34,15 +37,19 @@ interface NativeProfileResponse {
   transport?: ConnectionProfile["transport"];
 }
 
-export interface TauriTransportAdapter extends GatewayTransport {
+export interface TauriTransportAdapter extends ActionCapableTransport {
   attach(): Promise<void>;
 }
 
 class DesktopTransportAdapter implements TauriTransportAdapter {
+  private readonly actionInner: ActionCapableTransport;
+
   constructor(
     private readonly inner: GatewayTransport,
     private readonly baseUrl: string,
-  ) {}
+  ) {
+    this.actionInner = asActionCapableTransport(inner, baseUrl);
+  }
 
   get baseUri(): string {
     return this.inner.baseUri;
@@ -139,6 +146,50 @@ class DesktopTransportAdapter implements TauriTransportAdapter {
     return this.inner.close();
   }
 
+  dispatchAction(action: ActionDispatch): Promise<ActionReceipt> {
+    return this.actionInner.dispatchAction(action);
+  }
+
+  cancelRun(runId: string): Promise<ActionReceipt> {
+    return this.actionInner.cancelRun(runId);
+  }
+
+  retryRun(runId: string): Promise<ActionReceipt> {
+    return this.actionInner.retryRun(runId);
+  }
+
+  resumeRun(runId: string): Promise<ActionReceipt> {
+    return this.actionInner.resumeRun(runId);
+  }
+
+  rehydrateRun(runId: string): Promise<ActionReceipt> {
+    return this.actionInner.rehydrateRun(runId);
+  }
+
+  commentRun(runId: string, text: string): Promise<ActionReceipt> {
+    return this.actionInner.commentRun(runId, text);
+  }
+
+  createFollowup(runId: string, payload: unknown): Promise<ActionReceipt> {
+    return this.actionInner.createFollowup(runId, payload);
+  }
+
+  approvalDecision(
+    approvalId: string,
+    decision: "approved" | "rejected",
+    explanation?: string,
+  ): Promise<ActionReceipt> {
+    return this.actionInner.approvalDecision(approvalId, decision, explanation);
+  }
+
+  openWorkspace(runId: string): Promise<ActionReceipt> {
+    return this.actionInner.openWorkspace(runId);
+  }
+
+  debugRun(runId: string): Promise<ActionReceipt> {
+    return this.actionInner.debugRun(runId);
+  }
+
   async attach(): Promise<void> {
     const invoke = getTauriInvoke();
     if (!invoke) {
@@ -197,6 +248,19 @@ export function createDesktopProfileController(): ProfileController | undefined 
       return toConnectionProfile(active);
     },
   };
+}
+
+function asActionCapableTransport(
+  transport: GatewayTransport,
+  baseUrl: string,
+): ActionCapableTransport {
+  if ("dispatchAction" in transport) {
+    return transport as ActionCapableTransport;
+  }
+  return new HttpGatewayTransport({
+    baseUri: baseUrl || DEFAULT_GATEWAY_URL,
+    transport: "loopback_http",
+  });
 }
 
 function getTauriInvoke(): TauriInvoke | undefined {
