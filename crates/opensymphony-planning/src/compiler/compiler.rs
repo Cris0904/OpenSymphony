@@ -572,6 +572,8 @@ fn build_publish_receipt(
                     issue: None,
                     issue_id: None,
                     url: None,
+                    comment_ids: Vec::new(),
+                    relation_ids: BTreeMap::new(),
                 },
             );
             for sub in &issue.sub_issues {
@@ -597,6 +599,8 @@ fn build_publish_receipt(
                         issue: None,
                         issue_id: None,
                         url: None,
+                        comment_ids: Vec::new(),
+                        relation_ids: BTreeMap::new(),
                     },
                 );
             }

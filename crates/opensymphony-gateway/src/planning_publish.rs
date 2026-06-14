@@ -54,6 +54,53 @@ fn milestone_linked_tasks(
         .map(|(task_id, _)| task_id.clone())
         .collect()
 }
+/// Resolve `raw` relative to `repo_root` and ensure the normalized path stays
+/// within the repository. Rejects absolute paths and paths that escape the
+/// workspace via `..` segments.
+fn resolve_path_within_repo(repo_root: &Path, raw: &str) -> Result<PathBuf, PublishError> {
+    let raw_path = Path::new(raw);
+    if raw_path.is_absolute() {
+        return Err(PublishError::LoadManifest(format!(
+            "path must be relative to repo_root: {raw}"
+        )));
+    }
+    let joined = repo_root.join(raw_path);
+    let normalized = normalize_path(&joined);
+    let base_normalized = normalize_path(repo_root);
+    if !normalized.starts_with(&base_normalized) {
+        return Err(PublishError::LoadManifest(format!(
+            "path escapes repo_root: {raw}"
+        )));
+    }
+    Ok(joined)
+}
+
+/// Normalize a path by resolving `.` and `..` segments without touching the
+/// filesystem. This is intentionally conservative: symlinks are not followed,
+/// so containment is checked against the logical path.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut stack: Vec<std::ffi::OsString> = Vec::new();
+    let mut rooted = false;
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => rooted = true,
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                stack.pop();
+            }
+            std::path::Component::Normal(seg) => stack.push(seg.to_owned()),
+        }
+    }
+    if rooted && !stack.is_empty() {
+        let mut out = PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
+        for seg in stack {
+            out.push(seg);
+        }
+        out
+    } else {
+        stack.iter().collect()
+    }
+}
 
 /// Shared state for the `/api/v1/planning/*` endpoints.
 #[derive(Clone)]
@@ -89,6 +136,7 @@ impl PlanningPublishState {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Draft {
+    draft_id: String,
     request: LinearDraftRequest,
     manifest: TaskPackageManifestFile,
     entities: Vec<LinearDraftEntity>,
@@ -170,6 +218,7 @@ async fn planning_draft_handler(
                 can_publish,
             };
             let draft = Draft {
+                draft_id: draft_id.clone(),
                 request,
                 manifest,
                 entities,
@@ -205,9 +254,11 @@ async fn planning_publish_handler(
     // Regenerate the draft immediately before publish so that any partial
     // receipt written by a previous attempt is picked up and already-created
     // entities are emitted as updates instead of duplicated creates.
+    let original_draft_id = draft.draft_id.clone();
     let draft = match generate_draft(draft.request.clone()).await {
         Ok((manifest, parsed_tasks, entities, existing_receipt, _validation, can_publish)) => {
             Draft {
+                draft_id: original_draft_id,
                 request: draft.request,
                 manifest,
                 entities,
@@ -244,7 +295,7 @@ async fn generate_draft(
     PublishError,
 > {
     let repo_root = PathBuf::from(&request.repo_root);
-    let manifest_path = repo_root.join(&request.manifest_path);
+    let manifest_path = resolve_path_within_repo(&repo_root, &request.manifest_path)?;
     let manifest =
         load_manifest(&manifest_path).map_err(|e| PublishError::LoadManifest(e.to_string()))?;
 
@@ -252,8 +303,19 @@ async fn generate_draft(
     let existing_receipt = read_existing_receipt(&request, &repo_root).await?;
 
     let mut parsed_tasks = BTreeMap::new();
+    let mut path_errors: Vec<PlanValidationMessage> = Vec::new();
     for entry in &manifest.tasks {
-        let path = repo_root.join(&entry.file);
+        let path = match resolve_path_within_repo(&repo_root, &entry.file) {
+            Ok(p) => p,
+            Err(e) => {
+                path_errors.push(PlanValidationMessage {
+                    task_id: Some(entry.id.clone()),
+                    field: "file".into(),
+                    message: e.to_string(),
+                });
+                continue;
+            }
+        };
         match parse_task_file(&path) {
             Ok(parsed) => {
                 parsed_tasks.insert(
@@ -273,6 +335,7 @@ async fn generate_draft(
     }
 
     let (mut errors, mut warnings) = manifest_validation_messages(&validation_result);
+    errors.extend(path_errors);
     let (entities, build_errors, build_warnings) =
         build_entities(&request, &manifest, &parsed_tasks, &existing_receipt);
     errors.extend(build_errors);
@@ -281,6 +344,8 @@ async fn generate_draft(
     let can_publish = errors.is_empty();
     let summary = PlanValidationSummary {
         ok: errors.is_empty(),
+        error_count: errors.len(),
+        warning_count: warnings.len(),
         errors,
         warnings,
     };
@@ -363,11 +428,11 @@ async fn read_existing_receipt(
     request: &LinearDraftRequest,
     repo_root: &Path,
 ) -> Result<YamlPublishReceipt, PublishError> {
-    let path = request
-        .existing_receipt_path
-        .as_ref()
-        .map(|p| repo_root.join(p))
-        .unwrap_or_else(|| repo_root.join(&request.publish_receipt_path));
+    let path = if let Some(existing) = request.existing_receipt_path.as_ref() {
+        resolve_path_within_repo(repo_root, existing)?
+    } else {
+        resolve_path_within_repo(repo_root, &request.publish_receipt_path)?
+    };
 
     if !path.exists() {
         return Ok(YamlPublishReceipt {
@@ -671,11 +736,20 @@ fn build_entities(
     }
 
     // Relations: for each blocked_by edge create a "blocks" relation from blocker to blocked.
+    // If a previous receipt already records the relation, skip it to avoid duplicates on retry.
     for task_id in parsed_tasks.keys() {
         let frontmatter = &parsed_tasks[task_id].frontmatter;
         for blocker in &frontmatter.blocked_by {
             let blocker_id = TaskId::new(blocker.clone());
             if parsed_tasks.contains_key(&blocker_id) {
+                let already_exists = existing_receipt
+                    .tasks
+                    .get(&blocker_id)
+                    .and_then(|e| e.relation_ids.get(&task_id.0))
+                    .is_some();
+                if already_exists {
+                    continue;
+                }
                 let payload = TaskGraphRelationRequest {
                     schema_version: SchemaVersion::default().to_string(),
                     correlation_id: correlation_id.clone(),
@@ -702,9 +776,17 @@ fn build_entities(
         }
     }
 
-    // Evidence comments: one per task to record provenance.
+    // Evidence comments: one per task to record provenance. Skip tasks that
+    // already have a persisted comment id from a previous publish.
     for task_id in parsed_tasks.keys() {
         let task = &parsed_tasks[task_id];
+        let already_has_comment = existing_receipt
+            .tasks
+            .get(task_id)
+            .is_some_and(|e| !e.comment_ids.is_empty());
+        if already_has_comment {
+            continue;
+        }
         let body = format!(
             "Published from planning wave {planning_wave}.\nSource task: {task_id}\nFile: {file}",
             task_id = task_id.0,
@@ -977,13 +1059,26 @@ async fn execute_publish(
                         continue;
                     }
                 }
-                if let Err(e) = client.create_issue_relation(request, correlation_id).await {
-                    failures.push(LinearPublishFailure {
+                match client.create_issue_relation(request, correlation_id).await {
+                    Ok(response) => {
+                        if let (Some(blocker_source_id), Some(relation_id)) = (
+                            entity.source_task_id.as_ref(),
+                            response.relation_id.as_ref(),
+                        ) {
+                            update_running_receipt_relation(
+                                &mut running_receipt,
+                                blocker_source_id,
+                                &blocked,
+                                relation_id,
+                            );
+                        }
+                    }
+                    Err(e) => failures.push(LinearPublishFailure {
                         entity_id: entity.entity_id.clone(),
                         kind: LinearDraftEntityKind::Relation,
                         source_task_id: entity.source_task_id.clone(),
                         error: e.as_reason(),
-                    });
+                    }),
                 }
             }
             LinearDraftEntityKind::Comment => {
@@ -1005,24 +1100,37 @@ async fn execute_publish(
                         continue;
                     }
                 }
-                if let Err(e) = client
+                match client
                     .create_evidence_comment(request, correlation_id)
                     .await
                 {
-                    failures.push(LinearPublishFailure {
+                    Ok(response) => {
+                        if let (Some(task_source_id), Some(comment_id)) =
+                            (entity.source_task_id.as_ref(), response.comment_id.as_ref())
+                        {
+                            update_running_receipt_comment(
+                                &mut running_receipt,
+                                task_source_id,
+                                comment_id,
+                            );
+                        }
+                    }
+                    Err(e) => failures.push(LinearPublishFailure {
                         entity_id: entity.entity_id.clone(),
                         kind: LinearDraftEntityKind::Comment,
                         source_task_id: entity.source_task_id.clone(),
                         error: e.as_reason(),
-                    });
+                    }),
                 }
             }
         }
     }
 
     running_receipt.published_at = Some(Utc::now());
-    let receipt_path =
-        PathBuf::from(&draft.request.repo_root).join(&draft.request.publish_receipt_path);
+    let receipt_path = resolve_path_within_repo(
+        PathBuf::from(&draft.request.repo_root).as_path(),
+        &draft.request.publish_receipt_path,
+    )?;
     let yaml = serde_yaml::to_string(&running_receipt)
         .map_err(|e| PublishError::ReceiptWrite(e.to_string()))?;
     tokio::fs::write(&receipt_path, yaml)
@@ -1039,7 +1147,7 @@ async fn execute_publish(
 
     Ok(LinearPublishResponse {
         schema_version: SchemaVersion::default(),
-        draft_id: draft.request.correlation_id.clone(),
+        draft_id: draft.draft_id.clone(),
         correlation_id: correlation_id.into(),
         status: status.into(),
         receipt,
@@ -1084,6 +1192,7 @@ fn update_running_receipt(
         identifier = identifier,
         slug = slugify(task.frontmatter.title.as_deref().unwrap_or(identifier))
     );
+    let existing = receipt.tasks.get(&task_id).cloned();
     let entry = YamlPublishEntity {
         source_task_id: task_id.clone(),
         source_file: task.file.clone(),
@@ -1108,6 +1217,14 @@ fn update_running_receipt(
         issue: Some(identifier.into()),
         issue_id: Some(issue_id.into()),
         url: Some(url),
+        comment_ids: existing
+            .as_ref()
+            .map(|e| e.comment_ids.clone())
+            .unwrap_or_default(),
+        relation_ids: existing
+            .as_ref()
+            .map(|e| e.relation_ids.clone())
+            .unwrap_or_default(),
     };
     receipt.tasks.insert(task_id.clone(), entry);
 
@@ -1121,6 +1238,30 @@ fn update_running_receipt(
         });
     if !ms.linked_issues.contains(&task_id) {
         ms.linked_issues.push(task_id);
+    }
+}
+fn update_running_receipt_relation(
+    receipt: &mut YamlPublishReceipt,
+    blocker_source_id: &str,
+    blocked_source_id: &str,
+    relation_id: &str,
+) {
+    let task_id = TaskId::new(blocker_source_id.to_owned());
+    if let Some(entry) = receipt.tasks.get_mut(&task_id) {
+        entry
+            .relation_ids
+            .insert(blocked_source_id.to_owned(), relation_id.to_owned());
+    }
+}
+
+fn update_running_receipt_comment(
+    receipt: &mut YamlPublishReceipt,
+    task_source_id: &str,
+    comment_id: &str,
+) {
+    let task_id = TaskId::new(task_source_id.to_owned());
+    if let Some(entry) = receipt.tasks.get_mut(&task_id) {
+        entry.comment_ids.push(comment_id.to_owned());
     }
 }
 

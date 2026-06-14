@@ -18,6 +18,7 @@ import type {
   DashboardSnapshot,
   GatewayCapabilities,
   LinearDraftPreview,
+  LinearPublishResponse,
   TaskGraphSnapshot,
 } from "@opensymphony/gateway-schema";
 
@@ -685,5 +686,41 @@ describe("PlanningWorkspace", () => {
     expect(html).toContain("Publish to Linear");
     expect(html).toContain('data-plan-publish-action');
     expect(html).toContain('data-plan-publish-approved');
+  });
+
+  it("renders the publish result with camelCase receipt fields from the real backend", () => {
+    const base = emptyPlanningWorkspaceState();
+    const publishResponse: LinearPublishResponse = {
+      schema_version: schemaVersionV1(),
+      draft_id: "draft-1",
+      correlation_id: "corr-1",
+      status: "published",
+      failures: [],
+      receipt: {
+        planningWave: "rich-client-hosted-mode",
+        linearProject: "e7b957855cb7",
+        publishedAt: "2026-05-17T00:00:00.000Z",
+        milestones: [
+          { name: "M9: Collaborative Planning Alpha", milestoneId: "ms-9" },
+        ],
+        tasks: [
+          { taskId: "OSYM-736", issue: "COE-418", issueId: "issue-418", url: "https://linear.app/issue/COE-418", file: "docs/tasks/osym-736.md" },
+        ],
+      },
+      results: [
+        { task_id: "OSYM-736", file: "docs/tasks/osym-736.md", status: "created" },
+      ],
+    };
+    const state = { ...base, activeTab: "publish" as const, publishResponse };
+    const html = renderPlanningWorkspace(state, { nodeId: null, title: "", state: "" });
+    expect(html).toContain("Publish Result");
+    expect(html).toContain("rich-client-hosted-mode");
+    expect(html).toContain("e7b957855cb7");
+    expect(html).toContain("M9: Collaborative Planning Alpha");
+    expect(html).toContain("ms-9");
+    expect(html).toContain("OSYM-736");
+    expect(html).toContain("COE-418");
+    expect(html).toContain("issue-418");
+    expect(html).toContain("New Draft");
   });
 });

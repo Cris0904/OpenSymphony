@@ -560,12 +560,13 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       status: "published",
       failures: [],
       receipt: {
-        planning_wave: "mock-wave",
-        linear_project: "mock-project",
-        published_at: new Date().toISOString(),
+        planningWave: "mock-wave",
+        linearProject: "mock-project",
+        publishedAt: new Date().toISOString(),
         milestones: [],
         tasks: [],
       },
+      results: [],
     };
   }
 

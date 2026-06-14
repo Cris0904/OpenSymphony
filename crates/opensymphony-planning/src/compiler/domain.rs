@@ -134,6 +134,13 @@ pub struct LinearPublishEntity {
     pub issue: Option<String>,
     pub issue_id: Option<String>,
     pub url: Option<String>,
+    /// Provenance comment IDs persisted so retries can skip duplicate comments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comment_ids: Vec<String>,
+    /// Relation IDs keyed by the related task id so retries can skip duplicate
+    /// blocker relations.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub relation_ids: BTreeMap<String, String>,
 }
 
 /// Milestone receipt stored in `docs/tasks/linear-publish.yaml`. The

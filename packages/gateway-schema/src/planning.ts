@@ -126,6 +126,17 @@ export interface LinearPublishFailure {
   error: string;
 }
 
+/** Publish result for one source task. */
+export interface LinearPublishResult {
+  task_id: string;
+  issue?: string;
+  issue_id?: string;
+  url?: string;
+  file: string;
+  status: string;
+  error?: string;
+}
+
 /** POST /api/v1/planning/publish request body. */
 export interface LinearPublishRequest {
   schema_version: SchemaVersion;
@@ -137,23 +148,30 @@ export interface LinearPublishRequest {
 /** Milestone entry inside a publish receipt. */
 export interface PublishedMilestone {
   name: string;
-  milestone_id: string;
+  milestoneId: string;
 }
 
 /** Task entry inside a publish receipt. */
 export interface PublishedTask {
-  task_id: string;
+  taskId: string;
   issue: string;
-  issue_id: string;
+  issueId: string;
   url: string;
   file: string;
 }
 
-/** Publish receipt returned by the publish endpoint. */
+/** Publish receipt returned by the publish endpoint.
+ *
+ * The Rust backend serializes the receipt with camelCase keys to match the
+ * on-disk `docs/tasks/linear-publish.yaml` format (`planningWave`,
+ * `linearProject`, `publishedAt`, `milestoneId`, `issueId`). The TypeScript
+ * interface must mirror that exact shape so that the UI receives defined
+ * values from the real HTTP backend.
+ */
 export interface LinearPublishReceipt {
-  planning_wave: string;
-  linear_project: string;
-  published_at: string;
+  planningWave: string;
+  linearProject: string;
+  publishedAt: string;
   milestones: PublishedMilestone[];
   tasks: PublishedTask[];
 }
@@ -166,4 +184,5 @@ export interface LinearPublishResponse {
   status: string;
   failures: LinearPublishFailure[];
   receipt: LinearPublishReceipt;
+  results: LinearPublishResult[];
 }

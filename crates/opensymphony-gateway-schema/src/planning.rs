@@ -340,7 +340,6 @@ impl PlanningWave {
 
 /// Matches the structure of `docs/tasks/linear-publish.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearPublishReceipt {
     pub planning_wave: String,
     pub linear_project: String,
@@ -351,7 +350,6 @@ pub struct LinearPublishReceipt {
 
 /// A milestone entry inside a publish receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PublishedMilestone {
     pub name: String,
     pub milestone_id: String,
@@ -359,7 +357,6 @@ pub struct PublishedMilestone {
 
 /// A task entry inside a publish receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PublishedTask {
     pub task_id: String,
     pub issue: String,
@@ -469,7 +466,6 @@ pub enum LinearDraftEntityKind {
 /// One entry in the draft preview: the exact mutation payload, the source task,
 /// and any warnings that should be surfaced before publish.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearDraftEntity {
     pub entity_id: String,
     pub kind: LinearDraftEntityKind,
@@ -488,14 +484,13 @@ pub struct LinearDraftEntity {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<PlanValidationMessage>,
     /// The exact JSON mutation payload that would be sent to Linear.
     pub payload: Value,
 }
 
 /// A single validation message for the draft preview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PlanValidationMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
@@ -505,9 +500,10 @@ pub struct PlanValidationMessage {
 
 /// Summary of manifest and task-file validation results included in the draft.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PlanValidationSummary {
     pub ok: bool,
+    pub error_count: usize,
+    pub warning_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<PlanValidationMessage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -516,7 +512,6 @@ pub struct PlanValidationSummary {
 
 /// Request to generate a Linear draft preview from a task package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearDraftRequest {
     pub schema_version: SchemaVersion,
     pub correlation_id: String,
@@ -539,7 +534,6 @@ pub struct LinearDraftRequest {
 
 /// Draft preview response returned by `POST /api/v1/planning/draft`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearDraftPreview {
     pub schema_version: SchemaVersion,
     pub draft_id: String,
@@ -557,7 +551,6 @@ pub struct LinearDraftPreview {
 
 /// Approval-gated publish request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearPublishRequest {
     pub schema_version: SchemaVersion,
     pub draft_id: String,
@@ -568,7 +561,6 @@ pub struct LinearPublishRequest {
 
 /// Status of a single published task in the response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearPublishResult {
     pub task_id: String,
     pub issue: Option<String>,
@@ -582,7 +574,6 @@ pub struct LinearPublishResult {
 
 /// Failure for a single entity during a partial publish.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearPublishFailure {
     pub entity_id: String,
     pub kind: LinearDraftEntityKind,
@@ -593,7 +584,6 @@ pub struct LinearPublishFailure {
 
 /// Response from `POST /api/v1/planning/publish`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct LinearPublishResponse {
     pub schema_version: SchemaVersion,
     pub draft_id: String,

@@ -447,17 +447,17 @@ function renderPublishTab(state: PlanningWorkspaceState): string {
     return `
       <div class="os-section-head"><h3>Publish Result</h3></div>
       <div class="os-plan-validation-row ${statusClass}">Status: ${escapeHtml(publishResponse.status)}</div>
-      <div class="os-plan-validation-row os-plan-validation-info">Wave: ${escapeHtml(receipt.planning_wave)} • Project: ${escapeHtml(receipt.linear_project)} • Published at ${escapeHtml(receipt.published_at)}</div>
+      <div class="os-plan-validation-row os-plan-validation-info">Wave: ${escapeHtml(receipt.planningWave)} • Project: ${escapeHtml(receipt.linearProject)} • Published at ${escapeHtml(receipt.publishedAt)}</div>
       <div class="os-planning-actions">
         <button type="button" data-plan-generate-draft>New Draft</button>
       </div>
       ${receipt.milestones.length ? `
         <div class="os-section-head"><h4>Milestones</h4></div>
-        <ul class="os-plan-checklist">${receipt.milestones.map((m) => `<li>${escapeHtml(m.name)} <code>${escapeHtml(m.milestone_id)}</code></li>`).join("")}</ul>
+        <ul class="os-plan-checklist">${receipt.milestones.map((m) => `<li>${escapeHtml(m.name)} <code>${escapeHtml(m.milestoneId)}</code></li>`).join("")}</ul>
       ` : ""}
       ${receipt.tasks.length ? `
         <div class="os-section-head"><h4>Tasks</h4></div>
-        <ul class="os-plan-checklist">${receipt.tasks.map((t) => `<li>${escapeHtml(t.task_id)} → ${escapeHtml(t.issue)} <code>${escapeHtml(t.issue_id)}</code></li>`).join("")}</ul>
+        <ul class="os-plan-checklist">${receipt.tasks.map((t) => `<li>${escapeHtml(t.taskId)} → ${escapeHtml(t.issue)} <code>${escapeHtml(t.issueId)}</code></li>`).join("")}</ul>
       ` : ""}
       ${failures ? `<div class="os-section-head"><h4>Failures</h4></div>${failures}` : ""}
     `;
