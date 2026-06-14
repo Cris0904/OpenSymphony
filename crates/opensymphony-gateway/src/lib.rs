@@ -66,10 +66,7 @@ pub use crate::opensymphony_gateway_schema::{
         ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget, ExpectedFollowup,
         PermissionResult,
     },
-    approval::{
-        ApprovalActor, ApprovalKind, ApprovalRequest, ApprovalRiskSummary, ApprovalStatus,
-        ApprovalTargetContext,
-    },
+    approval::{ApprovalRequest},
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
     cursor::PageCursor,
     event_journal::{EventPage as GatewayEventPage, JournalError as EventJournalError},
@@ -85,9 +82,7 @@ pub use crate::opensymphony_gateway_schema::{
         SnapshotEventSummary,
     },
     task_graph::{DiffSummary, TaskGraphRuntimeOverlay, TaskGraphSnapshot, TaskGraphStateCategory},
-    validation::{
-        RunValidationSummary, ValidationCommand, ValidationEvidenceItem, ValidationStatus,
-    },
+    validation::{RunValidationSummary, ValidationStatus},
     version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
 };
 
@@ -1789,7 +1784,7 @@ async fn get_run_detail(
             blocker: issue.blocked.then(|| "Blocked by dependency".into()),
             error: None,
             allowed_actions: allowed_actions_for_issue(issue),
-            liveness: Some(build_liveness(issue, &envelope)),
+            liveness: Some(build_liveness(issue)),
             diagnostics: Some(RunDiagnostics {
                 harness_scheduler_disagreement: None,
                 cancel_acknowledged: issue.cancel_acknowledged,
@@ -1936,11 +1931,10 @@ async fn get_run_diffs(
             // choke on `@@ -1,0 +1,N @@` or `@@ -1,N +1,0 @@`.
             let old_start = if fc.lines_removed > 0 { 1 } else { 0 };
             let new_start = if fc.lines_added > 0 { 1 } else { 0 };
-            let path = sanitize_file_path(&workspace_root, &fc.path);
             DiffHunk {
                 header: format!(
-                    "@@ -{},{} +{},{} @@ {}",
-                    old_start, fc.lines_removed, new_start, fc.lines_added, path
+                    "@@ -{},{} +{},{} @@",
+                    old_start, fc.lines_removed, new_start, fc.lines_added
                 ),
                 start_line: if fc.lines_removed > 0 { 1 } else { 0 },
                 old_line_count: fc.lines_removed,
@@ -1991,7 +1985,7 @@ async fn get_run_validation(
                     schema_version: SchemaVersion::v1(),
                     run_id,
                     generated_at: Utc::now(),
-                    overall_status: ValidationStatus::Pending,
+                    overall_status: ValidationStatus::Error,
                     commands: Vec::new(),
                     evidence: Vec::new(),
                 }),
@@ -2001,34 +1995,6 @@ async fn get_run_validation(
 
     let overall_status = validation_status_for_issue(issue);
 
-    let validation_status = build_runtime_overlay(issue).validation_status;
-
-    let commands = if issue.modified_files.is_empty() {
-        Vec::new()
-    } else {
-        vec![ValidationCommand {
-            command_id: "placeholder".to_owned(),
-            command: "validate".to_owned(),
-            status: overall_status,
-            exit_code: None,
-            stdout_summary: None,
-            stderr_summary: None,
-        }]
-    };
-
-    let evidence_summary = validation_status
-        .map(|status| status.to_string())
-        .unwrap_or_else(|| format!("Overall status: {overall_status}"));
-    let evidence = vec![ValidationEvidenceItem {
-        evidence_id: "ev-1".to_owned(),
-        label: "Validation status".to_owned(),
-        status: overall_status,
-        summary: evidence_summary,
-        file_path: None,
-        line_number: None,
-        action_triggered: None,
-    }];
-
     (
         StatusCode::OK,
         Json(RunValidationSummary {
@@ -2036,8 +2002,8 @@ async fn get_run_validation(
             run_id: issue.identifier.clone(),
             generated_at: Utc::now(),
             overall_status,
-            commands,
-            evidence,
+            commands: Vec::new(),
+            evidence: Vec::new(),
         }),
     )
 }
@@ -2070,7 +2036,6 @@ async fn get_run_approvals(
     AxumPath(run_id): AxumPath<String>,
 ) -> impl IntoResponse {
     let envelope = store.current().await;
-    let run_id_clone = run_id.clone();
     let issue = match find_issue_snapshot(&envelope, &run_id) {
         Some(issue) => issue,
         None => {
@@ -2084,60 +2049,11 @@ async fn get_run_approvals(
         }
     };
 
-    if issue.modified_files.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(ApprovalListPage {
-                run_id: issue.identifier.clone(),
-                approvals: Vec::new(),
-            }),
-        );
-    }
-
-    let risk_level = if issue.cancel_failed {
-        "high".to_owned()
-    } else if issue.detached {
-        "medium".to_owned()
-    } else {
-        "low".to_owned()
-    };
-
-    let approval = ApprovalRequest {
-        schema_version: SchemaVersion::v1(),
-        approval_id: format!("approval-{}", issue.identifier),
-        run_id: run_id_clone,
-        issue_id: issue.identifier.clone(),
-        kind: ApprovalKind::FileWrite,
-        title: "Pending changes review".to_owned(),
-        description: "Approve pending changes for this run.".to_owned(),
-        proposed_action: None,
-        actor: Some(ApprovalActor {
-            actor_id: "agent".to_owned(),
-            actor_kind: "agent".to_owned(),
-            display_name: Some("OpenHands Agent".to_owned()),
-        }),
-        target_context: Some(ApprovalTargetContext {
-            file_path: issue.modified_files.first().map(|fc| fc.path.clone()),
-            command: None,
-            issue_identifier: Some(issue.identifier.clone()),
-            run_id: Some(issue.identifier.clone()),
-        }),
-        risk_summary: Some(ApprovalRiskSummary {
-            level: risk_level,
-            reasons: vec!["automated risk assessment from runtime state".to_owned()],
-        }),
-        requested_at: Utc::now(),
-        expires_at: None,
-        status: ApprovalStatus::Pending,
-        correlation_id: format!("corr-approval-{}", issue.identifier),
-        decided_at: None,
-    };
-
     (
         StatusCode::OK,
         Json(ApprovalListPage {
             run_id: issue.identifier.clone(),
-            approvals: vec![approval],
+            approvals: Vec::new(),
         }),
     )
 }
@@ -2317,24 +2233,29 @@ fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
     use ControlPlaneIssueRuntimeState as State;
     use ControlPlaneWorkerOutcome as Outcome;
 
-    let (retry, cancel, rehydrate, detach) = match issue.runtime_state {
-        State::Idle => (false, false, false, false),
-        State::Running => (false, true, false, true),
-        State::Paused => (false, true, false, true),
-        State::RetryQueued => (false, false, false, false),
-        State::Releasing => (false, false, false, false),
+    let (retry, cancel, rehydrate) = match issue.runtime_state {
+        State::Idle => (false, false, false),
+        State::Running => (false, true, false),
+        State::Paused => (false, true, false),
+        State::RetryQueued => (false, false, false),
+        State::Releasing => (false, false, false),
         State::Completed => {
             let safe_rehydrate = matches!(
                 issue.last_outcome,
                 Outcome::Completed | Outcome::Failed | Outcome::Canceled
             );
-            (true, false, safe_rehydrate, false)
+            (true, false, safe_rehydrate)
         }
         State::Failed => {
             let safe_rehydrate = matches!(issue.last_outcome, Outcome::Failed | Outcome::Canceled);
-            (true, false, safe_rehydrate, false)
+            (true, false, safe_rehydrate)
         }
     };
+
+    // Detach is only safe when the run is already in a non-healthy stream state
+    // (stalled, degraded, or detached) and not already detached.
+    let stream = build_liveness(issue).stream;
+    let detach = !matches!(stream, RunStreamLiveness::Healthy) && !issue.detached;
 
     SafeActions {
         retry,
@@ -2344,10 +2265,7 @@ fn safe_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> SafeActions {
     }
 }
 
-fn build_liveness(
-    issue: &ControlPlaneIssueSnapshot,
-    _envelope: &SnapshotEnvelope,
-) -> RunLivenessEnvelope {
+fn build_liveness(issue: &ControlPlaneIssueSnapshot) -> RunLivenessEnvelope {
     let phase = match issue.runtime_state {
         ControlPlaneIssueRuntimeState::Running => RunPhase::Active,
         ControlPlaneIssueRuntimeState::Paused => RunPhase::Quiet,
