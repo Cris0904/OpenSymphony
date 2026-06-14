@@ -2084,6 +2084,16 @@ async fn get_run_approvals(
         }
     };
 
+    if issue.modified_files.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(ApprovalListPage {
+                run_id: issue.identifier.clone(),
+                approvals: Vec::new(),
+            }),
+        );
+    }
+
     let risk_level = if issue.cancel_failed {
         "high".to_owned()
     } else if issue.detached {
@@ -2352,7 +2362,12 @@ fn build_liveness(
     } else if issue.cancel_failed {
         RunStreamLiveness::Degraded
     } else {
-        RunStreamLiveness::Healthy
+        // Active/quiet/completed phases are healthy by default; any other phase
+        // (retry queued, stalled, etc.) lacks a live stream, so report stalled.
+        match phase {
+            RunPhase::Active | RunPhase::Quiet | RunPhase::Completed => RunStreamLiveness::Healthy,
+            _ => RunStreamLiveness::Stalled,
+        }
     };
     let latest = if issue.recent_events.is_empty() {
         None
