@@ -16,7 +16,8 @@ export type ActionKind =
   | "task_graph_issue"
   | "task_graph_sub_issue"
   | "task_graph_relation"
-  | "task_graph_evidence";
+  | "task_graph_evidence"
+  | "update_node";
 
 export interface ActionTarget {
   entity_kind: EntityKind;
