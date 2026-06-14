@@ -2632,7 +2632,10 @@ mod tests {
         assert!(safe.cancel);
         assert!(!safe.retry);
         assert!(!safe.rehydrate);
-        assert!(!safe.detach, "detach must be unsafe on a healthy running issue");
+        assert!(
+            !safe.detach,
+            "detach must be unsafe on a healthy running issue"
+        );
     }
 
     #[test]
@@ -2646,7 +2649,10 @@ mod tests {
             },
         );
         let safe = safe_actions_for_issue(&issue);
-        assert!(safe.detach, "detach must be safe when the stream is stalled");
+        assert!(
+            safe.detach,
+            "detach must be safe when the stream is stalled"
+        );
         assert!(!safe.cancel);
         assert!(!safe.retry);
     }
@@ -2662,7 +2668,10 @@ mod tests {
             },
         );
         let safe = safe_actions_for_issue(&issue);
-        assert!(!safe.detach, "detach must be unsafe when the issue is already detached");
+        assert!(
+            !safe.detach,
+            "detach must be unsafe when the issue is already detached"
+        );
     }
 
     struct TestIssueFlags {
