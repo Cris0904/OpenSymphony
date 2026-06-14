@@ -107,6 +107,22 @@ class DesktopTransportAdapter implements TauriTransportAdapter {
     return this.inner.terminalJumpToEvent(runId, terminalId, eventId);
   }
 
+  runFiles(runId: string): ReturnType<GatewayTransport["runFiles"]> {
+    return this.inner.runFiles(runId);
+  }
+
+  runDiffs(runId: string, filePath?: string): ReturnType<GatewayTransport["runDiffs"]> {
+    return this.inner.runDiffs(runId, filePath);
+  }
+
+  runApprovals(runId: string): ReturnType<GatewayTransport["runApprovals"]> {
+    return this.inner.runApprovals(runId);
+  }
+
+  runValidation(runId: string): ReturnType<GatewayTransport["runValidation"]> {
+    return this.inner.runValidation(runId);
+  }
+
   events(
     fromCursor?: Parameters<GatewayTransport["events"]>[0],
   ): ReturnType<GatewayTransport["events"]> {
