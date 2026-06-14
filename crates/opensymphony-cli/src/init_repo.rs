@@ -9,7 +9,7 @@ use std::{
 
 use super::memory_init_summary::record_memory_init_changes;
 use crate::opensymphony_memory::ensure_memory_initialized;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
 use thiserror::Error;
@@ -39,8 +39,188 @@ const AGENTS_EXAMPLE_PATH: &str = "AGENTS-example.md";
 const WORKFLOW_PROJECT_SLUG_PLACEHOLDER: &str = "\"YOUR-PROJECT-SLUG\"";
 const WORKFLOW_GIT_REMOTE_PLACEHOLDER: &str = "https://github.com/YOUR-ORG/YOUR-REPO.git";
 
-#[derive(Debug, Args, Clone)]
-pub struct InitArgs {}
+#[derive(Debug, Args, Clone, Default)]
+pub struct InitArgs {
+    #[arg(
+        long,
+        help = "Run without interactive prompts; missing required choices fail fast"
+    )]
+    non_interactive: bool,
+    #[arg(
+        long,
+        help = "Scaffold automated OpenHands AI PR review without prompting"
+    )]
+    ai_pr_review: bool,
+    #[arg(
+        long,
+        value_name = "SLUG",
+        help = "Linear project slug/key to write into WORKFLOW.md"
+    )]
+    linear_project_slug: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "POLICY",
+        help = "How non-interactive init handles existing generated files"
+    )]
+    conflict_policy: Option<InitConflictPolicy>,
+    #[arg(
+        long,
+        help = "Commit and push generated bootstrap files when git preflight allows it"
+    )]
+    commit_and_push: bool,
+    #[arg(
+        long,
+        help = "Configure GitHub Actions variables, secret, and review label with gh"
+    )]
+    configure_github: bool,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "KIND",
+        help = "AI review provider kind for scaffolded PR review"
+    )]
+    ai_review_provider_kind: Option<AiReviewProviderKindArg>,
+    #[arg(long, value_name = "MODEL", help = "AI review model id")]
+    ai_review_model_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "AI review base URL for openai-compatible providers"
+    )]
+    ai_review_base_url: Option<String>,
+    #[arg(long, value_name = "STYLE", help = "AI review style")]
+    ai_review_style: Option<String>,
+    #[arg(
+        long,
+        value_name = "BOOL",
+        help = "Whether AI review findings should require evidence"
+    )]
+    ai_review_require_evidence: Option<bool>,
+    #[arg(
+        long,
+        value_name = "ENV_VAR",
+        help = "Read the AI review GitHub secret value from this environment variable"
+    )]
+    ai_review_secret_env: Option<String>,
+    #[arg(
+        long,
+        help = "Reuse LLM_API_KEY as the AI review GitHub secret when configuring gh"
+    )]
+    reuse_llm_api_key_for_ai_review_secret: bool,
+    #[arg(
+        long,
+        help = "Leave the AI review GitHub secret unchanged when configuring gh"
+    )]
+    skip_ai_review_secret: bool,
+    #[arg(
+        long,
+        value_name = "MODEL",
+        help = "Model shown in the LLM_MODEL export snippet when LLM_MODEL is unset"
+    )]
+    llm_model: Option<String>,
+    #[arg(
+        long,
+        value_name = "PLACEHOLDER",
+        help = "Placeholder shown in the LLM_API_KEY export snippet when LLM_API_KEY is unset"
+    )]
+    llm_api_key_placeholder: Option<String>,
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "Base URL shown in the LLM_BASE_URL export snippet when LLM_BASE_URL is unset"
+    )]
+    llm_base_url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum InitConflictPolicy {
+    Skip,
+    Overwrite,
+    Abort,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum AiReviewProviderKindArg {
+    OpenaiCompatible,
+    LitellmNative,
+}
+
+impl AiReviewProviderKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiCompatible => "openai-compatible",
+            Self::LitellmNative => "litellm-native",
+        }
+    }
+}
+
+impl InitArgs {
+    fn validate(&self) -> Result<(), InitCommandError> {
+        let secret_sources = [
+            self.ai_review_secret_env.is_some(),
+            self.reuse_llm_api_key_for_ai_review_secret,
+            self.skip_ai_review_secret,
+        ]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count();
+        if secret_sources > 1 {
+            return Err(InitCommandError::InvalidArgument(
+                "choose only one of --ai-review-secret-env, --reuse-llm-api-key-for-ai-review-secret, or --skip-ai-review-secret"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn ai_pr_review_requested_by_flags(&self) -> bool {
+        self.ai_pr_review
+            || self.configure_github
+            || self.ai_review_provider_kind.is_some()
+            || self.ai_review_model_id.is_some()
+            || self.ai_review_base_url.is_some()
+            || self.ai_review_style.is_some()
+            || self.ai_review_require_evidence.is_some()
+            || self.ai_review_secret_env.is_some()
+            || self.reuse_llm_api_key_for_ai_review_secret
+            || self.skip_ai_review_secret
+    }
+
+    fn ai_review_config_from_flags(&self) -> AiReviewConfig {
+        let provider_kind = self
+            .ai_review_provider_kind
+            .map(AiReviewProviderKindArg::as_str)
+            .unwrap_or(DEFAULT_AI_REVIEW_PROVIDER_KIND)
+            .to_string();
+        let base_url = if provider_kind == "openai-compatible" {
+            Some(
+                self.ai_review_base_url
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_AI_REVIEW_BASE_URL.to_string()),
+            )
+        } else {
+            None
+        };
+
+        AiReviewConfig {
+            provider_kind,
+            model_id: self
+                .ai_review_model_id
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AI_REVIEW_MODEL_ID.to_string()),
+            base_url,
+            style: self
+                .ai_review_style
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AI_REVIEW_STYLE.to_string()),
+            require_evidence: self
+                .ai_review_require_evidence
+                .unwrap_or(DEFAULT_AI_REVIEW_REQUIRE_EVIDENCE == "true"),
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub(crate) enum InitCommandError {
@@ -112,6 +292,21 @@ pub(crate) enum InitCommandError {
     PromptIo(#[source] io::Error),
     #[error("input closed while waiting for a response")]
     PromptClosed,
+    #[error(
+        "non-interactive init cannot prompt for `{prompt}`; pass the relevant init flag or run without --non-interactive"
+    )]
+    NonInteractivePrompt { prompt: String },
+    #[error(
+        "non-interactive init requires {decision}; pass {flag} or run without --non-interactive"
+    )]
+    NonInteractiveMissing {
+        decision: String,
+        flag: &'static str,
+    },
+    #[error("missing environment variable `{name}` required by {flag}")]
+    MissingEnvVar { name: String, flag: &'static str },
+    #[error("invalid init argument: {0}")]
+    InvalidArgument(String),
     #[error("initialization aborted")]
     AbortedByUser,
     #[error("failed to initialize project memory: {0}")]
@@ -244,6 +439,7 @@ impl EnvLookup for ProcessEnvironment {
 struct PromptUi<R, W> {
     reader: R,
     writer: W,
+    allow_prompts: bool,
 }
 
 impl<R, W> PromptUi<R, W>
@@ -252,7 +448,15 @@ where
     W: Write,
 {
     fn new(reader: R, writer: W) -> Self {
-        Self { reader, writer }
+        Self {
+            reader,
+            writer,
+            allow_prompts: true,
+        }
+    }
+
+    fn set_allow_prompts(&mut self, allow_prompts: bool) {
+        self.allow_prompts = allow_prompts;
     }
 
     fn line(&mut self, message: impl AsRef<str>) -> Result<(), InitCommandError> {
@@ -264,6 +468,12 @@ where
     }
 
     fn prompt(&mut self, prompt: &str) -> Result<String, InitCommandError> {
+        if !self.allow_prompts {
+            return Err(InitCommandError::NonInteractivePrompt {
+                prompt: prompt.trim().to_string(),
+            });
+        }
+
         write!(self.writer, "{prompt}").map_err(InitCommandError::PromptIo)?;
         self.writer.flush().map_err(InitCommandError::PromptIo)?;
 
@@ -346,20 +556,33 @@ where
     W: Write,
     E: EnvLookup,
 {
-    let _ = args;
+    args.validate()?;
+    ui.set_allow_prompts(!args.non_interactive);
 
     let target_repo = env::current_dir().map_err(InitCommandError::CurrentDir)?;
     ui.line(format!(
         "Initializing OpenSymphony files in {}",
         target_repo.display()
     ))?;
-    let enable_ai_pr_review = prompt_yes_no(
-        ui,
-        "Also scaffold automated OpenHands AI PR review? [y/N]: ",
-        false,
-    )?;
+    let enable_ai_pr_review = if args.ai_pr_review_requested_by_flags() {
+        true
+    } else if args.non_interactive {
+        false
+    } else {
+        prompt_yes_no(
+            ui,
+            "Also scaffold automated OpenHands AI PR review? [y/N]: ",
+            false,
+        )?
+    };
     let ai_review_config = if enable_ai_pr_review {
-        Some(prompt_ai_review_config(ui)?)
+        Some(
+            if args.non_interactive || args.ai_pr_review_requested_by_flags() {
+                args.ai_review_config_from_flags()
+            } else {
+                prompt_ai_review_config(ui)?
+            },
+        )
     } else {
         None
     };
@@ -378,7 +601,7 @@ where
         fetched_assets.extend(generated_ai_review_assets());
     }
     let mut planned_assets = plan_assets(&target_repo, fetched_assets)?;
-    resolve_conflicts(&mut planned_assets, ui)?;
+    resolve_conflicts(&mut planned_assets, ui, &args)?;
 
     let workflow_will_change = planned_assets.iter().any(|planned| {
         planned.asset.kind == AssetKind::Workflow
@@ -409,10 +632,21 @@ where
     }
 
     let linear_project_slug = if workflow_will_change {
-        let response =
-            ui.prompt("Enter your Linear project slug/key (leave blank to set it later): ")?;
-        let response = response.trim();
-        (!response.is_empty()).then(|| response.to_owned())
+        if let Some(slug) = args
+            .linear_project_slug
+            .as_deref()
+            .map(str::trim)
+            .filter(|slug| !slug.is_empty())
+        {
+            Some(slug.to_string())
+        } else if args.non_interactive {
+            None
+        } else {
+            let response =
+                ui.prompt("Enter your Linear project slug/key (leave blank to set it later): ")?;
+            let response = response.trim();
+            (!response.is_empty()).then(|| response.to_owned())
+        }
     } else {
         None
     };
@@ -494,13 +728,13 @@ where
     }
 
     if let Some(config) = ai_review_config.as_ref() {
-        handle_ai_pr_review_setup(ui, env_lookup, &target_repo, &git_remote, config)?;
+        handle_ai_pr_review_setup(ui, env_lookup, &target_repo, &git_remote, config, &args)?;
     }
 
-    prompt_for_missing_llm_env(env_lookup, ui)?;
+    prompt_for_missing_llm_env(env_lookup, ui, &args)?;
 
     let changed_paths = changed_paths_for_commit(&created, &overwritten, &updated);
-    prompt_to_commit_and_push(ui, &target_repo, &git_remote, &changed_paths)?;
+    prompt_to_commit_and_push(ui, &target_repo, &git_remote, &changed_paths, &args)?;
 
     ui.blank_line()?;
     ui.line("OpenSymphony init complete.")?;
@@ -761,6 +995,7 @@ fn plan_agents_example_asset(
 fn resolve_conflicts<R, W>(
     planned_assets: &mut [PlannedAsset],
     ui: &mut PromptUi<R, W>,
+    args: &InitArgs,
 ) -> Result<(), InitCommandError>
 where
     R: BufRead,
@@ -773,6 +1008,22 @@ where
 
         let relative_path = Path::new(&planned.asset.path);
         let display_path = relative_path.display();
+
+        if let Some(policy) = args.conflict_policy {
+            planned.action = match policy {
+                InitConflictPolicy::Skip => PlannedAction::Skip,
+                InitConflictPolicy::Overwrite => PlannedAction::Overwrite,
+                InitConflictPolicy::Abort => return Err(InitCommandError::AbortedByUser),
+            };
+            continue;
+        }
+
+        if args.non_interactive {
+            return Err(InitCommandError::NonInteractiveMissing {
+                decision: format!("a conflict policy for existing `{display_path}`"),
+                flag: "--conflict-policy skip|overwrite|abort",
+            });
+        }
 
         loop {
             ui.blank_line()?;
@@ -875,6 +1126,7 @@ fn build_final_contents(
 fn prompt_for_missing_llm_env<R, W, E>(
     env_lookup: &E,
     ui: &mut PromptUi<R, W>,
+    args: &InitArgs,
 ) -> Result<(), InitCommandError>
 where
     R: BufRead,
@@ -884,34 +1136,52 @@ where
     let mut exports = Vec::new();
 
     if env_lookup.get("LLM_MODEL").is_none() {
-        let response = ui.prompt(&format!(
-            "LLM_MODEL is not set. Enter a model now, or press Enter to use `{DEFAULT_LLM_MODEL}`: "
-        ))?;
-        let value = match response.trim() {
-            "" => DEFAULT_LLM_MODEL.to_string(),
-            custom => custom.to_string(),
+        let value = if let Some(value) = args.llm_model.as_deref() {
+            value.trim().to_string()
+        } else if args.non_interactive {
+            DEFAULT_LLM_MODEL.to_string()
+        } else {
+            let response = ui.prompt(&format!(
+                "LLM_MODEL is not set. Enter a model now, or press Enter to use `{DEFAULT_LLM_MODEL}`: "
+            ))?;
+            match response.trim() {
+                "" => DEFAULT_LLM_MODEL.to_string(),
+                custom => custom.to_string(),
+            }
         };
         exports.push(("LLM_MODEL", value));
     }
 
     if env_lookup.get("LLM_API_KEY").is_none() {
-        let response = ui.prompt(
-            "LLM_API_KEY is not set. Press Enter to use the placeholder `<your-llm-api-key>` in the export snippet, or type a different placeholder label: ",
-        )?;
-        let value = match response.trim() {
-            "" => "<your-llm-api-key>".to_string(),
-            custom => custom.to_string(),
+        let value = if let Some(value) = args.llm_api_key_placeholder.as_deref() {
+            value.trim().to_string()
+        } else if args.non_interactive {
+            "<your-llm-api-key>".to_string()
+        } else {
+            let response = ui.prompt(
+                "LLM_API_KEY is not set. Press Enter to use the placeholder `<your-llm-api-key>` in the export snippet, or type a different placeholder label: ",
+            )?;
+            match response.trim() {
+                "" => "<your-llm-api-key>".to_string(),
+                custom => custom.to_string(),
+            }
         };
         exports.push(("LLM_API_KEY", value));
     }
 
     if env_lookup.get("LLM_BASE_URL").is_none() {
-        let response = ui.prompt(&format!(
-            "LLM_BASE_URL is not set. Enter a base URL now, or press Enter to use `{DEFAULT_LLM_BASE_URL}`: "
-        ))?;
-        let value = match response.trim() {
-            "" => DEFAULT_LLM_BASE_URL.to_string(),
-            custom => custom.to_string(),
+        let value = if let Some(value) = args.llm_base_url.as_deref() {
+            value.trim().to_string()
+        } else if args.non_interactive {
+            DEFAULT_LLM_BASE_URL.to_string()
+        } else {
+            let response = ui.prompt(&format!(
+                "LLM_BASE_URL is not set. Enter a base URL now, or press Enter to use `{DEFAULT_LLM_BASE_URL}`: "
+            ))?;
+            match response.trim() {
+                "" => DEFAULT_LLM_BASE_URL.to_string(),
+                custom => custom.to_string(),
+            }
         };
         exports.push(("LLM_BASE_URL", value));
     }
@@ -949,6 +1219,7 @@ fn prompt_to_commit_and_push<R, W>(
     target_repo: &Path,
     git_remote: &GitRemoteDetection,
     changed_paths: &[String],
+    args: &InitArgs,
 ) -> Result<(), InitCommandError>
 where
     R: BufRead,
@@ -1002,13 +1273,24 @@ where
         }
     }
 
-    if !prompt_yes_no(
-        ui,
-        &format!(
-            "Commit and push these OpenSymphony bootstrap changes to `{remote_name}/{branch_name}` now? [y/N]: "
-        ),
-        false,
-    )? {
+    let should_commit_and_push = if args.commit_and_push {
+        true
+    } else if args.non_interactive {
+        ui.line(
+            "Skipped automatic commit/push. Pass `--commit-and-push` to perform it during non-interactive init.",
+        )?;
+        false
+    } else {
+        prompt_yes_no(
+            ui,
+            &format!(
+                "Commit and push these OpenSymphony bootstrap changes to `{remote_name}/{branch_name}` now? [y/N]: "
+            ),
+            false,
+        )?
+    };
+
+    if !should_commit_and_push {
         ui.line(
             "Skipped commit/push for now. Before starting story work, commit and push the generated OpenSymphony files.",
         )?;
@@ -1360,6 +1642,7 @@ fn handle_ai_pr_review_setup<R, W, E>(
     target_repo: &Path,
     git_remote: &GitRemoteDetection,
     config: &AiReviewConfig,
+    args: &InitArgs,
 ) -> Result<(), InitCommandError>
 where
     R: BufRead,
@@ -1403,19 +1686,27 @@ where
         }
     }
 
-    if !prompt_yes_no(
-        ui,
-        &format!(
-            "Configure GitHub Actions variables, the optional secret, and the `{AI_REVIEW_LABEL_NAME}` label for `{repo_slug}` now with `gh`? [Y/n]: "
-        ),
-        true,
-    )? {
+    let configure_github = if args.configure_github {
+        true
+    } else if args.non_interactive {
+        false
+    } else {
+        prompt_yes_no(
+            ui,
+            &format!(
+                "Configure GitHub Actions variables, the optional secret, and the `{AI_REVIEW_LABEL_NAME}` label for `{repo_slug}` now with `gh`? [Y/n]: "
+            ),
+            true,
+        )?
+    };
+
+    if !configure_github {
         ui.line("Skipped GitHub automation for now.")?;
         print_ai_review_setup_links(ui)?;
         return Ok(());
     }
 
-    let secret_value = prompt_ai_review_secret(ui, env_lookup)?;
+    let secret_value = resolve_ai_review_secret(ui, env_lookup, args)?;
     match configure_ai_review_with_gh(target_repo, &repo_slug, config, secret_value.as_deref()) {
         Ok(result) => {
             ui.line(format!(
@@ -1446,6 +1737,54 @@ where
 
     print_ai_review_setup_links(ui)?;
     Ok(())
+}
+
+fn resolve_ai_review_secret<R, W, E>(
+    ui: &mut PromptUi<R, W>,
+    env_lookup: &E,
+    args: &InitArgs,
+) -> Result<Option<String>, InitCommandError>
+where
+    R: BufRead,
+    W: Write,
+    E: EnvLookup,
+{
+    if let Some(env_name) = args
+        .ai_review_secret_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return env_lookup
+            .get(env_name)
+            .map(Some)
+            .ok_or_else(|| InitCommandError::MissingEnvVar {
+                name: env_name.to_string(),
+                flag: "--ai-review-secret-env",
+            });
+    }
+
+    if args.reuse_llm_api_key_for_ai_review_secret {
+        return env_lookup.get("LLM_API_KEY").map(Some).ok_or_else(|| {
+            InitCommandError::MissingEnvVar {
+                name: "LLM_API_KEY".to_string(),
+                flag: "--reuse-llm-api-key-for-ai-review-secret",
+            }
+        });
+    }
+
+    if args.skip_ai_review_secret {
+        return Ok(None);
+    }
+
+    if args.non_interactive {
+        return Err(InitCommandError::NonInteractiveMissing {
+            decision: format!("an AI review secret choice for `{DEFAULT_AI_REVIEW_SECRET_NAME}`"),
+            flag: "--ai-review-secret-env, --reuse-llm-api-key-for-ai-review-secret, or --skip-ai-review-secret",
+        });
+    }
+
+    prompt_ai_review_secret(ui, env_lookup)
 }
 
 fn prompt_ai_review_secret<R, W, E>(
@@ -1823,7 +2162,7 @@ mod tests {
 
     use super::{
         DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS,
-        GitRemoteDetection, PromptUi, comparable_text, custom_codereview_guide_contents,
+        GitRemoteDetection, InitArgs, PromptUi, comparable_text, custom_codereview_guide_contents,
         customize_workflow, git_remote_url, github_repo_slug_from_remote,
         normalize_github_repo_slug, prompt_ai_review_config, prompt_for_missing_llm_env,
         prompt_yes_no, select_remote_name, shell_single_quote, template_fetch_timeout_from_env,
@@ -2010,7 +2349,8 @@ hooks:
         let mut output = Vec::new();
         let mut ui = PromptUi::new(&b"\n\n\n"[..], &mut output);
 
-        prompt_for_missing_llm_env(&env, &mut ui).expect("prompt should succeed");
+        prompt_for_missing_llm_env(&env, &mut ui, &InitArgs::default())
+            .expect("prompt should succeed");
 
         let rendered = String::from_utf8(output).expect("prompt output should be utf-8");
         assert!(rendered.contains("LLM_MODEL is not set."));

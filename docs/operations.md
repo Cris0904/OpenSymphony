@@ -47,10 +47,49 @@ Important `init` behavior:
 - prompts whether to commit and push the generated OpenSymphony files; when
   accepted, it stages only files it wrote, commits `chore: bootstrap
   OpenSymphony`, and pushes `HEAD` to the detected remote
+- supports `--non-interactive` for automation; pass explicit flags for prompt
+  decisions and unresolved existing-file conflicts fail before any files are
+  written
 - copies `.agents/skills/` recursively so helper scripts, query files, and
   reference docs all arrive together
 - keeps bootstrap guidance in CLI output and the central OpenSymphony docs
   instead of copying `docs/` files into the target repository
+
+Automation-friendly target repo provisioning can run without stdin prompts:
+
+```bash
+cargo install opensymphony
+opensymphony install openhands
+
+cd /path/to/target-repo
+opensymphony init \
+  --non-interactive \
+  --linear-project-slug my-linear-project \
+  --conflict-policy overwrite \
+  --commit-and-push
+```
+
+For scripts that scaffold AI PR review too, add the review flags explicitly:
+
+```bash
+opensymphony init \
+  --non-interactive \
+  --ai-pr-review \
+  --configure-github \
+  --ai-review-provider-kind openai-compatible \
+  --ai-review-model-id accounts/fireworks/models/glm-5p1 \
+  --ai-review-base-url https://api.fireworks.ai/inference/v1 \
+  --ai-review-require-evidence true \
+  --ai-review-secret-env LLM_API_KEY \
+  --linear-project-slug my-linear-project \
+  --conflict-policy overwrite
+```
+
+If `--configure-github` is omitted, init still writes the AI PR review files
+when `--ai-pr-review` is present, but it prints the manual `gh` commands instead
+of mutating repository variables, secrets, or labels. If a non-interactive run
+finds an existing generated file and `--conflict-policy` was not supplied, it
+fails before applying the template.
 
 For already-initialized repositories, `opensymphony update` is the fast
 maintenance path:

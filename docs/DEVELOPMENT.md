@@ -221,9 +221,24 @@ Important rule:
 - keep `opensymphony update` aligned with the same recursive copy rule so
   existing target repos can refresh the template-managed skill tree without
   rerunning the full bootstrap flow
+- keep `opensymphony init --non-interactive` aligned with the interactive
+  bootstrap flow. Every prompt-driven decision should have an explicit flag,
+  and unresolved file conflicts must fail before writing.
 
 When you change shared target-repo assets, update the template first and then
 make sure the `init` and `update` flows still copy the full tree.
+
+Provisioning scripts can initialize a target repo without stdin prompts:
+
+```bash
+opensymphony init \
+  --non-interactive \
+  --linear-project-slug my-linear-project \
+  --conflict-policy overwrite \
+  --commit-and-push
+```
+
+Use `cargo test-system-duckdb --test init` after changing the init flow.
 
 ## Linear development rules
 

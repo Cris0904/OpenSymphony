@@ -150,6 +150,90 @@ async fn init_uses_template_memory_skill_when_template_provides_it() {
 }
 
 #[tokio::test]
+async fn init_non_interactive_succeeds_with_flags_and_closed_stdin() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+
+    let mut child = spawn_init_child(
+        repo.path(),
+        server.base_url(),
+        &["--non-interactive", "--linear-project-slug", "demo-project"],
+    );
+    write_stdin(&mut child, "").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "non-interactive init should succeed: stdout={stdout}, stderr={stderr}",
+    );
+
+    let workflow =
+        fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should exist");
+    assert!(workflow.contains("project_slug: \"demo-project\""));
+    assert!(workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."));
+    assert!(
+        stdout.contains("Skipped automatic commit/push. Pass `--commit-and-push`"),
+        "non-interactive init should skip commit/push without prompting: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Also scaffold automated OpenHands AI PR review?"),
+        "non-interactive init should not print prompt text: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Enter your Linear project slug/key"),
+        "non-interactive init should not prompt for Linear slug: {stdout}",
+    );
+}
+
+#[tokio::test]
+async fn init_non_interactive_fails_before_writing_without_conflict_policy() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+    fs::write(repo.path().join("WORKFLOW.md"), "user workflow\n")
+        .expect("existing workflow should write");
+
+    let mut child = spawn_init_child(
+        repo.path(),
+        server.base_url(),
+        &["--non-interactive", "--linear-project-slug", "demo-project"],
+    );
+    write_stdin(&mut child, "").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "non-interactive init should fail on unresolved conflicts: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout
+            .contains("non-interactive init requires a conflict policy for existing `WORKFLOW.md`"),
+        "stdout should explain the missing automation flag: {stdout}",
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should still exist"),
+        "user workflow\n"
+    );
+    assert!(
+        !repo.path().join("AGENTS.md").exists(),
+        "no additional files should be written after non-interactive conflict failure",
+    );
+}
+
+#[tokio::test]
 async fn init_can_scaffold_ai_pr_review_and_print_fallback_commands_when_gh_cannot_access_repo() {
     let server = TemplateServer::start().await;
     let repo = TempDir::new().expect("temp repo should exist");
@@ -213,6 +297,72 @@ async fn init_can_scaffold_ai_pr_review_and_print_fallback_commands_when_gh_cann
     assert!(
         stdout.contains("`gh` could not access `example/demo`"),
         "stdout should explain why automation fell back to manual commands: {stdout}",
+    );
+}
+
+#[tokio::test]
+async fn init_non_interactive_scaffolds_ai_review_from_flags() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+
+    let mut child = spawn_init_child(
+        repo.path(),
+        server.base_url(),
+        &[
+            "--non-interactive",
+            "--ai-pr-review",
+            "--ai-review-provider-kind",
+            "litellm-native",
+            "--ai-review-model-id",
+            "custom-review-model",
+            "--ai-review-style",
+            "concise",
+            "--ai-review-require-evidence",
+            "false",
+            "--linear-project-slug",
+            "demo-project",
+        ],
+    );
+    write_stdin(&mut child, "").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "non-interactive AI review init should succeed: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        repo.path()
+            .join(".github/workflows/ai-pr-review.yml")
+            .is_file(),
+        "AI PR review workflow should be created"
+    );
+    assert!(
+        stdout.contains(
+            "gh variable set AI_REVIEW_PROVIDER_KIND -R example/demo --body 'litellm-native'"
+        ),
+        "stdout should use the provider flag in fallback commands: {stdout}",
+    );
+    assert!(
+        stdout.contains(
+            "gh variable set AI_REVIEW_MODEL_ID -R example/demo --body 'custom-review-model'"
+        ),
+        "stdout should use the model flag in fallback commands: {stdout}",
+    );
+    assert!(
+        stdout
+            .contains("gh variable set AI_REVIEW_REQUIRE_EVIDENCE -R example/demo --body 'false'"),
+        "stdout should use the evidence flag in fallback commands: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Configure the default AI PR review provider"),
+        "non-interactive AI review init should not prompt for provider settings: {stdout}",
     );
 }
 
