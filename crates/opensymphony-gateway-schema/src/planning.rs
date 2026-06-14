@@ -339,7 +339,12 @@ impl PlanningWave {
 // ─── Linear Publish Receipt ──────────────────────────────────────────────────
 
 /// Matches the structure of `docs/tasks/linear-publish.yaml`.
+///
+/// Serialized to JSON with camelCase keys so the HTTP API response matches the
+/// on-disk YAML format and the TypeScript contract (`planningWave`,
+/// `linearProject`, `publishedAt`, `milestoneId`, `taskId`, `issueId`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LinearPublishReceipt {
     pub planning_wave: String,
     pub linear_project: String,
@@ -350,6 +355,7 @@ pub struct LinearPublishReceipt {
 
 /// A milestone entry inside a publish receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishedMilestone {
     pub name: String,
     pub milestone_id: String,
@@ -357,6 +363,7 @@ pub struct PublishedMilestone {
 
 /// A task entry inside a publish receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublishedTask {
     pub task_id: String,
     pub issue: String,

@@ -705,7 +705,7 @@ fn build_entities(
                     LinearDraftOperation::Create => IssueOp::Create,
                     LinearDraftOperation::Update => IssueOp::Update,
                 },
-                idempotency_key: None,
+                idempotency_key: Some(format!("{correlation_id}-issue-{task_id}")),
                 team_id: team_id.clone(),
                 issue_id: existing_id,
                 title: title.clone(),
@@ -753,7 +753,7 @@ fn build_entities(
                 let payload = TaskGraphRelationRequest {
                     schema_version: SchemaVersion::default().to_string(),
                     correlation_id: correlation_id.clone(),
-                    idempotency_key: None,
+                    idempotency_key: Some(format!("{correlation_id}-relation-{blocker}-{task_id}")),
                     relation_type: "blocks".into(),
                     issue_id: blocker.clone(),
                     related_issue_id: task_id.to_string(),
@@ -795,7 +795,7 @@ fn build_entities(
         let payload = TaskGraphEvidenceRequest {
             schema_version: SchemaVersion::default().to_string(),
             correlation_id: correlation_id.clone(),
-            idempotency_key: None,
+            idempotency_key: Some(format!("{correlation_id}-comment-{task_id}")),
             issue_id: task_id.to_string(),
             body,
         };
