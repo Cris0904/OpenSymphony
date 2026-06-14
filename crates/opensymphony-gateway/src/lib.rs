@@ -1919,30 +1919,18 @@ async fn get_run_diffs(
         }
     };
 
-    // Build a summary hunk per changed file from the control-plane metadata.
-    // Full unified diff content is not yet available from the snapshot;
-    // the hunk header and line counts provide callers with change summaries.
-    let hunks: Vec<DiffHunk> = files
-        .iter()
-        .map(|fc| {
-            // Build a synthetic hunk header.  When a file is entirely new
-            // (0 lines removed) or entirely deleted (0 lines added), the
-            // header reflects the correct start,count pairs so parsers won't
-            // choke on `@@ -1,0 +1,N @@` or `@@ -1,N +1,0 @@`.
-            let old_start = if fc.lines_removed > 0 { 1 } else { 0 };
-            let new_start = if fc.lines_added > 0 { 1 } else { 0 };
-            DiffHunk {
-                header: format!(
-                    "@@ -{},{} +{},{} @@",
-                    old_start, fc.lines_removed, new_start, fc.lines_added
-                ),
-                start_line: if fc.lines_removed > 0 { 1 } else { 0 },
-                old_line_count: fc.lines_removed,
-                new_line_count: fc.lines_added,
-                lines: Vec::new(),
-            }
-        })
-        .collect();
+    // Build hunks per changed file. If the control-plane snapshot includes a
+    // unified diff string, parse it into real line-level hunks. Otherwise fall
+    // back to reading the workspace file for newly created files, or to a
+    // synthetic hunk with the line counts from the metadata.
+    let mut hunks: Vec<DiffHunk> = Vec::new();
+    for fc in &files {
+        if let Some(diff_text) = &fc.diff {
+            hunks.extend(parse_unified_diff(diff_text));
+        } else {
+            hunks.extend(build_fallback_hunks(fc, &workspace_root));
+        }
+    }
 
     let total_lines_added: u32 = files.iter().map(|f| f.lines_added).sum();
     let total_lines_removed: u32 = files.iter().map(|f| f.lines_removed).sum();
@@ -1969,6 +1957,140 @@ async fn get_run_diffs(
             total_lines_removed,
         }),
     )
+}
+
+/// Parse a unified diff string into line-level hunks. Handles the standard
+/// `@@ -old_start,old_len +new_start,new_len @@` header and ` ` / `+` / `-`
+/// prefixed lines. Lines such as `\ No newline at end of file` are ignored.
+fn parse_unified_diff(diff_text: &str) -> Vec<DiffHunk> {
+    let mut hunks = Vec::new();
+    let mut current_header: Option<String> = None;
+    let mut current_start_line = 0u32;
+    let mut current_old_count = 0u32;
+    let mut current_new_count = 0u32;
+    let mut current_lines: Vec<DiffLine> = Vec::new();
+
+    for line in diff_text.lines() {
+        if let Some((_old_start, old_count, new_start, new_count)) = parse_hunk_header(line) {
+            if let Some(header) = current_header.take() {
+                hunks.push(DiffHunk {
+                    header,
+                    start_line: current_start_line,
+                    old_line_count: current_old_count,
+                    new_line_count: current_new_count,
+                    lines: current_lines,
+                });
+            }
+            current_header = Some(line.to_owned());
+            current_start_line = new_start;
+            current_old_count = old_count;
+            current_new_count = new_count;
+            current_lines = Vec::new();
+        } else if current_header.is_some() {
+            if line.starts_with("\\ No newline") {
+                continue;
+            }
+            if line.is_empty() {
+                current_lines.push(DiffLine::Context {
+                    line: String::new(),
+                });
+                continue;
+            }
+            let (prefix, content) = line.split_at(1);
+            match prefix {
+                " " => current_lines.push(DiffLine::Context {
+                    line: content.to_owned(),
+                }),
+                "+" => current_lines.push(DiffLine::Addition {
+                    line: content.to_owned(),
+                }),
+                "-" => current_lines.push(DiffLine::Deletion {
+                    line: content.to_owned(),
+                }),
+                _ => {
+                    // Stray lines that do not belong to the hunk are ignored.
+                }
+            }
+        }
+    }
+
+    if let Some(header) = current_header.take() {
+        hunks.push(DiffHunk {
+            header,
+            start_line: current_start_line,
+            old_line_count: current_old_count,
+            new_line_count: current_new_count,
+            lines: current_lines,
+        });
+    }
+
+    hunks
+}
+
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let rest = line.strip_prefix("@@ -")?;
+    let old_range_end = rest.find(" +")?;
+    let old_range = &rest[..old_range_end];
+    let rest = &rest[old_range_end + " +".len()..];
+    let new_range_end = rest.find(" @@")?;
+    let new_range = &rest[..new_range_end];
+    let (old_start, old_count) = parse_range(old_range)?;
+    let (new_start, new_count) = parse_range(new_range)?;
+    Some((old_start, old_count, new_start, new_count))
+}
+
+fn parse_range(range: &str) -> Option<(u32, u32)> {
+    let mut parts = range.split(',');
+    let start = parts.next()?.parse::<u32>().ok()?;
+    let count = parts
+        .next()
+        .map(|s| s.parse::<u32>().ok())
+        .unwrap_or(Some(1))?;
+    Some((start, count))
+}
+
+/// Build a fallback hunk for a file when no unified diff string is present.
+/// For newly created files that exist in the workspace, the file content is
+/// returned as addition lines. For all other cases a synthetic hunk carrying
+/// the line counts from the control-plane metadata is returned.
+fn build_fallback_hunks(fc: &ControlPlaneFileChange, workspace_root: &str) -> Vec<DiffHunk> {
+    if fc.diff.is_none() && fc.change_kind == ControlPlaneFileChangeKind::Created {
+        let path = if StdPath::new(&fc.path).is_absolute() {
+            StdPath::new(&fc.path).to_path_buf()
+        } else {
+            StdPath::new(workspace_root).join(&fc.path)
+        };
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let new_count = lines.len() as u32;
+            let diff_lines = lines
+                .into_iter()
+                .map(|line| DiffLine::Addition {
+                    line: line.to_owned(),
+                })
+                .collect();
+            return vec![DiffHunk {
+                header: format!("@@ -0,0 +1,{} @@", new_count),
+                start_line: 1,
+                old_line_count: 0,
+                new_line_count: new_count,
+                lines: diff_lines,
+            }];
+        }
+    }
+
+    let old_start = if fc.lines_removed > 0 { 1 } else { 0 };
+    let new_start = if fc.lines_added > 0 { 1 } else { 0 };
+    vec![DiffHunk {
+        header: format!(
+            "@@ -{},{} +{},{} @@",
+            old_start, fc.lines_removed, new_start, fc.lines_added
+        ),
+        start_line: if fc.lines_removed > 0 { 1 } else { 0 },
+        old_line_count: fc.lines_removed,
+        new_line_count: fc.lines_added,
+        lines: Vec::new(),
+    }]
 }
 
 async fn get_run_validation(
@@ -2310,7 +2432,7 @@ fn build_liveness(issue: &ControlPlaneIssueSnapshot) -> RunLivenessEnvelope {
         None
     } else {
         issue.recent_events.last().map(|evt| RunProgress {
-            sequence: issue.recent_events.len() as u64,
+            sequence: evt.sequence,
             event_id: evt.event_id.clone(),
             happened_at: evt.happened_at,
             kind: evt.kind.clone(),

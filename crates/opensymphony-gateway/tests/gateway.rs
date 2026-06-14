@@ -19,6 +19,7 @@ use opensymphony::opensymphony_gateway_schema::action::{
     ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget,
 };
 use opensymphony::opensymphony_gateway_schema::envelope::EntityKind;
+use opensymphony::opensymphony_gateway_schema::run::DiffLine;
 use opensymphony::opensymphony_gateway_schema::validation::ValidationStatus;
 use tokio::net::TcpListener;
 use url::Url;
@@ -170,12 +171,14 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                         happened_at: now,
                         kind: "worker_started".to_owned(),
                         summary: "worker started".to_owned(),
+                        sequence: 1,
                     },
                     ConversationEvent {
                         event_id: "evt-2".to_owned(),
                         happened_at: now,
                         kind: "worker_completed".to_owned(),
                         summary: "worker completed".to_owned(),
+                        sequence: 2,
                     },
                 ],
                 modified_files: vec![
@@ -184,12 +187,30 @@ fn fixture_snapshot_rich(step: u64) -> DaemonSnapshot {
                         change_kind: FileChangeKind::Modified,
                         lines_added: 10,
                         lines_removed: 3,
+                        diff: Some(
+                            "@@ -1,3 +1,10 @@\n\
+                             -old line 1\n\
+                             -old line 2\n\
+                             -old line 3\n\
+                             +new line 1\n\
+                             +new line 2\n\
+                             +new line 3\n\
+                             +new line 4\n\
+                             +new line 5\n\
+                             +new line 6\n\
+                             +new line 7\n\
+                             +new line 8\n\
+                             +new line 9\n\
+                             +new line 10"
+                                .to_owned(),
+                        ),
                     },
                     FileChange {
                         path: "/tmp/opensymphony/COE-301/src/lib.rs".to_owned(),
                         change_kind: FileChangeKind::Created,
                         lines_added: 42,
                         lines_removed: 0,
+                        diff: None,
                     },
                 ],
                 input_tokens: 2048,
@@ -1723,6 +1744,23 @@ async fn gateway_serves_run_diffs_with_modified_files() {
     assert_eq!(response.hunks.len(), 2);
     assert_eq!(response.total_lines_added, 52);
     assert_eq!(response.total_lines_removed, 3);
+    // The first file has a real unified diff, so its hunk is populated with
+    // line-level additions and deletions instead of an empty placeholder.
+    let first_hunk = response.hunks.first().expect("first hunk");
+    assert_eq!(first_hunk.lines.len(), 13);
+    let added = first_hunk
+        .lines
+        .iter()
+        .filter(|l| matches!(l, DiffLine::Addition { .. }))
+        .count();
+    let removed = first_hunk
+        .lines
+        .iter()
+        .filter(|l| matches!(l, DiffLine::Deletion { .. }))
+        .count();
+    assert_eq!(added, 10);
+    assert_eq!(removed, 3);
+    assert_eq!(first_hunk.header, "@@ -1,3 +1,10 @@");
 
     server_task.abort();
 }

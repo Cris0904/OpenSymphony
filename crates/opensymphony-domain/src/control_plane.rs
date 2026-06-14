@@ -133,6 +133,11 @@ pub struct ControlPlaneConversationEvent {
     pub happened_at: DateTime<Utc>,
     pub kind: String,
     pub summary: String,
+    /// Monotonic sequence number assigned by the event producer. Used by the
+    /// gateway to report a stable ordering key even when the snapshot truncates
+    /// or reorders events.
+    #[serde(default)]
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -141,6 +146,10 @@ pub struct ControlPlaneFileChange {
     pub change_kind: ControlPlaneFileChangeKind,
     pub lines_added: u32,
     pub lines_removed: u32,
+    /// Optional unified diff text for the file. When present, the gateway will
+    /// parse it into line-level hunks instead of returning an empty summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
