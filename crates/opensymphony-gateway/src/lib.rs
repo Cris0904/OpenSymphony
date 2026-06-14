@@ -85,7 +85,9 @@ pub use crate::opensymphony_gateway_schema::{
         SnapshotEventSummary,
     },
     task_graph::{DiffSummary, TaskGraphRuntimeOverlay, TaskGraphSnapshot, TaskGraphStateCategory},
-    validation::{RunValidationSummary, ValidationCommand, ValidationEvidenceItem},
+    validation::{
+        RunValidationSummary, ValidationCommand, ValidationEvidenceItem, ValidationStatus,
+    },
     version::{GATEWAY_SCHEMA_VERSION, SchemaVersion},
 };
 
@@ -1989,7 +1991,7 @@ async fn get_run_validation(
                     schema_version: SchemaVersion::v1(),
                     run_id,
                     generated_at: Utc::now(),
-                    overall_status: ApprovalStatus::Pending,
+                    overall_status: ValidationStatus::Pending,
                     commands: Vec::new(),
                     evidence: Vec::new(),
                 }),
@@ -1997,18 +1999,7 @@ async fn get_run_validation(
         }
     };
 
-    let overall_status = if issue.cancel_failed {
-        ApprovalStatus::Failed
-    } else if issue.detached {
-        ApprovalStatus::Pending
-    } else {
-        match issue.last_outcome {
-            ControlPlaneWorkerOutcome::Completed => ApprovalStatus::Passed,
-            ControlPlaneWorkerOutcome::Failed => ApprovalStatus::Failed,
-            ControlPlaneWorkerOutcome::Canceled => ApprovalStatus::Failed,
-            _ => ApprovalStatus::Pending,
-        }
-    };
+    let overall_status = validation_status_for_issue(issue);
 
     let validation_status = build_runtime_overlay(issue).validation_status;
 
@@ -2027,7 +2018,7 @@ async fn get_run_validation(
 
     let evidence_summary = validation_status
         .map(|status| status.to_string())
-        .unwrap_or_else(|| format!("Overall status: {overall_status:?}"));
+        .unwrap_or_else(|| format!("Overall status: {overall_status}"));
     let evidence = vec![ValidationEvidenceItem {
         evidence_id: "ev-1".to_owned(),
         label: "Validation status".to_owned(),
@@ -2049,6 +2040,29 @@ async fn get_run_validation(
             evidence,
         }),
     )
+}
+
+fn validation_status_for_issue(issue: &ControlPlaneIssueSnapshot) -> ValidationStatus {
+    use ControlPlaneIssueRuntimeState as State;
+    use ControlPlaneWorkerOutcome as Outcome;
+
+    if issue.cancel_failed {
+        return ValidationStatus::Error;
+    }
+    if issue.detached {
+        return ValidationStatus::Pending;
+    }
+    match (issue.runtime_state, issue.last_outcome) {
+        (_, Outcome::Completed) => ValidationStatus::Passed,
+        (_, Outcome::Failed) | (_, Outcome::Canceled) => ValidationStatus::Failed,
+        (State::Running, _) if !issue.modified_files.is_empty() => ValidationStatus::Running,
+        (State::Running, _)
+        | (State::Paused, _)
+        | (State::RetryQueued, _)
+        | (State::Releasing, _) => ValidationStatus::Pending,
+        _ if issue.modified_files.is_empty() => ValidationStatus::Skipped,
+        _ => ValidationStatus::Pending,
+    }
 }
 
 async fn get_run_approvals(
@@ -2266,9 +2280,12 @@ fn allowed_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> Vec<RunAction
     let mut allowed = Vec::new();
     use ControlPlaneIssueRuntimeState as State;
     match issue.runtime_state {
-        State::Running | State::Paused => {
+        State::Running => {
             allowed.push(RunAction::Cancel);
             allowed.push(RunAction::Pause);
+        }
+        State::Paused => {
+            allowed.push(RunAction::Cancel);
             allowed.push(RunAction::Resume);
         }
         State::Completed | State::Failed => {
@@ -2334,10 +2351,8 @@ fn build_liveness(
         RunStreamLiveness::Detached
     } else if issue.cancel_failed {
         RunStreamLiveness::Degraded
-    } else if issue.cancel_acknowledged {
-        RunStreamLiveness::Healthy
     } else {
-        RunStreamLiveness::Stalled
+        RunStreamLiveness::Healthy
     };
     let latest = if issue.recent_events.is_empty() {
         None

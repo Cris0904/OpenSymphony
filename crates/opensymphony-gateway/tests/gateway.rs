@@ -18,8 +18,8 @@ use opensymphony::opensymphony_gateway::{
 use opensymphony::opensymphony_gateway_schema::action::{
     ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget,
 };
-use opensymphony::opensymphony_gateway_schema::approval::ApprovalStatus;
 use opensymphony::opensymphony_gateway_schema::envelope::EntityKind;
+use opensymphony::opensymphony_gateway_schema::validation::ValidationStatus;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -1752,9 +1752,9 @@ async fn gateway_serves_run_validation_with_modified_files() {
         .expect("decode run validation");
 
     assert_eq!(response.run_id, "COE-301");
-    assert_eq!(response.overall_status, ApprovalStatus::Passed);
+    assert_eq!(response.overall_status, ValidationStatus::Passed);
     assert_eq!(response.commands.len(), 1);
-    assert_eq!(response.commands[0].status, ApprovalStatus::Passed);
+    assert_eq!(response.commands[0].status, ValidationStatus::Passed);
     assert!(!response.evidence.is_empty());
 
     server_task.abort();
