@@ -4,7 +4,6 @@ import type { RunStatus, ReleaseReason } from "./run.js";
 /** Runtime badge kinds that can be rendered on a task graph node. */
 export type RuntimeBadgeKind =
   | "failed"
-  | "blocked"
   | "queued"
   | "running"
   | "complete"
