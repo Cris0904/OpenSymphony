@@ -98,8 +98,6 @@ function renderActiveTab(
       return renderValidationPanel(validationMessages);
     case "diff":
       return renderDiffEditor(state);
-    case "conversation":
-      return renderConversationFocus(state);
     default:
       return "";
   }
@@ -121,20 +119,6 @@ function renderConversationPane(state: PlanningWorkspaceState): string {
     </label>
     <div class="os-planning-actions">
       <button type="button" data-plan-send-message>Send</button>
-    </div>
-  `;
-}
-
-function renderConversationFocus(state: PlanningWorkspaceState): string {
-  return `
-    <div class="os-section-head"><h3>Conversation</h3></div>
-    <div class="os-conversation-list">
-      ${state.messages.map((msg) => `
-        <div class="os-conversation-message os-conversation-${escapeAttr(msg.role)}">
-          <span class="os-conversation-role">${escapeHtml(msg.role)}</span>
-          <p>${escapeHtml(msg.body)}</p>
-        </div>
-      `).join("")}
     </div>
   `;
 }

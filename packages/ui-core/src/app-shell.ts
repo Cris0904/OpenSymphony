@@ -51,7 +51,6 @@ import {
   addVerification,
   buildFixturePlanningWorkspaceState,
   emptyPlanningWorkspaceState,
-  movePlanningNode,
   removePlanningNode,
   removeCriterion,
   removeVerification,
