@@ -389,6 +389,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       commentRun?: (id: string, text: string) => Promise<ActionReceipt>;
       createFollowup?: (id: string, payload: unknown) => Promise<ActionReceipt>;
       openWorkspace?: (id: string) => Promise<ActionReceipt>;
+      debugRun?: (id: string) => Promise<ActionReceipt>;
       dispatchAction?: (action: unknown) => Promise<ActionReceipt>;
     };
     let receipt: ActionReceipt | null = null;
@@ -425,13 +426,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
           receipt = await (transport.openWorkspace?.(runId) ?? fallbackAction(runId, action));
           break;
         case "debug":
-          receipt = await (transport.dispatchAction?.({
-            schema_version: schemaVersion,
-            correlation_id: `debug-${runId}-${crypto.randomUUID()}`,
-            action_kind: "task_graph_evidence",
-            target_entity: { entity_kind: "run", entity_id: runId },
-            payload: { intent: "debug" },
-          }) ?? fallbackAction(runId, action));
+          receipt = await (transport.debugRun?.(runId) ?? fallbackAction(runId, action));
           break;
       }
       if (!receipt) return;

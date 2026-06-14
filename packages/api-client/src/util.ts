@@ -23,3 +23,26 @@ export function stableHash(input: string): string {
     (h2 >>> 0).toString(16).padStart(8, "0")
   );
 }
+
+/**
+ * Deterministic hash of a JSON-serializable value, with stable key ordering.
+ *
+ * Used for idempotency keys where the payload is an object and key insertion
+ * order may vary between callers (e.g. form data converted to a follow-up
+ * payload).
+ */
+export function stableHashJson(value: unknown): string {
+  return stableHash(stableStringify(value));
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  const entries = keys.map((k) => `${stableStringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`);
+  return `{${entries.join(",")}}`;
+}

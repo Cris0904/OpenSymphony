@@ -171,4 +171,43 @@ describe("HttpGatewayTransport action integration", () => {
     expect(body.payload).toEqual({ decision: "rejected", explanation: "unsafe" });
     expect(body.idempotency_key).toBe("approval-approval-1-rejected");
   });
+
+  it("openWorkspace POSTs the open_workspace action kind", async () => {
+    const fetchSpy = mockFetch(receipt);
+    const transport = new HttpGatewayTransport({ baseUri });
+    await transport.openWorkspace("run-1");
+
+    const requestInit = fetchSpy.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(requestInit.body as string);
+    expect(body.action_kind).toBe("open_workspace");
+    expect(body.target_entity).toEqual({ entity_kind: "run", entity_id: "run-1" });
+    expect(body.idempotency_key).toBe("workspace-run-1");
+    expect(body.payload).toBeUndefined();
+  });
+
+  it("debugRun POSTs the debug action kind", async () => {
+    const fetchSpy = mockFetch(receipt);
+    const transport = new HttpGatewayTransport({ baseUri });
+    await transport.debugRun("run-1");
+
+    const requestInit = fetchSpy.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(requestInit.body as string);
+    expect(body.action_kind).toBe("debug");
+    expect(body.target_entity).toEqual({ entity_kind: "run", entity_id: "run-1" });
+    expect(body.idempotency_key).toBe("debug-run-1");
+  });
+
+  it("createFollowup uses a payload-aware idempotency key", async () => {
+    const fetchSpy = mockFetch(receipt);
+    const transport = new HttpGatewayTransport({ baseUri });
+    await transport.createFollowup("run-1", { title: "Follow-up A" });
+    await transport.createFollowup("run-1", { title: "Follow-up B" });
+
+    const first = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const second = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+    expect(first.action_kind).toBe("create_followup");
+    expect(first.idempotency_key).not.toBe(second.idempotency_key);
+    expect(first.idempotency_key).toContain("followup-run-1-");
+    expect(second.idempotency_key).toContain("followup-run-1-");
+  });
 });

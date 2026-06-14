@@ -55,6 +55,8 @@ export interface ApprovalRequest {
   /** Risk summary when available. */
   risk_summary?: ApprovalRiskSummary;
   requested_at: string;
+  /** ISO timestamp when the approval was decided, if already decided. */
+  decided_at?: string;
   expires_at?: string;
   status: ApprovalStatus;
   correlation_id: string;

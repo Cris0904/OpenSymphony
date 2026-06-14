@@ -24,7 +24,7 @@ import type {
   ApprovalRequest,
 } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, ActionCapableTransport } from "./index.js";
-import { stableHash } from "./util.js";
+import { stableHash, stableHashJson } from "./util.js";
 
 /** Deterministic mock transport for tests. */
 export class MockGatewayTransport implements GatewayTransport, ActionCapableTransport {
@@ -476,7 +476,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       action_kind: "create_followup",
       target_entity: { entity_kind: "run", entity_id: runId },
       payload,
-      idempotency_key: `followup-${runId}`,
+      idempotency_key: `followup-${runId}-${stableHashJson(payload)}`,
     });
   }
 
@@ -499,10 +499,19 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
     return this.dispatchAction({
       schema_version: { major: 1, minor: 0, patch: 0 },
       correlation_id: `workspace-${runId}-${crypto.randomUUID()}`,
-      action_kind: "transition_issue",
+      action_kind: "open_workspace",
       target_entity: { entity_kind: "run", entity_id: runId },
-      payload: { intent: "open_workspace" },
       idempotency_key: `workspace-${runId}`,
+    });
+  }
+
+  async debugRun(runId: string): Promise<ActionReceipt> {
+    return this.dispatchAction({
+      schema_version: { major: 1, minor: 0, patch: 0 },
+      correlation_id: `debug-${runId}-${crypto.randomUUID()}`,
+      action_kind: "debug",
+      target_entity: { entity_kind: "run", entity_id: runId },
+      idempotency_key: `debug-${runId}`,
     });
   }
 

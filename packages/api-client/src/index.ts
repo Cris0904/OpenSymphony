@@ -87,6 +87,7 @@ export interface ActionCapableTransport extends GatewayTransport {
   createFollowup(runId: string, payload: unknown): Promise<ActionReceipt>;
   approvalDecision(approvalId: string, decision: "approved" | "rejected", explanation?: string): Promise<ActionReceipt>;
   openWorkspace(runId: string): Promise<ActionReceipt>;
+  debugRun(runId: string): Promise<ActionReceipt>;
 }
 
 export interface GatewayTransportConfig {

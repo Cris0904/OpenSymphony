@@ -8,6 +8,8 @@ export type ActionKind =
   | "resume"
   | "rehydrate"
   | "comment"
+  | "open_workspace"
+  | "debug"
   | "transition_issue"
   | "create_followup"
   | "approval_decision"
