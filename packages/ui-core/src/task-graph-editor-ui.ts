@@ -79,6 +79,7 @@ export function renderTaskGraphNode(
   const editButtons = isEditing
     ? `<button type="button" data-tg-inline-save="${escapeAttr(node.node_id)}">Save</button><button type="button" data-tg-inline-cancel="${escapeAttr(node.node_id)}">Cancel</button>`
     : `<button type="button" data-tg-edit="${escapeAttr(node.node_id)}">Edit</button>`;
+  const commentLabel = node.comment_count ? `Comment (${node.comment_count})` : "Comment";
 
   return `
     <div class="os-node ${isSelected ? "is-selected" : ""}" data-node-id="${escapeAttr(node.node_id)}">
@@ -90,7 +91,7 @@ export function renderTaskGraphNode(
       ${runMeta}
       <div class="os-node-actions">${editButtons}
         <button type="button" data-tg-deps="${escapeAttr(node.node_id)}">Deps</button>
-        <button type="button" data-tg-comment="${escapeAttr(node.node_id)}">Comment</button>
+        <button type="button" data-tg-comment="${escapeAttr(node.node_id)}">${escapeHtml(commentLabel)}</button>
         <button type="button" data-tg-create-child="${escapeAttr(node.node_id)}">+</button>
       </div>
     </div>

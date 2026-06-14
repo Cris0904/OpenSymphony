@@ -562,6 +562,169 @@ describe("TaskGraphEditor", () => {
     await handle.destroy();
   });
 
+  describe("optimistic mutation rollback on failure", () => {
+    function rejectDispatchAction(reason: string) {
+      return async (action: any) => {
+        const rejectedAt = new Date().toISOString();
+        return {
+          schema_version: schemaVersionV1(),
+          action_id: "mock-rejected",
+          correlation_id: action.correlation_id,
+          status: "rejected",
+          reason,
+          expected_events: [],
+          issued_at: rejectedAt,
+          result: { node_id: "editor-1", updated_at: rejectedAt, applied: true },
+        };
+      };
+    }
+
+    it("restores the original title after a rejected inline edit", async () => {
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const transport = buildTransport();
+      transport.dispatchAction = rejectDispatchAction("Title is not allowed");
+      const handle = renderOpenSymphonyApp({
+        root,
+        mode: "desktop",
+        transport,
+      });
+
+      await flushUntil(() => root.querySelector("[data-tg-edit='editor-1']") !== null);
+
+      (root.querySelector("[data-tg-edit='editor-1']") as HTMLButtonElement).click();
+      await flushAsync();
+
+      const titleInput = root.querySelector("[data-tg-inline-title='editor-1']") as HTMLInputElement;
+      titleInput.value = "Rejected title";
+      (root.querySelector("[data-tg-inline-save='editor-1']") as HTMLButtonElement).click();
+
+      await flushUntil(() => root.querySelector(".os-pending-banner") === null);
+
+      expect(root.textContent).not.toContain("Rejected title");
+      expect(root.textContent).toContain("Running issue");
+
+      await handle.destroy();
+    });
+
+    it("removes the optimistic node after a rejected create", async () => {
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const transport = buildTransport();
+      transport.dispatchAction = rejectDispatchAction("Create is not allowed");
+      const handle = renderOpenSymphonyApp({
+        root,
+        mode: "desktop",
+        transport,
+      });
+
+      await flushUntil(() => root.querySelector("[data-tg-create='milestone']") !== null);
+
+      (root.querySelector("[data-tg-create='milestone']") as HTMLButtonElement).click();
+      await flushAsync();
+
+      const titleInput = root.querySelector("[data-tg-create-title]") as HTMLInputElement;
+      titleInput.value = "Rejected milestone";
+      (root.querySelector("[data-tg-create-save]") as HTMLButtonElement).click();
+
+      await flushUntil(() => root.querySelector(".os-pending-banner") === null);
+
+      expect(root.textContent).not.toContain("Rejected milestone");
+
+      await handle.destroy();
+    });
+
+    it("restores the blocked_by list after a rejected dependency edit", async () => {
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const transport = buildTransport();
+      transport.dispatchAction = rejectDispatchAction("Dependencies are not allowed");
+      const handle = renderOpenSymphonyApp({
+        root,
+        mode: "desktop",
+        transport,
+      });
+
+      await flushUntil(() => root.querySelector("[data-tg-deps='editor-1']") !== null);
+
+      (root.querySelector("[data-tg-deps='editor-1']") as HTMLButtonElement).click();
+      await flushAsync();
+
+      const select = root.querySelector("[data-tg-deps-select]") as HTMLSelectElement;
+      Array.from(select.options).forEach((option) => {
+        option.selected = false;
+      });
+      (root.querySelector("[data-tg-deps-save]") as HTMLButtonElement).click();
+
+      await flushUntil(() => root.querySelector(".os-pending-banner") === null);
+
+      const updatedNode = root.querySelector("[data-node-id='editor-1']");
+      expect(updatedNode?.querySelector(".os-badge-blocker")).not.toBeNull();
+
+      await handle.destroy();
+    });
+
+    it("restores the comment count after a rejected comment", async () => {
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const transport = buildTransport();
+      transport.dispatchAction = rejectDispatchAction("Comment is not allowed");
+      const handle = renderOpenSymphonyApp({
+        root,
+        mode: "desktop",
+        transport,
+      });
+
+      await flushUntil(() => root.querySelector("[data-tg-comment='editor-1']") !== null);
+
+      const button = root.querySelector("[data-tg-comment='editor-1']") as HTMLButtonElement;
+      expect(button.textContent).toBe("Comment");
+      button.click();
+      await flushAsync();
+
+      const bodyInput = root.querySelector("[data-tg-comment-body]") as HTMLTextAreaElement;
+      bodyInput.value = "Rejected evidence";
+      (root.querySelector("[data-tg-comment-save]") as HTMLButtonElement).click();
+
+      await flushUntil(() => root.querySelector(".os-pending-banner") === null);
+
+      const restoredButton = root.querySelector("[data-tg-comment='editor-1']") as HTMLButtonElement;
+      expect(restoredButton.textContent).toBe("Comment");
+
+      await handle.destroy();
+    });
+
+    it("rolls back an optimistic create when the transport throws", async () => {
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const transport = buildTransport();
+      transport.dispatchAction = async () => {
+        throw new Error("Network unreachable");
+      };
+      const handle = renderOpenSymphonyApp({
+        root,
+        mode: "desktop",
+        transport,
+      });
+
+      await flushUntil(() => root.querySelector("[data-tg-create='milestone']") !== null);
+
+      (root.querySelector("[data-tg-create='milestone']") as HTMLButtonElement).click();
+      await flushAsync();
+
+      const titleInput = root.querySelector("[data-tg-create-title]") as HTMLInputElement;
+      titleInput.value = "Lost milestone";
+      (root.querySelector("[data-tg-create-save]") as HTMLButtonElement).click();
+
+      await flushUntil(() => root.textContent?.includes("Create failed: Network unreachable") ?? false);
+
+      expect(root.textContent).not.toContain("Lost milestone");
+      expect(root.textContent).toContain("Create failed: Network unreachable");
+
+      await handle.destroy();
+    });
+  });
+
   it("saves inline edits on a node whose id contains a single quote", async () => {
     const root = document.createElement("div");
     document.body.appendChild(root);

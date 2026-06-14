@@ -108,6 +108,8 @@ interface AppState {
   runOverlays: Map<string, RunDetail>;
   pendingMutations: Set<string>;
   pendingCreates: Map<string, string>;
+  /** Snapshot of the task graph node before each optimistic mutation, keyed by correlation id. `null` means a new node was created. */
+  pendingSnapshots: Map<string, TaskGraphNode | null>;
 }
 
 const schemaVersion = { major: 1, minor: 0, patch: 0 };
@@ -152,6 +154,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       runOverlays: new Map(),
       pendingMutations: new Set(),
       pendingCreates: new Map(),
+      pendingSnapshots: new Map(),
     };
   }
 
@@ -761,6 +764,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
       const correlationId = `tg-create-${parentId ?? "root"}-${dialog.kind}-${generateId()}`;
       this.state.pendingMutations.add(correlationId);
       this.state.pendingCreates.set(correlationId, nodeId);
+      this.state.pendingSnapshots.set(correlationId, null);
       this.render();
       try {
         const receipt = await dispatchTaskGraphCreate(this.transport, {
@@ -771,8 +775,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
         }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
-        this.state.pendingMutations.delete(correlationId);
-        this.state.pendingCreates.delete(correlationId);
+        this.rollbackOptimisticMutation(correlationId);
         this.state.connectionMessage = `Create failed: ${errorMessage(error)}`;
       }
       this.render();
@@ -806,6 +809,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     if (isActionCapable(this.transport)) {
       const correlationId = `tg-update-${nodeId}-${generateId()}`;
       this.state.pendingMutations.add(correlationId);
+      this.state.pendingSnapshots.set(correlationId, { ...node });
       this.render();
       try {
         const receipt = await dispatchTaskGraphUpdate(this.transport, {
@@ -815,7 +819,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
         }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
-        this.state.pendingMutations.delete(correlationId);
+        this.rollbackOptimisticMutation(correlationId);
         this.state.connectionMessage = `Update failed: ${errorMessage(error)}`;
       }
       this.render();
@@ -846,12 +850,13 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     if (isActionCapable(this.transport)) {
       const correlationId = `tg-deps-${nodeId}-${generateId()}`;
       this.state.pendingMutations.add(correlationId);
+      this.state.pendingSnapshots.set(correlationId, { ...node });
       this.render();
       try {
         const receipt = await dispatchTaskGraphDependencies(this.transport, { node_id: nodeId, blocked_by: blockedBy }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
-        this.state.pendingMutations.delete(correlationId);
+        this.rollbackOptimisticMutation(correlationId);
         this.state.connectionMessage = `Dependency update failed: ${errorMessage(error)}`;
       }
       this.render();
@@ -883,12 +888,15 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     if (isActionCapable(this.transport)) {
       const correlationId = `tg-comment-${nodeId}-${generateId()}`;
       this.state.pendingMutations.add(correlationId);
+      if (node) {
+        this.state.pendingSnapshots.set(correlationId, { ...node });
+      }
       this.render();
       try {
         const receipt = await dispatchTaskGraphComment(this.transport, { node_id: nodeId, body, kind }, correlationId);
         this.applyMutationReceipt(receipt);
       } catch (error) {
-        this.state.pendingMutations.delete(correlationId);
+        this.rollbackOptimisticMutation(correlationId);
         this.state.connectionMessage = `Comment failed: ${errorMessage(error)}`;
       }
       this.render();
@@ -908,8 +916,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
 
   private applyMutationReceipt(receipt: ActionReceipt): void {
     if (receipt.status !== "accepted") {
-      this.state.pendingMutations.delete(receipt.correlation_id);
-      this.state.pendingCreates.delete(receipt.correlation_id);
+      this.rollbackOptimisticMutation(receipt.correlation_id);
       const detail = receipt.reason ? `: ${receipt.reason}` : "";
       this.state.connectionMessage = `Mutation ${receipt.status}${detail}`;
       return;
@@ -919,6 +926,7 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     if (!result?.node_id || !result?.updated_at) {
       this.state.pendingMutations.delete(receipt.correlation_id);
       this.state.pendingCreates.delete(receipt.correlation_id);
+      this.state.pendingSnapshots.delete(receipt.correlation_id);
       return;
     }
 
@@ -929,11 +937,45 @@ class OpenSymphonyApp implements OpenSymphonyAppHandle {
     }
     this.state.pendingMutations.delete(receipt.correlation_id);
     this.state.pendingCreates.delete(receipt.correlation_id);
+    this.state.pendingSnapshots.delete(receipt.correlation_id);
 
     const node = this.state.taskGraph?.nodes.find((n) => n.node_id === result.node_id);
     if (node) {
       this.updateTaskGraphNode({ ...node, updated_at: result.updated_at });
     }
+  }
+
+  private rollbackOptimisticMutation(correlationId: string): void {
+    const snapshot = this.state.pendingSnapshots.get(correlationId);
+    if (snapshot === undefined) {
+      // No snapshot recorded; nothing to roll back.
+      this.state.pendingMutations.delete(correlationId);
+      this.state.pendingCreates.delete(correlationId);
+      return;
+    }
+
+    const taskGraph = this.state.taskGraph;
+    if (snapshot === null) {
+      // Optimistic create: remove the temporary node.
+      const localNodeId = this.state.pendingCreates.get(correlationId);
+      if (taskGraph && localNodeId) {
+        taskGraph.nodes = taskGraph.nodes.filter((n) => n.node_id !== localNodeId);
+        taskGraph.root_ids = taskGraph.root_ids.filter((id) => id !== localNodeId);
+        for (const node of taskGraph.nodes) {
+          node.children = node.children.filter((id) => id !== localNodeId);
+          if (node.parent_id === localNodeId) {
+            node.parent_id = undefined;
+          }
+        }
+      }
+    } else if (taskGraph) {
+      // Restore the node from the snapshot.
+      this.updateTaskGraphNode(snapshot);
+    }
+
+    this.state.pendingMutations.delete(correlationId);
+    this.state.pendingCreates.delete(correlationId);
+    this.state.pendingSnapshots.delete(correlationId);
   }
 
   private reconcileNodeId(oldId: string, newId: string): void {
