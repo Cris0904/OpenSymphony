@@ -1,27 +1,27 @@
 /**
  * Deterministic, ASCII-safe string hash used for stable idempotency keys.
  *
- * Uses a 64-bit cyrb53 variant so it works in both Node and browser
- * runtimes without relying on crypto.subtle availability.
+ * Uses SHA-256 (256-bit) via the Web Crypto API, with a Node fallback, so
+ * collision risk is negligible for multi-user idempotency keys.
  */
-export function stableHash(input: string): string {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2_654_435_761);
-    h2 = Math.imul(h2 ^ ch, 1_597_334_677);
+export async function stableHash(input: string): Promise<string> {
+  const subtle = await getSubtleCrypto();
+  const data = new TextEncoder().encode(input);
+  const digest = await subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(digest);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function getSubtleCrypto(): Promise<SubtleCrypto> {
+  const globalCrypto = (globalThis as any).crypto;
+  if (globalCrypto?.subtle) {
+    return globalCrypto.subtle as SubtleCrypto;
   }
-  h1 =
-    Math.imul(h1 ^ (h1 >>> 16), 2_246_822_507) ^
-    Math.imul(h2 ^ (h2 >>> 13), 3_266_489_909);
-  h2 =
-    Math.imul(h2 ^ (h2 >>> 16), 2_246_822_507) ^
-    Math.imul(h1 ^ (h1 >>> 13), 3_266_489_909);
-  return (
-    (h1 >>> 0).toString(16).padStart(8, "0") +
-    (h2 >>> 0).toString(16).padStart(8, "0")
-  );
+  // Node fallback; only evaluated when WebCrypto is not globally present.
+  const { webcrypto } = await import("crypto");
+  return webcrypto.subtle as SubtleCrypto;
 }
 
 /**
@@ -31,7 +31,7 @@ export function stableHash(input: string): string {
  * order may vary between callers (e.g. form data converted to a follow-up
  * payload).
  */
-export function stableHashJson(value: unknown): string {
+export async function stableHashJson(value: unknown): Promise<string> {
   return stableHash(stableStringify(value));
 }
 

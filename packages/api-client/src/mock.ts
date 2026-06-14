@@ -465,7 +465,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       action_kind: "comment",
       target_entity: { entity_kind: "run", entity_id: runId },
       payload: { text },
-      idempotency_key: `comment-${runId}-${stableHash(text)}`,
+      idempotency_key: `comment-${runId}-${await stableHash(text)}`,
     });
   }
 
@@ -476,7 +476,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       action_kind: "create_followup",
       target_entity: { entity_kind: "run", entity_id: runId },
       payload,
-      idempotency_key: `followup-${runId}-${stableHashJson(payload)}`,
+      idempotency_key: `followup-${runId}-${await stableHashJson(payload)}`,
     });
   }
 
