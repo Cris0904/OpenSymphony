@@ -174,10 +174,7 @@ impl InitArgs {
         if matches!(
             self.ai_review_provider_kind,
             Some(AiReviewProviderKindArg::LitellmNative)
-        ) && self
-            .ai_review_base_url
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+        ) && trimmed_non_empty(self.ai_review_base_url.as_deref()).is_some()
         {
             return Err(InitCommandError::InvalidArgument(
                 "--ai-review-base-url can only be used with --ai-review-provider-kind openai-compatible"
@@ -217,8 +214,7 @@ impl InitArgs {
             .to_string();
         let base_url = if provider_kind == "openai-compatible" {
             Some(
-                self.ai_review_base_url
-                    .clone()
+                trimmed_non_empty(self.ai_review_base_url.as_deref())
                     .unwrap_or_else(|| DEFAULT_AI_REVIEW_BASE_URL.to_string()),
             )
         } else {
@@ -227,14 +223,10 @@ impl InitArgs {
 
         AiReviewConfig {
             provider_kind,
-            model_id: self
-                .ai_review_model_id
-                .clone()
+            model_id: trimmed_non_empty(self.ai_review_model_id.as_deref())
                 .unwrap_or_else(|| DEFAULT_AI_REVIEW_MODEL_ID.to_string()),
             base_url,
-            style: self
-                .ai_review_style
-                .clone()
+            style: trimmed_non_empty(self.ai_review_style.as_deref())
                 .unwrap_or_else(|| DEFAULT_AI_REVIEW_STYLE.to_string()),
             require_evidence: self
                 .ai_review_require_evidence
@@ -1127,6 +1119,13 @@ fn apply_asset(
     })
 }
 
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn build_final_contents(
     asset: &FetchedAsset,
     action: &PlannedAction,
@@ -1163,8 +1162,8 @@ where
     let mut exports = Vec::new();
 
     if env_lookup.get("LLM_MODEL").is_none() {
-        let value = if let Some(value) = args.llm_model.as_deref() {
-            value.trim().to_string()
+        let value = if let Some(value) = trimmed_non_empty(args.llm_model.as_deref()) {
+            value
         } else if args.non_interactive {
             DEFAULT_LLM_MODEL.to_string()
         } else {
@@ -1180,8 +1179,9 @@ where
     }
 
     if env_lookup.get("LLM_API_KEY").is_none() {
-        let value = if let Some(value) = args.llm_api_key_placeholder.as_deref() {
-            value.trim().to_string()
+        let value = if let Some(value) = trimmed_non_empty(args.llm_api_key_placeholder.as_deref())
+        {
+            value
         } else if args.non_interactive {
             "<your-llm-api-key>".to_string()
         } else {
@@ -1197,8 +1197,8 @@ where
     }
 
     if env_lookup.get("LLM_BASE_URL").is_none() {
-        let value = if let Some(value) = args.llm_base_url.as_deref() {
-            value.trim().to_string()
+        let value = if let Some(value) = trimmed_non_empty(args.llm_base_url.as_deref()) {
+            value
         } else if args.non_interactive {
             DEFAULT_LLM_BASE_URL.to_string()
         } else {
@@ -2205,7 +2205,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AiReviewProviderKindArg, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL,
+        AiReviewConfig, AiReviewProviderKindArg, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL,
         DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS, GitRemoteDetection, InitArgs, InitCommandError,
         PromptUi, comparable_text, custom_codereview_guide_contents, customize_workflow,
         git_remote_url, github_repo_slug_from_remote, normalize_github_repo_slug,
@@ -2406,6 +2406,32 @@ hooks:
     }
 
     #[test]
+    fn non_interactive_llm_export_hints_ignore_empty_flag_overrides() {
+        let env = StubEnvironment {
+            values: BTreeMap::new(),
+        };
+        let args = InitArgs {
+            non_interactive: true,
+            llm_model: Some("   ".to_string()),
+            llm_api_key_placeholder: Some(String::new()),
+            llm_base_url: Some("\t".to_string()),
+            ..InitArgs::default()
+        };
+        let mut output = Vec::new();
+        let mut ui = PromptUi::new(&b""[..], &mut output);
+
+        prompt_for_missing_llm_env(&env, &mut ui, &args).expect("prompt should succeed");
+
+        let rendered = String::from_utf8(output).expect("prompt output should be utf-8");
+        assert!(rendered.contains(&format!("export LLM_MODEL='{}'", DEFAULT_LLM_MODEL)));
+        assert!(rendered.contains("export LLM_API_KEY='<your-llm-api-key>'"));
+        assert!(rendered.contains(&format!("export LLM_BASE_URL='{}'", DEFAULT_LLM_BASE_URL)));
+        assert!(!rendered.contains("export LLM_MODEL=''"));
+        assert!(!rendered.contains("export LLM_API_KEY=''"));
+        assert!(!rendered.contains("export LLM_BASE_URL=''"));
+    }
+
+    #[test]
     fn prompt_yes_no_accepts_blank_as_default() {
         let mut output = Vec::new();
         let mut ui = PromptUi::new(&b"\n"[..], &mut output);
@@ -2462,6 +2488,44 @@ hooks:
             InitCommandError::InvalidArgument(message)
                 if message.contains("--ai-review-base-url can only be used")
         ));
+    }
+
+    #[test]
+    fn ai_review_config_from_flags_ignores_empty_string_overrides() {
+        let args = InitArgs {
+            ai_review_provider_kind: Some(AiReviewProviderKindArg::OpenaiCompatible),
+            ai_review_model_id: Some(" ".to_string()),
+            ai_review_base_url: Some(String::new()),
+            ai_review_style: Some("\t".to_string()),
+            ..InitArgs::default()
+        };
+
+        args.validate()
+            .expect("empty string overrides should fall back to defaults");
+        assert_eq!(
+            args.ai_review_config_from_flags(),
+            AiReviewConfig::default()
+        );
+    }
+
+    #[test]
+    fn ai_review_config_from_flags_trims_non_empty_overrides() {
+        let args = InitArgs {
+            ai_review_provider_kind: Some(AiReviewProviderKindArg::OpenaiCompatible),
+            ai_review_model_id: Some(" custom-model ".to_string()),
+            ai_review_base_url: Some(" https://example.com/v1 ".to_string()),
+            ai_review_style: Some(" concise ".to_string()),
+            ai_review_require_evidence: Some(false),
+            ..InitArgs::default()
+        };
+
+        let config = args.ai_review_config_from_flags();
+
+        assert_eq!(config.provider_kind, "openai-compatible");
+        assert_eq!(config.model_id, "custom-model");
+        assert_eq!(config.base_url.as_deref(), Some("https://example.com/v1"));
+        assert_eq!(config.style, "concise");
+        assert!(!config.require_evidence);
     }
 
     #[test]
