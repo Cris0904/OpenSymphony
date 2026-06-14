@@ -90,6 +90,10 @@ pub enum RunAction {
     Resume,
     Rehydrate,
     Detach,
+    Comment,
+    CreateFollowup,
+    OpenWorkspace,
+    Debug,
 }
 
 /// Operational phase observed by the client for a long-running run.

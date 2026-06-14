@@ -2223,6 +2223,21 @@ fn allowed_actions_for_issue(issue: &ControlPlaneIssueSnapshot) -> Vec<RunAction
         }
         _ => {}
     }
+    // Comment and follow-up are meaningful for any run that has not reached a
+    // terminal state (completed or failed).
+    if !matches!(issue.runtime_state, State::Completed | State::Failed) {
+        allowed.push(RunAction::Comment);
+        allowed.push(RunAction::CreateFollowup);
+    }
+    // OpenWorkspace is available when there is a local workspace path.
+    if !issue.workspace_path_suffix.is_empty() {
+        allowed.push(RunAction::OpenWorkspace);
+    }
+    // Debug is available when there is an active harness/agent-server or
+    // conversation to inspect.
+    if issue.server_base_url.is_some() || !issue.conversation_id_suffix.is_empty() {
+        allowed.push(RunAction::Debug);
+    }
     if issue.detached {
         allowed.push(RunAction::Detach);
     }
@@ -2526,5 +2541,129 @@ mod tests {
             mime_type(StdPath::new("asset.unknown")),
             "application/octet-stream"
         );
+    }
+
+    #[test]
+    fn allowed_actions_for_running_issue_includes_comment_followup_workspace_and_debug() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::Running,
+            TestIssueFlags {
+                workspace: true,
+                harness: true,
+                detached: false,
+            },
+        );
+        let actions = allowed_actions_for_issue(&issue);
+        assert!(actions.contains(&RunAction::Cancel));
+        assert!(actions.contains(&RunAction::Pause));
+        assert!(actions.contains(&RunAction::Comment));
+        assert!(actions.contains(&RunAction::CreateFollowup));
+        assert!(actions.contains(&RunAction::OpenWorkspace));
+        assert!(actions.contains(&RunAction::Debug));
+        assert!(!actions.contains(&RunAction::Retry));
+        assert!(!actions.contains(&RunAction::Rehydrate));
+        assert!(!actions.contains(&RunAction::Resume));
+    }
+
+    #[test]
+    fn allowed_actions_for_running_issue_without_workspace_hides_workspace_and_debug() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::Running,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: false,
+            },
+        );
+        let actions = allowed_actions_for_issue(&issue);
+        assert!(actions.contains(&RunAction::Comment));
+        assert!(actions.contains(&RunAction::CreateFollowup));
+        assert!(!actions.contains(&RunAction::OpenWorkspace));
+        assert!(!actions.contains(&RunAction::Debug));
+    }
+
+    #[test]
+    fn allowed_actions_for_terminal_issue_excludes_comment_and_followup() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::Completed,
+            TestIssueFlags {
+                workspace: true,
+                harness: true,
+                detached: false,
+            },
+        );
+        let actions = allowed_actions_for_issue(&issue);
+        assert!(actions.contains(&RunAction::Retry));
+        assert!(actions.contains(&RunAction::Rehydrate));
+        assert!(actions.contains(&RunAction::OpenWorkspace));
+        assert!(actions.contains(&RunAction::Debug));
+        assert!(!actions.contains(&RunAction::Comment));
+        assert!(!actions.contains(&RunAction::CreateFollowup));
+        assert!(!actions.contains(&RunAction::Cancel));
+        assert!(!actions.contains(&RunAction::Pause));
+        assert!(!actions.contains(&RunAction::Resume));
+    }
+
+    #[test]
+    fn allowed_actions_adds_detach_when_detached() {
+        let issue = test_issue(
+            ControlPlaneIssueRuntimeState::Running,
+            TestIssueFlags {
+                workspace: false,
+                harness: false,
+                detached: true,
+            },
+        );
+        let actions = allowed_actions_for_issue(&issue);
+        assert!(actions.contains(&RunAction::Detach));
+    }
+
+    struct TestIssueFlags {
+        workspace: bool,
+        harness: bool,
+        detached: bool,
+    }
+
+    fn test_issue(
+        runtime_state: ControlPlaneIssueRuntimeState,
+        flags: TestIssueFlags,
+    ) -> ControlPlaneIssueSnapshot {
+        ControlPlaneIssueSnapshot {
+            identifier: "COE-414".into(),
+            title: "Test issue".into(),
+            tracker_state: "in_progress".into(),
+            runtime_state,
+            last_outcome: ControlPlaneWorkerOutcome::Unknown,
+            last_event_at: Utc::now(),
+            conversation_id_suffix: if flags.harness {
+                "abc".into()
+            } else {
+                String::new()
+            },
+            workspace_path_suffix: if flags.workspace {
+                "/workspace".into()
+            } else {
+                String::new()
+            },
+            retry_count: 0,
+            blocked: false,
+            server_base_url: if flags.harness {
+                Some("http://localhost:3000".into())
+            } else {
+                None
+            },
+            transport_target: None,
+            http_auth_mode: None,
+            websocket_auth_mode: None,
+            websocket_query_param_name: None,
+            recent_events: vec![],
+            modified_files: vec![],
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            detached: flags.detached,
+            cancel_acknowledged: false,
+            cancel_failed: false,
+        }
     }
 }

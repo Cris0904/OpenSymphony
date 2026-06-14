@@ -239,7 +239,14 @@ fn is_run_action_safe(issue: &ControlPlaneIssueSnapshot, action: RunAction) -> b
         RunAction::Detach => safe.detach,
         // Pause and Resume are validated by their own dedicated validators
         // (validate_pause and validate_resume) and are never routed here.
-        RunAction::Pause | RunAction::Resume => false,
+        // Comment, follow-up, workspace, and debug are not gated by SafeActions;
+        // their eligibility is driven by allowed_actions in the run detail.
+        RunAction::Pause
+        | RunAction::Resume
+        | RunAction::Comment
+        | RunAction::CreateFollowup
+        | RunAction::OpenWorkspace
+        | RunAction::Debug => false,
     }
 }
 
