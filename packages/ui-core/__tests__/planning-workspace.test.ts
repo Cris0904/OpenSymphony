@@ -507,7 +507,7 @@ describe("PlanningWorkspace", () => {
   });
 
   it("reports each dependency cycle only once", () => {
-    const base = emptyPlanningWorkspaceState("project-1");
+    const base = emptyPlanningWorkspaceState();
     const a = {
       schema_version: schemaVersionV1(),
       node_id: "a",

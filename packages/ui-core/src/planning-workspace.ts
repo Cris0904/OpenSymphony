@@ -347,14 +347,19 @@ export function updateArtifactContent(
   artifactId: string,
   content: string,
 ): PlanningWorkspaceState {
+  const trimmed = content.trim();
   let newRevisionId: string | null = null;
   const artifacts = state.artifacts.map((artifact) => {
     if (artifact.artifact_id !== artifactId) return artifact;
+    const latest = artifact.revisions[artifact.revisions.length - 1];
+    if (latest && latest.content === trimmed) {
+      return artifact;
+    }
     const now = new Date().toISOString();
     const newRevision: PlanningArtifactRevision = {
       revision_id: `rev-${artifact.kind}-${artifact.revisions.length + 1}-${generateId()}`,
       created_at: now,
-      content: content.trim(),
+      content: trimmed,
     };
     newRevisionId = newRevision.revision_id;
     return {
@@ -449,31 +454,6 @@ export function updateNodeDependencies(
     node.node_id === nodeId ? { ...node, blocked_by: blockedBy } : node,
   );
   return { ...state, nodes };
-}
-
-export function movePlanningNode(
-  state: PlanningWorkspaceState,
-  nodeId: string,
-  newParentId: string | null,
-): PlanningWorkspaceState {
-  const node = state.nodes.find((n) => n.node_id === nodeId);
-  if (!node) return state;
-  const oldParentId = node.parent_id;
-  if (oldParentId === newParentId) return state;
-
-  const nodes = state.nodes.map((n) => {
-    if (n.node_id === oldParentId) {
-      return { ...n, children: n.children.filter((id) => id !== nodeId) };
-    }
-    if (n.node_id === newParentId) {
-      return { ...n, children: [...n.children, nodeId] };
-    }
-    if (n.node_id === nodeId) {
-      return { ...n, parent_id: newParentId ?? undefined };
-    }
-    return n;
-  });
-  return { ...state, nodes: rebuildChildren(nodes) };
 }
 
 export function removePlanningNode(
@@ -608,6 +588,19 @@ export function validatePlanningWorkspace(
   }
 
   const nodeMap = new Map(state.nodes.map((n) => [n.node_id, n]));
+  for (const node of state.nodes) {
+    for (const depId of node.blocked_by) {
+      if (!nodeMap.has(depId)) {
+        messages.push({
+          message_id: `val-${node.node_id}-dangling-${depId}`,
+          level: "error",
+          message: `Dependency ${node.identifier} references unknown node ${depId}.`,
+          field_ref: { kind: "dependency", id: node.node_id },
+        });
+      }
+    }
+  }
+
   const reportedCycleNodes = new Set<string>();
   for (const node of state.nodes) {
     if (reportedCycleNodes.has(node.node_id)) continue;
