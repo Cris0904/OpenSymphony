@@ -66,7 +66,7 @@ pub use crate::opensymphony_gateway_schema::{
         ActionDispatch, ActionKind, ActionReceipt, ActionStatus, ActionTarget, ExpectedFollowup,
         PermissionResult,
     },
-    approval::{ApprovalRequest},
+    approval::ApprovalRequest,
     capability::{AuthMode, FeatureCapability, GatewayCapabilities, TransportCapability},
     cursor::PageCursor,
     event_journal::{EventPage as GatewayEventPage, JournalError as EventJournalError},

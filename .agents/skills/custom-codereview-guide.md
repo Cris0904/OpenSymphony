@@ -1,8 +1,8 @@
 ---
 name: custom-codereview-guide
-description: |
-  Repository-specific code review guidance for this project.
-  Update this file so OpenHands PR review focuses on the right risks.
+description: Project-specific overlay for automated pull request review
+triggers:
+  - /codereview
 ---
 
 # Custom Code Review Guide
