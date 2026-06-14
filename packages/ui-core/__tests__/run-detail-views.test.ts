@@ -136,6 +136,7 @@ const diff: FileDiffPage = {
   file_path: "src/config.ts",
   hunks: [
     {
+      file_path: "src/config.ts",
       header: "@@ -1,3 +1,4 @@",
       start_line: 1,
       old_line_count: 3,

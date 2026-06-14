@@ -1519,6 +1519,7 @@ function alphaRunDiff(runId: string, filePath: string): FileDiffPage {
     file_path: filePath,
     hunks: [
       {
+        file_path: filePath,
         header: `@@ -1,5 +1,8 @@`,
         start_line: 1,
         old_line_count: 5,
