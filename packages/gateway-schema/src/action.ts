@@ -33,23 +33,8 @@ export interface ActionDispatch {
   idempotency_key?: string;
 }
 
-/** Outcome returned for a dispatched action. */
-export type ActionStatus =
-  | "accepted"
-  | "rejected"
-  | "queued"
-  | "completed";
-
-/** Classes of follow-up events the caller can expect after an action. */
-export type ExpectedFollowup =
-  | "action_completion"
-  | "run_lifecycle"
-  | "journal_entry"
-  | "snapshot_update";
-
-/** Permission check embedded in a receipt when a capability guard fires. */
-export interface PermissionResult {
-  allowed: boolean;
-  required_capability: string;
-  reason?: string;
-}
+// Action status, expected follow-up events, and permission checks are defined in
+// approval.ts so that the ActionReceipt type is kept next to approval request
+// metadata and matches the Rust gateway-schema exactly. Re-export the shared
+// types here for callers that import from the action module.
+export type { ActionStatus, ExpectedFollowup, PermissionResult } from "./approval.js";

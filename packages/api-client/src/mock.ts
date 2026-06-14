@@ -19,6 +19,7 @@ import type {
   ApprovalRequest,
 } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, ActionCapableTransport } from "./index.js";
+import { stableHash } from "./util.js";
 
 /** Deterministic mock transport for tests. */
 export class MockGatewayTransport implements GatewayTransport, ActionCapableTransport {
@@ -308,7 +309,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
         action_id: `mock-action-${this.actionCounter}`,
         correlation_id: action.correlation_id,
         status: "accepted",
-        expected_events: [],
+        expected_followup: [],
         issued_at: new Date(1000000000000 + this.actionCounter).toISOString(),
       };
     }
@@ -362,7 +363,7 @@ export class MockGatewayTransport implements GatewayTransport, ActionCapableTran
       action_kind: "comment",
       target_entity: { entity_kind: "run", entity_id: runId },
       payload: { text },
-      idempotency_key: `comment-${runId}-${text.slice(0, 40)}`,
+      idempotency_key: `comment-${runId}-${stableHash(text)}`,
     });
   }
 

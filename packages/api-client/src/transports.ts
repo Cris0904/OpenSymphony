@@ -21,6 +21,7 @@ import type {
 } from "@opensymphony/gateway-schema";
 import { pageCursorFirst } from "@opensymphony/gateway-schema";
 import type { GatewayTransport, GatewayTransportConfig, ActionCapableTransport } from "./index.js";
+import { stableHash } from "./util.js";
 
 /**
  * HTTP-based transport adapter using fetch().
@@ -399,7 +400,7 @@ export class HttpGatewayTransport implements GatewayTransport, ActionCapableTran
       action_kind: "comment",
       target_entity: { entity_kind: "run", entity_id: runId },
       payload: { text },
-      idempotency_key: `comment-${runId}-${text.slice(0, 40)}`,
+      idempotency_key: `comment-${runId}-${stableHash(text)}`,
     });
   }
 

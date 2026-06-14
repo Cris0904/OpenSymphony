@@ -766,7 +766,7 @@ function fallbackAction(entityId: string, action: string): ActionReceipt {
     action_id: `${action}-${entityId}-fixture`,
     correlation_id: `${action}-${entityId}`,
     status: "accepted",
-    expected_events: ["action_completion"],
+    expected_followup: ["action_completion"],
     issued_at: new Date().toISOString(),
   };
 }

@@ -60,11 +60,8 @@ export interface ApprovalRequest {
   correlation_id: string;
 }
 
-export type ActionReceiptStatus =
-  | "accepted"
-  | "rejected"
-  | "queued"
-  | "completed";
+/** Status of an action after gateway validation. */
+export type ActionStatus = "accepted" | "rejected";
 
 /** Expected follow-up event type after an action. */
 export type ExpectedFollowup =
@@ -86,11 +83,14 @@ export interface ActionReceipt {
   schema_version: SchemaVersion;
   action_id: string;
   correlation_id: string;
-  status: ActionReceiptStatus;
+  status: ActionStatus;
   reason?: string;
-  expected_events: ExpectedFollowup[];
+  expected_followup: ExpectedFollowup[];
   result?: unknown;
   issued_at: string;
   /** Hosted-mode permission check result; omitted in local mode. */
   permission?: PermissionResult;
 }
+
+/** @deprecated Use `ActionStatus` instead. */
+export type ActionReceiptStatus = ActionStatus;

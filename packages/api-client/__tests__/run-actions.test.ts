@@ -33,7 +33,7 @@ const receipt: ActionReceipt = {
   action_id: "action-override",
   correlation_id: "corr-override",
   status: "accepted",
-  expected_events: ["action_completion", "run_lifecycle"],
+  expected_followup: ["action_completion", "run_lifecycle"],
   issued_at: "2025-09-01T00:00:00Z",
   reason: "override",
 };

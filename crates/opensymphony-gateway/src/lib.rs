@@ -2373,7 +2373,7 @@ fn build_liveness(
         None
     } else {
         issue.recent_events.last().map(|evt| RunProgress {
-            sequence: 1,
+            sequence: issue.recent_events.len() as u64,
             event_id: evt.event_id.clone(),
             happened_at: evt.happened_at,
             kind: evt.kind.clone(),

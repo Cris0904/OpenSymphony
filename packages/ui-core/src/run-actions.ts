@@ -75,8 +75,8 @@ export function renderActionBar(
 
 /** Render an action receipt as a lightweight HTML string. */
 export function renderActionReceipt(receipt: ActionReceipt): string {
-  const events = receipt.expected_events.length
-    ? receipt.expected_events.map((e) => `<span class="os-expected-event">${escapeHtml(e)}</span>`).join(" ")
+  const events = receipt.expected_followup.length
+    ? receipt.expected_followup.map((e) => `<span class="os-expected-event">${escapeHtml(e)}</span>`).join(" ")
     : "none";
   return `<div class="os-action-receipt" data-testid="action-receipt" data-action-id="${receipt.action_id}" data-status="${receipt.status}">
     <span class="os-action-id">${receipt.action_id}</span>

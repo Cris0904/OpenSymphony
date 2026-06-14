@@ -36,7 +36,7 @@ const receipt: ActionReceipt = {
   action_id: "action-1",
   correlation_id: "corr-1",
   status: "accepted",
-  expected_events: ["action_completion", "run_lifecycle"],
+  expected_followup: ["action_completion", "run_lifecycle"],
   issued_at: "2025-09-01T00:00:00Z",
 };
 

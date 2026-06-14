@@ -65,6 +65,7 @@ export type {
   ApprovalTargetContext,
   ApprovalRiskSummary,
   ApprovalRequest,
+  ActionStatus,
   ActionReceiptStatus,
   ExpectedFollowup,
   PermissionResult,
