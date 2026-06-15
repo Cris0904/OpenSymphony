@@ -537,6 +537,112 @@ async fn init_can_scaffold_ai_pr_review_and_configure_github_with_gh() {
 }
 
 #[tokio::test]
+async fn init_non_interactive_configure_github_uses_flag_without_prompting() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    let gh_log = repo.path().join("gh.log");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+
+    let mut child = spawn_init_child_with_env(
+        repo.path(),
+        server.base_url(),
+        &[
+            "--non-interactive",
+            "--configure-github",
+            "--reuse-llm-api-key-for-ai-review-secret",
+            "--linear-project-slug",
+            "demo-project",
+        ],
+        &[
+            ("OPENSYMPHONY_TEST_GH_MODE", "success"),
+            (
+                "OPENSYMPHONY_TEST_GH_LOG",
+                gh_log.to_str().expect("gh log path should be valid"),
+            ),
+        ],
+    );
+    write_stdin(&mut child, "").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "non-interactive configure-github init should succeed: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("GitHub Actions settings for `example/demo` were configured with `gh`."),
+        "stdout should confirm GitHub automation: {stdout}",
+    );
+    assert!(
+        !stdout.contains("Configure GitHub Actions variables"),
+        "non-interactive configure-github should not prompt: {stdout}",
+    );
+    assert!(
+        repo.path()
+            .join(".github/workflows/ai-pr-review.yml")
+            .is_file(),
+        "configure-github should request AI review scaffolding"
+    );
+
+    let gh_log = fs::read_to_string(&gh_log).expect("gh log should exist");
+    assert!(
+        gh_log.contains(
+            "gh variable set AI_REVIEW_PROVIDER_KIND -R example/demo --body openai-compatible"
+        ),
+        "provider variable should be configured: {gh_log}",
+    );
+    assert!(
+        gh_log.contains("gh secret set AI_REVIEW_API_KEY -R example/demo"),
+        "secret should be configured from the reused LLM_API_KEY: {gh_log}",
+    );
+}
+
+#[tokio::test]
+async fn init_can_commit_and_push_bootstrap_changes_when_prompt_confirmed() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    let remote = TempDir::new().expect("temp remote should exist");
+    run_git(remote.path(), &["init", "--bare", "-q", "."]);
+    init_git_repo(
+        repo.path(),
+        remote.path().to_str().expect("remote path should be utf-8"),
+    );
+    run_git(repo.path(), &["config", "user.email", "test@example.com"]);
+    run_git(repo.path(), &["config", "user.name", "OpenSymphony Test"]);
+    fs::write(repo.path().join("scratch.txt"), "do not commit\n")
+        .expect("scratch file should write");
+
+    let mut child = spawn_init_child(repo.path(), server.base_url(), &[]);
+    write_stdin(&mut child, "\ndemo-project\nyes\n").await;
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "init should succeed: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("Commit and push these OpenSymphony bootstrap changes"),
+        "interactive init should prompt before publishing: {stdout}",
+    );
+    assert!(
+        stdout.contains("Committed and pushed OpenSymphony bootstrap changes"),
+        "stdout should confirm the git publish step: {stdout}",
+    );
+    assert_bootstrap_commit_pushed(repo.path(), remote.path());
+}
+
+#[tokio::test]
 async fn init_non_interactive_can_commit_and_push_bootstrap_changes_when_requested() {
     let server = TemplateServer::start().await;
     let repo = TempDir::new().expect("temp repo should exist");
@@ -583,31 +689,7 @@ async fn init_non_interactive_can_commit_and_push_bootstrap_changes_when_request
         "non-interactive commit/push should not prompt before publishing: {stdout}",
     );
 
-    let subject = git_stdout(repo.path(), &["log", "-1", "--pretty=%s"]);
-    assert_eq!(subject.trim(), "chore: bootstrap OpenSymphony");
-    let committed_files = git_stdout(repo.path(), &["show", "--name-only", "--format=", "HEAD"]);
-    assert!(
-        committed_files.contains("WORKFLOW.md")
-            && committed_files.contains(".agents/skills/pull/SKILL.md")
-            && committed_files.contains(".opensymphony/memory/memory.yaml"),
-        "generated bootstrap files should be committed: {committed_files}",
-    );
-    assert!(
-        !committed_files.contains("scratch.txt"),
-        "unrelated untracked files should not be committed: {committed_files}",
-    );
-
-    let local_head = git_stdout(repo.path(), &["rev-parse", "HEAD"]);
-    let remote_commits = git_stdout(remote.path(), &["rev-list", "--all"]);
-    assert!(
-        remote_commits.contains(local_head.trim()),
-        "pushed remote should contain local init commit: remote={remote_commits}, local={local_head}",
-    );
-    let status = git_stdout(repo.path(), &["status", "--short"]);
-    assert!(
-        status.contains("?? scratch.txt"),
-        "unrelated untracked file should remain untracked: {status}",
-    );
+    assert_bootstrap_commit_pushed(repo.path(), remote.path());
 }
 
 #[tokio::test]
@@ -859,6 +941,34 @@ fn git_stdout(repo_root: &std::path::Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn assert_bootstrap_commit_pushed(repo_root: &std::path::Path, remote_root: &std::path::Path) {
+    let subject = git_stdout(repo_root, &["log", "-1", "--pretty=%s"]);
+    assert_eq!(subject.trim(), "chore: bootstrap OpenSymphony");
+    let committed_files = git_stdout(repo_root, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        committed_files.contains("WORKFLOW.md")
+            && committed_files.contains(".agents/skills/pull/SKILL.md")
+            && committed_files.contains(".opensymphony/memory/memory.yaml"),
+        "generated bootstrap files should be committed: {committed_files}",
+    );
+    assert!(
+        !committed_files.contains("scratch.txt"),
+        "unrelated untracked files should not be committed: {committed_files}",
+    );
+
+    let local_head = git_stdout(repo_root, &["rev-parse", "HEAD"]);
+    let remote_commits = git_stdout(remote_root, &["rev-list", "--all"]);
+    assert!(
+        remote_commits.contains(local_head.trim()),
+        "pushed remote should contain local init commit: remote={remote_commits}, local={local_head}",
+    );
+    let status = git_stdout(repo_root, &["status", "--short"]);
+    assert!(
+        status.contains("?? scratch.txt"),
+        "unrelated untracked file should remain untracked: {status}",
+    );
 }
 
 fn memory_gitignore_policy(prefix: &str) -> String {

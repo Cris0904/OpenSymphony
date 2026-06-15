@@ -61,7 +61,7 @@ pub struct InitArgs {
         long,
         value_enum,
         value_name = "POLICY",
-        help = "How non-interactive init handles existing generated files"
+        help = "Apply this policy for existing generated files instead of prompting"
     )]
     conflict_policy: Option<InitConflictPolicy>,
     #[arg(
