@@ -598,6 +598,7 @@ fn doctor_skips_project_set_when_global_config_is_absent() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let target_repo = temp_dir.path().join("target-repo");
     let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
     let config_path = temp_dir.path().join("doctor.yaml");
     let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
 
@@ -608,10 +609,35 @@ fn doctor_skips_project_set_when_global_config_is_absent() {
     )
     .expect("workflow should be written");
     let config = serde_yaml::to_string(&Value::Mapping(
-        [(
-            Value::String("target_repo".to_string()),
-            Value::String(target_repo.display().to_string()),
-        )]
+        [
+            (
+                Value::String("target_repo".to_string()),
+                Value::String(target_repo.display().to_string()),
+            ),
+            (
+                Value::String("openhands".to_string()),
+                Value::Mapping(
+                    [
+                        (
+                            Value::String("tool_dir".to_string()),
+                            Value::String(tool_dir.display().to_string()),
+                        ),
+                        (Value::String("probe_model".to_string()), Value::Null),
+                        (Value::String("probe_api_key_env".to_string()), Value::Null),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ),
+            (
+                Value::String("linear".to_string()),
+                Value::Mapping(
+                    [(Value::String("enabled".to_string()), Value::Bool(false))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+        ]
         .into_iter()
         .collect(),
     ))
@@ -621,6 +647,7 @@ fn doctor_skips_project_set_when_global_config_is_absent() {
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
     }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
         .arg("doctor")
@@ -642,8 +669,12 @@ fn doctor_skips_project_set_when_global_config_is_absent() {
         "doctor should skip the project-set check when no global config is present: stdout={stdout}",
     );
     assert!(
-        !stdout.contains("[PASS] project-set"),
-        "doctor should not report a passing project-set check when the file is absent: stdout={stdout}",
+        stdout.contains(".opensymphony/project-set.yaml present"),
+        "doctor should explain the legacy fallback: stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("legacy single-repo flow"),
+        "doctor should explain the legacy fallback mode: stdout={stdout}",
     );
 }
 
@@ -652,6 +683,7 @@ fn doctor_passes_project_set_when_global_config_is_valid() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let target_repo = temp_dir.path().join("target-repo");
     let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
     let opensymphony_dir = temp_dir.path().join(".opensymphony");
     let project_set_path = opensymphony_dir.join("project-set.yaml");
     let config_path = temp_dir.path().join("doctor.yaml");
@@ -670,10 +702,35 @@ fn doctor_passes_project_set_when_global_config_is_valid() {
     )
     .expect("project-set should be written");
     let config = serde_yaml::to_string(&Value::Mapping(
-        [(
-            Value::String("target_repo".to_string()),
-            Value::String(target_repo.display().to_string()),
-        )]
+        [
+            (
+                Value::String("target_repo".to_string()),
+                Value::String(target_repo.display().to_string()),
+            ),
+            (
+                Value::String("openhands".to_string()),
+                Value::Mapping(
+                    [
+                        (
+                            Value::String("tool_dir".to_string()),
+                            Value::String(tool_dir.display().to_string()),
+                        ),
+                        (Value::String("probe_model".to_string()), Value::Null),
+                        (Value::String("probe_api_key_env".to_string()), Value::Null),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ),
+            (
+                Value::String("linear".to_string()),
+                Value::Mapping(
+                    [(Value::String("enabled".to_string()), Value::Bool(false))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+        ]
         .into_iter()
         .collect(),
     ))
@@ -683,6 +740,7 @@ fn doctor_passes_project_set_when_global_config_is_valid() {
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
     }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
         .arg("doctor")
@@ -718,6 +776,7 @@ fn doctor_fails_project_set_when_global_config_is_invalid() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let target_repo = temp_dir.path().join("target-repo");
     let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
     let opensymphony_dir = temp_dir.path().join(".opensymphony");
     let project_set_path = opensymphony_dir.join("project-set.yaml");
     let config_path = temp_dir.path().join("doctor.yaml");
@@ -737,10 +796,35 @@ fn doctor_fails_project_set_when_global_config_is_invalid() {
     )
     .expect("project-set should be written");
     let config = serde_yaml::to_string(&Value::Mapping(
-        [(
-            Value::String("target_repo".to_string()),
-            Value::String(target_repo.display().to_string()),
-        )]
+        [
+            (
+                Value::String("target_repo".to_string()),
+                Value::String(target_repo.display().to_string()),
+            ),
+            (
+                Value::String("openhands".to_string()),
+                Value::Mapping(
+                    [
+                        (
+                            Value::String("tool_dir".to_string()),
+                            Value::String(tool_dir.display().to_string()),
+                        ),
+                        (Value::String("probe_model".to_string()), Value::Null),
+                        (Value::String("probe_api_key_env".to_string()), Value::Null),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ),
+            (
+                Value::String("linear".to_string()),
+                Value::Mapping(
+                    [(Value::String("enabled".to_string()), Value::Bool(false))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ),
+        ]
         .into_iter()
         .collect(),
     ))
@@ -750,6 +834,7 @@ fn doctor_fails_project_set_when_global_config_is_invalid() {
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
     }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
         .arg("doctor")

@@ -1181,25 +1181,25 @@ fn check_repo_root(repo_root: &Path) -> CheckResult {
 
 /// Validates the optional `.opensymphony/project-set.yaml` (LOC-12).
 ///
-/// - If the file is absent, the check passes (legacy single-repo flow).
+/// - If the file is absent, the check is skipped (legacy single-repo flow).
 /// - If the file is present, it is loaded and resolved. A successful resolve
 ///   passes with a summary including the project-set slug and the inventory
 ///   size. A failure to load or resolve fails the check.
 fn check_project_set(config_root: &Path) -> CheckResult {
     let path = config_root.join(".opensymphony").join("project-set.yaml");
     if !path.is_file() {
-        return CheckResult::pass(
+        return CheckResult::skip(
             "project-set",
-            format!("no {} present (using legacy single-repo config)", path.display()),
+            format!("no {} present; legacy single-repo flow in use", path.display()),
         );
     }
 
     let raw = match crate::opensymphony_workflow::ProjectSetFrontMatter::load_from_path(&path) {
         Ok(Some(raw)) => raw,
         Ok(None) => {
-            return CheckResult::pass(
+            return CheckResult::skip(
                 "project-set",
-                format!("empty {} (using legacy single-repo config)", path.display()),
+                format!("empty {}; legacy single-repo flow in use", path.display()),
             );
         }
         Err(error) => {
