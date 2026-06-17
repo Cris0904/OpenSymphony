@@ -1376,6 +1376,8 @@ Run the scheduler.
             target_repo: tempdir.path().to_path_buf(),
             workflow_path: tempdir.path().join("WORKFLOW.md"),
             workflow,
+            project_set: None,
+            project_set_path: None,
             bind: "127.0.0.1:3000".parse().expect("bind should parse"),
             tool_dir: None,
             openhands_conversation_store: None,

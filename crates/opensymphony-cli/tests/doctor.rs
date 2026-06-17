@@ -593,6 +593,185 @@ fn run_local_launcher_rejects_extra_agent_server_flags() {
     );
 }
 
+#[test]
+fn doctor_skips_project_set_when_global_config_is_absent() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    let config = serde_yaml::to_string(&Value::Mapping(
+        [(
+            Value::String("target_repo".to_string()),
+            Value::String(target_repo.display().to_string()),
+        )]
+        .into_iter()
+        .collect(),
+    ))
+    .expect("config should serialize");
+    std::fs::write(&config_path, config).expect("config should be written");
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor should succeed without project-set: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("[SKIP] project-set"),
+        "doctor should skip the project-set check when no global config is present: stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("[PASS] project-set"),
+        "doctor should not report a passing project-set check when the file is absent: stdout={stdout}",
+    );
+}
+
+#[test]
+fn doctor_passes_project_set_when_global_config_is_valid() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let opensymphony_dir = temp_dir.path().join(".opensymphony");
+    let project_set_path = opensymphony_dir.join("project-set.yaml");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    std::fs::write(
+        &project_set_path,
+        project_set_yaml_source("opensymphony-updates", "opensymphony-bootstrap-e7b957855cb7"),
+    )
+    .expect("project-set should be written");
+    let config = serde_yaml::to_string(&Value::Mapping(
+        [(
+            Value::String("target_repo".to_string()),
+            Value::String(target_repo.display().to_string()),
+        )]
+        .into_iter()
+        .collect(),
+    ))
+    .expect("config should serialize");
+    std::fs::write(&config_path, config).expect("config should be written");
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor should succeed with a valid project-set: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("[PASS] project-set"),
+        "doctor should report a passing project-set check: stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("opensymphony-updates"),
+        "doctor should mention the resolved project-set slug: stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("opensymphony-bootstrap-e7b957855cb7"),
+        "doctor should mention the resolved linear project_slug: stdout={stdout}",
+    );
+}
+
+#[test]
+fn doctor_fails_project_set_when_global_config_is_invalid() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let opensymphony_dir = temp_dir.path().join(".opensymphony");
+    let project_set_path = opensymphony_dir.join("project-set.yaml");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    // Empty slug → resolve failure for the project_set top-level slug.
+    std::fs::write(
+        &project_set_path,
+        project_set_yaml_source("", "opensymphony-bootstrap-e7b957855cb7"),
+    )
+    .expect("project-set should be written");
+    let config = serde_yaml::to_string(&Value::Mapping(
+        [(
+            Value::String("target_repo".to_string()),
+            Value::String(target_repo.display().to_string()),
+        )]
+        .into_iter()
+        .collect(),
+    ))
+    .expect("config should serialize");
+    std::fs::write(&config_path, config).expect("config should be written");
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "doctor should fail when the project-set cannot be resolved: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("[FAIL] project-set"),
+        "doctor should report a failing project-set check: stdout={stdout}",
+    );
+}
+
 fn repo_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if manifest_dir.join("Cargo.toml").is_file() && manifest_dir.join("README.md").is_file() {
@@ -702,5 +881,34 @@ Issue: {{{{ issue.identifier }}}}
 "#,
         workspace_root.display(),
         base_url,
+    )
+}
+
+fn project_set_yaml_source(project_set_slug: &str, linear_project_slug: &str) -> String {
+    format!(
+        r#"---
+schema_version: 1
+project_set:
+  slug: {project_set_slug}
+  name: OpenSymphony Updates
+  linear:
+    endpoint: https://api.linear.app/graphql
+    project_slug: {linear_project_slug}
+    api_key_env: LINEAR_API_KEY
+    active_states: [Todo, "In Progress", "Human Review", Merging, Rework]
+    terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
+  polling:
+    interval_ms: 5000
+  agent:
+    max_concurrent_agents: 4
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:kumanday/OpenSymphony.git
+          default_branch: main
+          path: ../OpenSymphony
+"#,
     )
 }

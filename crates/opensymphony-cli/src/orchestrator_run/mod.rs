@@ -82,6 +82,18 @@ enum RunCommandError {
         #[source]
         source: crate::opensymphony_workflow::WorkflowConfigError,
     },
+    #[error("failed to load project-set config {path}: {source}")]
+    LoadProjectSet {
+        path: PathBuf,
+        #[source]
+        source: crate::opensymphony_workflow::WorkflowLoadError,
+    },
+    #[error("failed to resolve project-set config {path}: {source}")]
+    ResolveProjectSet {
+        path: PathBuf,
+        #[source]
+        source: crate::opensymphony_workflow::WorkflowConfigError,
+    },
     #[error(
         "memory auto-capture is enabled but {path} is missing; run `opensymphony memory init` or `opensymphony update` from the target repo before `opensymphony run`"
     )]
@@ -138,6 +150,11 @@ async fn run_orchestrator(args: RunArgs) -> Result<(), RunCommandError> {
             .unwrap_or_else(|| "<none>".to_string()),
         target_repo = %runtime.target_repo.display(),
         workflow = %runtime.workflow_path.display(),
+        project_set = runtime
+            .project_set_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
         bind = %runtime.bind,
         "starting OpenSymphony orchestrator"
     );

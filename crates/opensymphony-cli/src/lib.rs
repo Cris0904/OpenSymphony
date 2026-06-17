@@ -550,6 +550,7 @@ pub async fn run_doctor_command(
             checks.push(check_local_safety());
             checks.push(check_openhands_transport(&runtime.workflow));
             checks.push(check_linear(&config.linear, &runtime.workflow));
+            checks.push(check_project_set(config_root));
             (runtime, rendered_probe_prompt)
         }
         Err(error) => {
@@ -1176,6 +1177,59 @@ fn check_repo_root(repo_root: &Path) -> CheckResult {
             ),
         )
     }
+}
+
+/// Validates the optional `.opensymphony/project-set.yaml` (LOC-12).
+///
+/// - If the file is absent, the check passes (legacy single-repo flow).
+/// - If the file is present, it is loaded and resolved. A successful resolve
+///   passes with a summary including the project-set slug and the inventory
+///   size. A failure to load or resolve fails the check.
+fn check_project_set(config_root: &Path) -> CheckResult {
+    let path = config_root.join(".opensymphony").join("project-set.yaml");
+    if !path.is_file() {
+        return CheckResult::pass(
+            "project-set",
+            format!("no {} present (using legacy single-repo config)", path.display()),
+        );
+    }
+
+    let raw = match crate::opensymphony_workflow::ProjectSetFrontMatter::load_from_path(&path) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => {
+            return CheckResult::pass(
+                "project-set",
+                format!("empty {} (using legacy single-repo config)", path.display()),
+            );
+        }
+        Err(error) => {
+            return CheckResult::fail(
+                "project-set",
+                format!("failed to load {}: {error}", path.display()),
+            );
+        }
+    };
+
+    let resolved = match raw.resolve(&ProcessEnvironment) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            return CheckResult::fail(
+                "project-set",
+                format!("failed to resolve {}: {error}", path.display()),
+            );
+        }
+    };
+
+    CheckResult::pass(
+        "project-set",
+        format!(
+            "resolved {} -> slug `{}`, linear project `{}`, {} repos in inventory",
+            path.display(),
+            resolved.config.slug,
+            resolved.config.linear.project_slug,
+            resolved.inventory().len(),
+        ),
+    )
 }
 
 async fn check_target_repo(target_repo: &Path) -> CheckResult {
