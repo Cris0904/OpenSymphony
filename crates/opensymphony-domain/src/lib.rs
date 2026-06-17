@@ -25,8 +25,8 @@ pub use identifiers::{
     WorkspaceKey,
 };
 pub use issue::{BlockerRef, IssueRef, IssueState, IssueStateCategory, NormalizedIssue};
-pub use repo::RepoRef;
 pub use journal::{EventJournalBackend, EventStream, InMemoryEventJournal, StreamBroker};
+pub use repo::RepoRef;
 pub use runtime::{
     ConversationActivityEvent, ConversationMetadata, DetachMetadata, DetachReason,
     HistorySyncStatus, LivenessState, ReconnectStatus, ReleaseReason, RetryAttempt,
