@@ -2,6 +2,7 @@ mod control_plane;
 mod identifiers;
 mod issue;
 mod journal;
+mod repo;
 mod runtime;
 mod snapshot;
 mod state_machine;
@@ -24,6 +25,7 @@ pub use identifiers::{
     WorkspaceKey,
 };
 pub use issue::{BlockerRef, IssueRef, IssueState, IssueStateCategory, NormalizedIssue};
+pub use repo::RepoRef;
 pub use journal::{EventJournalBackend, EventStream, InMemoryEventJournal, StreamBroker};
 pub use runtime::{
     ConversationActivityEvent, ConversationMetadata, DetachMetadata, DetachReason,
