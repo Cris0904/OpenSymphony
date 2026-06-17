@@ -26,9 +26,11 @@ use super::{
         OpenHandsConversationToolConfig, OpenHandsFrontMatter, OpenHandsLlmConfig,
         OpenHandsLlmFrontMatter, OpenHandsLocalServerConfig, OpenHandsLocalServerFrontMatter,
         OpenHandsTransportConfig, OpenHandsWebSocketConfig, OpenHandsWebSocketFrontMatter,
-        PollingConfig, PollingFrontMatter, ResolvedWorkflow, TrackerConfig, TrackerFrontMatter,
-        TrackerKind, WorkflowConfig, WorkflowDefinition, WorkflowExtensions, WorkspaceConfig,
-        WorkspaceFrontMatter,
+        PollingConfig, PollingFrontMatter, ProjectSetAgentConfig,
+        ProjectSetConfig, ProjectSetFrontMatter, ProjectSetLinearConfig, ProjectSetPollingConfig,
+        ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry, ResolvedWorkflow, TrackerConfig,
+        TrackerFrontMatter, TrackerKind, WorkflowConfig, WorkflowDefinition, WorkflowExtensions,
+        WorkspaceConfig, WorkspaceFrontMatter, PROJECT_SET_SCHEMA_VERSION,
     },
 };
 
@@ -1134,4 +1136,209 @@ fn normalize_optional_owned(value: String) -> Option<String> {
 
 fn normalize_optional_literal(value: &Option<String>) -> Option<String> {
     value.as_deref().and_then(normalize_optional)
+}
+
+// ---------------------------------------------------------------------------
+// Project-set config resolver
+// ---------------------------------------------------------------------------
+
+pub(crate) fn resolve_project_set<E: Environment>(
+    raw: &ProjectSetFrontMatter,
+    env: &E,
+) -> Result<ResolvedProjectSet, WorkflowConfigError> {
+    let body = &raw.project_set;
+
+    let schema_version = raw.schema_version.unwrap_or(PROJECT_SET_SCHEMA_VERSION);
+    if schema_version != PROJECT_SET_SCHEMA_VERSION {
+        return Err(WorkflowConfigError::InvalidField {
+            field: "schema_version",
+            message: format!(
+                "expected schema_version {PROJECT_SET_SCHEMA_VERSION}, got {schema_version}"
+            ),
+        });
+    }
+
+    let slug = require_literal(body.slug.as_deref(), "project_set.slug")?;
+    let name = body
+        .name
+        .as_deref()
+        .and_then(normalize_optional)
+        .unwrap_or_else(|| slug.clone());
+
+    let linear = resolve_project_set_linear(&body.linear, env)?;
+    let polling = resolve_project_set_polling(&body.polling)?;
+    let agent = resolve_project_set_agent(&body.agent)?;
+    let projects = resolve_projects(&body.projects)?;
+
+    let inventory = build_inventory(&projects)?;
+
+    let config = ProjectSetConfig {
+        schema_version,
+        slug,
+        name,
+        linear,
+        polling,
+        agent,
+        projects,
+    };
+
+    Ok(ResolvedProjectSet::new(config, inventory))
+}
+
+fn resolve_project_set_linear<E: Environment>(
+    linear: &super::model::ProjectSetLinearFrontMatter,
+    env: &E,
+) -> Result<ProjectSetLinearConfig, WorkflowConfigError> {
+    let endpoint = resolve_string_or_default(
+        linear.endpoint.as_deref(),
+        env,
+        "project_set.linear.endpoint",
+        DEFAULT_LINEAR_ENDPOINT,
+    )?;
+    let project_slug =
+        require_literal(linear.project_slug.as_deref(), "project_set.linear.project_slug")?;
+
+    let api_key = match linear.api_key_env.as_deref().and_then(normalize_optional) {
+        Some(env_name) => {
+            env.get(&env_name)
+                .and_then(normalize_optional_owned)
+                .ok_or(WorkflowConfigError::MissingEnvironmentVariable {
+                    field: "project_set.linear.api_key_env",
+                    variable: env_name.to_owned(),
+                })?
+        }
+        None => env
+            .get("LINEAR_API_KEY")
+            .and_then(normalize_optional_owned)
+            .ok_or(WorkflowConfigError::MissingRequiredField {
+                field: "project_set.linear.api_key_env",
+            })?,
+    };
+
+    let active_states = resolve_state_list(
+        linear.active_states.as_deref(),
+        "project_set.linear.active_states",
+    )?;
+    let terminal_states = resolve_state_list(
+        linear.terminal_states.as_deref(),
+        "project_set.linear.terminal_states",
+    )?;
+
+    Ok(ProjectSetLinearConfig {
+        endpoint,
+        project_slug,
+        api_key,
+        active_states,
+        terminal_states,
+    })
+}
+
+fn resolve_project_set_polling(
+    polling: &super::model::ProjectSetPollingFrontMatter,
+) -> Result<ProjectSetPollingConfig, WorkflowConfigError> {
+    Ok(ProjectSetPollingConfig {
+        interval_ms: resolve_positive_u64(
+            polling.interval_ms.as_ref(),
+            "project_set.polling.interval_ms",
+            DEFAULT_POLL_INTERVAL_MS,
+        )?,
+    })
+}
+
+fn resolve_project_set_agent(
+    agent: &super::model::ProjectSetAgentFrontMatter,
+) -> Result<ProjectSetAgentConfig, WorkflowConfigError> {
+    Ok(ProjectSetAgentConfig {
+        max_concurrent_agents: resolve_positive_u64(
+            agent.max_concurrent_agents.as_ref(),
+            "project_set.agent.max_concurrent_agents",
+            DEFAULT_MAX_CONCURRENT_AGENTS,
+        )?,
+    })
+}
+
+fn resolve_projects(
+    projects: &[super::model::ProjectEntry],
+) -> Result<Vec<ResolvedProject>, WorkflowConfigError> {
+    if projects.is_empty() {
+        return Err(WorkflowConfigError::InvalidField {
+            field: "project_set.projects",
+            message: "must contain at least one project".to_owned(),
+        });
+    }
+
+    projects
+        .iter()
+        .map(|project| {
+            let slug =
+                require_literal(project.slug.as_deref(), "project_set.projects[].slug")?;
+            let name = project
+                .name
+                .as_deref()
+                .and_then(normalize_optional)
+                .unwrap_or_else(|| slug.clone());
+
+            if project.repos.is_empty() {
+                return Err(WorkflowConfigError::InvalidField {
+                    field: "project_set.projects[].repos",
+                    message: format!("project `{slug}` must contain at least one repo"),
+                });
+            }
+
+            let repos = project
+                .repos
+                .iter()
+                .map(|repo| {
+                    let repo_slug =
+                        require_literal(repo.slug.as_deref(), "project_set.projects[].repos[].slug")?;
+                    let url =
+                        require_literal(repo.url.as_deref(), "project_set.projects[].repos[].url")?;
+                    let default_branch = repo
+                        .default_branch
+                        .as_deref()
+                        .and_then(normalize_optional);
+                    let path = repo.path.as_deref().and_then(normalize_optional);
+
+                    Ok(ResolvedRepoEntry {
+                        slug: repo_slug,
+                        url,
+                        default_branch,
+                        path,
+                    })
+                })
+                .collect::<Result<Vec<_>, WorkflowConfigError>>()?;
+
+            Ok(ResolvedProject { slug, name, repos })
+        })
+        .collect()
+}
+
+/// Builds a flat `slug → RepoRef` inventory map from the resolved projects.
+///
+/// Duplicate repo slugs across the whole project set are rejected.
+fn build_inventory(
+    projects: &[ResolvedProject],
+) -> Result<BTreeMap<String, crate::opensymphony_domain::RepoRef>, WorkflowConfigError> {
+    let mut inventory = BTreeMap::new();
+
+    for project in projects {
+        for repo in &project.repos {
+            if inventory.contains_key(&repo.slug) {
+                return Err(WorkflowConfigError::InvalidField {
+                    field: "project_set.projects[].repos[].slug",
+                    message: format!("duplicate repo slug `{}` across project set", repo.slug),
+                });
+            }
+            inventory.insert(
+                repo.slug.clone(),
+                crate::opensymphony_domain::RepoRef {
+                    url: repo.url.clone(),
+                    key: repo.slug.clone(),
+                    default_branch: repo.default_branch.clone(),
+                },
+            );
+        }
+    }
+
+    Ok(inventory)
 }

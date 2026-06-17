@@ -19,8 +19,12 @@ pub use model::{
     OpenHandsConversationToolFrontMatter, OpenHandsFrontMatter, OpenHandsLlmConfig,
     OpenHandsLlmFrontMatter, OpenHandsLocalServerConfig, OpenHandsLocalServerFrontMatter,
     OpenHandsTransportConfig, OpenHandsTransportFrontMatter, OpenHandsWebSocketConfig,
-    OpenHandsWebSocketFrontMatter, PollingConfig, PollingFrontMatter, ProcessEnvironment,
-    PromptContext, ResolvedWorkflow, TrackerConfig, TrackerFrontMatter, TrackerKind,
+    OpenHandsWebSocketFrontMatter, PollingConfig, PollingFrontMatter,
+    PROJECT_SET_SCHEMA_VERSION, ProcessEnvironment, ProjectEntry, ProjectSetAgentConfig,
+    ProjectSetAgentFrontMatter, ProjectSetBody, ProjectSetConfig, ProjectSetFrontMatter,
+    ProjectSetLinearConfig, ProjectSetLinearFrontMatter, ProjectSetPollingConfig,
+    ProjectSetPollingFrontMatter, PromptContext, RepoEntry, ResolvedProject, ResolvedProjectSet,
+    ResolvedRepoEntry, ResolvedWorkflow, TrackerConfig, TrackerFrontMatter, TrackerKind,
     WorkflowConfig, WorkflowDefinition, WorkflowExtensions, WorkflowFrontMatter, WorkspaceConfig,
     WorkspaceFrontMatter,
 };
@@ -94,6 +98,51 @@ impl ResolvedWorkflow {
     }
 }
 
+impl ProjectSetFrontMatter {
+    /// Loads from `<config_root>/.opensymphony/project-set.yaml`.
+    ///
+    /// Returns `Ok(None)` when the file does not exist.
+    pub fn load_from_config_root(
+        config_root: impl AsRef<Path>,
+    ) -> Result<Option<Self>, WorkflowLoadError> {
+        loader::load_project_set_from_config_root(config_root.as_ref())
+    }
+
+    /// Loads from an explicit file path.
+    ///
+    /// Returns `Ok(None)` when the file does not exist.
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Option<Self>, WorkflowLoadError> {
+        loader::load_project_set_from_path(path.as_ref())
+    }
+
+    /// Parses a project-set YAML document from a string.
+    pub fn parse(source: &str) -> Result<Self, WorkflowLoadError> {
+        loader::parse_project_set(source)
+    }
+
+    /// Resolves this raw front-matter into a [`ResolvedProjectSet`] with a
+    /// `slug → RepoRef` inventory.
+    pub fn resolve<E: Environment>(
+        &self,
+        env: &E,
+    ) -> Result<ResolvedProjectSet, WorkflowConfigError> {
+        resolve::resolve_project_set(self, env)
+    }
+
+    /// Convenience: resolves with the process environment.
+    pub fn resolve_with_process_env(&self) -> Result<ResolvedProjectSet, WorkflowConfigError> {
+        self.resolve(&ProcessEnvironment)
+    }
+}
+
+impl std::str::FromStr for ProjectSetFrontMatter {
+    type Err = WorkflowLoadError;
+
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        Self::parse(source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -104,8 +153,8 @@ mod tests {
     use serde::Serialize;
 
     use super::{
-        PromptTemplateError, TrackerKind, WorkflowConfigError, WorkflowDefinition,
-        WorkflowLoadError,
+        PromptTemplateError, ProjectSetFrontMatter, TrackerKind, WorkflowConfigError,
+        WorkflowDefinition, WorkflowLoadError,
         model::{
             DEFAULT_HOOK_TIMEOUT_MS, DEFAULT_LINEAR_ENDPOINT, DEFAULT_MAX_CONCURRENT_AGENTS,
             DEFAULT_MAX_RETRY_BACKOFF_MS, DEFAULT_MAX_TURNS, DEFAULT_OPENHANDS_AGENT_TOOLS,
@@ -2373,5 +2422,323 @@ Ticket: {{ issue.identifier }}
                 .expect("workspace root should exist")
                 .to_path_buf()
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Project-set config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn project_set_parses_valid_fixture() {
+        let source = sample_project_set();
+        let raw = ProjectSetFrontMatter::parse(source).expect("fixture should parse");
+
+        assert_eq!(raw.schema_version, Some(1));
+        assert_eq!(
+            raw.project_set.slug.as_deref(),
+            Some("opensymphony-updates")
+        );
+        assert_eq!(raw.project_set.projects.len(), 1);
+        assert_eq!(raw.project_set.projects[0].repos.len(), 1);
+    }
+
+    #[test]
+    fn project_set_resolves_to_inventory_and_config() {
+        let source = sample_project_set();
+        let raw = ProjectSetFrontMatter::parse(source).expect("fixture should parse");
+        let env = env([("LINEAR_API_KEY", "test-linear-key")]);
+
+        let resolved = raw.resolve(&env).expect("fixture should resolve");
+
+        assert_eq!(resolved.config.schema_version, 1);
+        assert_eq!(resolved.config.slug, "opensymphony-updates");
+        assert_eq!(resolved.config.linear.project_slug, "opensymphony-bootstrap-e7b957855cb7");
+        assert_eq!(resolved.config.linear.api_key, "test-linear-key");
+        assert_eq!(resolved.config.polling.interval_ms, 5000);
+        assert_eq!(resolved.config.agent.max_concurrent_agents, 4);
+        assert_eq!(resolved.config.projects.len(), 1);
+        assert_eq!(resolved.config.projects[0].slug, "opensymphony");
+        assert_eq!(resolved.config.projects[0].repos[0].slug, "opensymphony");
+        assert_eq!(resolved.config.projects[0].repos[0].path.as_deref(), Some("../OpenSymphony"));
+    }
+
+    #[test]
+    fn project_set_inventory_maps_slug_to_repo_ref() {
+        let source = sample_project_set();
+        let raw = ProjectSetFrontMatter::parse(source).expect("fixture should parse");
+        let env = env([("LINEAR_API_KEY", "test-linear-key")]);
+
+        let resolved = raw.resolve(&env).expect("fixture should resolve");
+
+        let repo_ref = resolved
+            .repo_by_slug("opensymphony")
+            .expect("repo slug should exist in inventory");
+        assert_eq!(repo_ref.url, "git@github.com:kumanday/OpenSymphony.git");
+        assert_eq!(repo_ref.key, "opensymphony");
+        assert_eq!(repo_ref.default_branch.as_deref(), Some("main"));
+
+        // path is NOT part of RepoRef
+        assert!(resolved
+            .inventory()
+            .values()
+            .all(|r| r.default_branch.is_some()));
+    }
+
+    #[test]
+    fn project_set_missing_required_slug_fails() {
+        let source = r#"
+schema_version: 1
+project_set:
+  name: No Slug
+  linear:
+    project_slug: some-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: repo1
+          url: https://example.com/repo1.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let error = raw
+            .resolve(&env)
+            .expect_err("missing project_set.slug should fail");
+        assert!(matches!(
+            error,
+            WorkflowConfigError::MissingRequiredField {
+                field: "project_set.slug"
+            }
+        ));
+    }
+
+    #[test]
+    fn project_set_duplicate_repo_slugs_across_projects_fails() {
+        let source = r#"
+schema_version: 1
+project_set:
+  slug: test-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: shared-repo
+          url: https://example.com/repo1.git
+    - slug: proj2
+      repos:
+        - slug: shared-repo
+          url: https://example.com/repo2.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let error = raw
+            .resolve(&env)
+            .expect_err("duplicate repo slugs should fail");
+        assert!(matches!(
+            error,
+            WorkflowConfigError::InvalidField {
+                field: "project_set.projects[].repos[].slug",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn project_set_empty_projects_fails() {
+        let source = r#"
+schema_version: 1
+project_set:
+  slug: test-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects: []
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let error = raw
+            .resolve(&env)
+            .expect_err("empty projects should fail");
+        assert!(matches!(
+            error,
+            WorkflowConfigError::InvalidField {
+                field: "project_set.projects",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn project_set_wrong_schema_version_fails() {
+        let source = r#"
+schema_version: 99
+project_set:
+  slug: test-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: repo1
+          url: https://example.com/repo1.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let error = raw
+            .resolve(&env)
+            .expect_err("wrong schema version should fail");
+        assert!(matches!(
+            error,
+            WorkflowConfigError::InvalidField {
+                field: "schema_version",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn project_set_defaults_schema_version_to_1() {
+        let source = r#"
+project_set:
+  slug: test-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: repo1
+          url: https://example.com/repo1.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let resolved = raw.resolve(&env).expect("should resolve");
+        assert_eq!(resolved.config.schema_version, 1);
+    }
+
+    #[test]
+    fn project_set_linear_uses_env_key_fallback() {
+        let source = r#"
+schema_version: 1
+project_set:
+  slug: test-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: repo1
+          url: https://example.com/repo1.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        // No LINEAR_API_KEY → should fail
+        let env = BTreeMap::<String, String>::new();
+
+        let error = raw
+            .resolve(&env)
+            .expect_err("missing LINEAR_API_KEY should fail");
+        assert!(matches!(
+            error,
+            WorkflowConfigError::MissingRequiredField {
+                field: "project_set.linear.api_key_env"
+            }
+        ));
+    }
+
+    #[test]
+    fn project_set_optional_branch_and_path_fields() {
+        let source = r#"
+schema_version: 1
+project_set:
+  slug: test-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: repo1
+          url: https://example.com/repo1.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let resolved = raw.resolve(&env).expect("should resolve");
+        assert_eq!(resolved.config.projects[0].repos[0].default_branch, None);
+        assert_eq!(resolved.config.projects[0].repos[0].path, None);
+        // RepoRef still works without default_branch
+        let repo_ref = resolved.repo_by_slug("repo1").expect("repo should exist");
+        assert_eq!(repo_ref.default_branch, None);
+    }
+
+    #[test]
+    fn project_set_name_defaults_to_slug() {
+        let source = r#"
+schema_version: 1
+project_set:
+  slug: my-cool-set
+  linear:
+    project_slug: test-project
+    active_states: [Todo]
+    terminal_states: [Done]
+  projects:
+    - slug: proj1
+      repos:
+        - slug: repo1
+          url: https://example.com/repo1.git
+"#;
+        let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
+        let env = env([("LINEAR_API_KEY", "key")]);
+
+        let resolved = raw.resolve(&env).expect("should resolve");
+        assert_eq!(resolved.config.name, "my-cool-set");
+    }
+
+    fn sample_project_set() -> &'static str {
+        r#"---
+schema_version: 1
+
+project_set:
+  slug: opensymphony-updates
+  name: OpenSymphony Updates
+
+  linear:
+    endpoint: https://api.linear.app/graphql
+    project_slug: opensymphony-bootstrap-e7b957855cb7
+    api_key_env: LINEAR_API_KEY
+    active_states: [Todo, In Progress, Human Review, Merging, Rework]
+    terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
+
+  polling:
+    interval_ms: 5000
+
+  agent:
+    max_concurrent_agents: 4
+
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:kumanday/OpenSymphony.git
+          default_branch: main
+          path: ../OpenSymphony
+"#
     }
 }

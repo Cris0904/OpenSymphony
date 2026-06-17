@@ -384,3 +384,156 @@ where
     pub issue: &'a T,
     pub attempt: Option<u32>,
 }
+
+// ---------------------------------------------------------------------------
+// Project-set config (`.opensymphony/project-set.yaml`)
+// ---------------------------------------------------------------------------
+
+pub const PROJECT_SET_SCHEMA_VERSION: u64 = 1;
+
+/// Raw deserialized shape of `.opensymphony/project-set.yaml`.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct ProjectSetFrontMatter {
+    pub schema_version: Option<u64>,
+    #[serde(default)]
+    pub project_set: ProjectSetBody,
+}
+
+/// Top-level `project_set:` mapping.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct ProjectSetBody {
+    pub slug: Option<String>,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub linear: ProjectSetLinearFrontMatter,
+    #[serde(default)]
+    pub polling: ProjectSetPollingFrontMatter,
+    #[serde(default)]
+    pub agent: ProjectSetAgentFrontMatter,
+    #[serde(default)]
+    pub projects: Vec<ProjectEntry>,
+}
+
+/// Per-project entry inside `projects:`.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct ProjectEntry {
+    pub slug: Option<String>,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub repos: Vec<RepoEntry>,
+}
+
+/// Per-repo entry inside a project.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct RepoEntry {
+    pub slug: Option<String>,
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    /// Optional local path metadata (NOT part of RepoRef).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// Linear tracker configuration at the project-set level.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ProjectSetLinearFrontMatter {
+    pub endpoint: Option<String>,
+    pub project_slug: Option<String>,
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub active_states: Option<Vec<String>>,
+    #[serde(default)]
+    pub terminal_states: Option<Vec<String>>,
+}
+
+/// Polling configuration at the project-set level.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ProjectSetPollingFrontMatter {
+    pub interval_ms: Option<IntegerLike>,
+}
+
+/// Agent configuration at the project-set level.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ProjectSetAgentFrontMatter {
+    pub max_concurrent_agents: Option<IntegerLike>,
+}
+
+/// Resolved project-set config produced by [`resolve_project_set`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedProjectSet {
+    pub config: ProjectSetConfig,
+    /// Flat slug → RepoRef lookup for the resolver (LOC-13).
+    inventory: BTreeMap<String, crate::opensymphony_domain::RepoRef>,
+}
+
+impl ResolvedProjectSet {
+    pub(crate) fn new(
+        config: ProjectSetConfig,
+        inventory: BTreeMap<String, crate::opensymphony_domain::RepoRef>,
+    ) -> Self {
+        Self { config, inventory }
+    }
+
+    /// Returns a reference to the inventory map (slug → RepoRef).
+    pub fn inventory(&self) -> &BTreeMap<String, crate::opensymphony_domain::RepoRef> {
+        &self.inventory
+    }
+
+    /// Looks up a single repo by slug.
+    pub fn repo_by_slug(&self, slug: &str) -> Option<&crate::opensymphony_domain::RepoRef> {
+        self.inventory.get(slug)
+    }
+}
+
+/// Resolved project-set configuration values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSetConfig {
+    pub schema_version: u64,
+    pub slug: String,
+    pub name: String,
+    pub linear: ProjectSetLinearConfig,
+    pub polling: ProjectSetPollingConfig,
+    pub agent: ProjectSetAgentConfig,
+    pub projects: Vec<ResolvedProject>,
+}
+
+/// Resolved linear tracker config at project-set level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSetLinearConfig {
+    pub endpoint: String,
+    pub project_slug: String,
+    pub api_key: String,
+    pub active_states: Vec<String>,
+    pub terminal_states: Vec<String>,
+}
+
+/// Resolved polling config at project-set level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectSetPollingConfig {
+    pub interval_ms: u64,
+}
+
+/// Resolved agent config at project-set level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectSetAgentConfig {
+    pub max_concurrent_agents: u64,
+}
+
+/// A resolved project entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProject {
+    pub slug: String,
+    pub name: String,
+    pub repos: Vec<ResolvedRepoEntry>,
+}
+
+/// A resolved repo entry (url + default_branch mapped, path kept as metadata).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRepoEntry {
+    pub slug: String,
+    pub url: String,
+    pub default_branch: Option<String>,
+    /// Optional local path metadata (not part of RepoRef).
+    pub path: Option<String>,
+}
