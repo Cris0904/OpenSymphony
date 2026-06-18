@@ -1,9 +1,7 @@
 use std::{fs, path::Path};
 
 use super::{
-    WorkflowDefinition, WorkflowFrontMatter,
-    error::WorkflowLoadError,
-    model::ProjectSetFrontMatter,
+    WorkflowDefinition, WorkflowFrontMatter, error::WorkflowLoadError, model::ProjectSetFrontMatter,
 };
 
 pub(crate) fn load_workflow_from_path(

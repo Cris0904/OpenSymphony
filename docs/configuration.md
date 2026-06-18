@@ -214,6 +214,108 @@ the starting template if you want to inspect the checked-in example.
 developer-facing doctor fixture for this repository. It is not the runtime
 config that `opensymphony run` looks for in a target repo.
 
+## Global Project Set (`.opensymphony/project-set.yaml`)
+
+When the orchestrator is booting from outside a single target repo — that is,
+when a single `opensymphony run` instance serves multiple repositories — it
+looks up the **global** project-set config in addition to per-repo
+`config.yaml` + `WORKFLOW.md`.
+
+Phase-1 ships one file at a fixed path:
+
+```text
+<config_root>/.opensymphony/project-set.yaml
+```
+
+`config_root` is the directory the runtime `config.yaml` lives in (typically
+`--config`'s parent). `.opensymphony/project-set.yaml` is **versioned** —
+it sits next to other config files you commit and is allow-listed by the
+generated `.gitignore` (only runtime artifacts under `.opensymphony/` are
+ignored).
+
+### When the file is absent
+
+The file is optional. If `.opensymphony/project-set.yaml` does not exist,
+`opensymphony run` falls back to today's legacy single-repo flow unchanged
+and `opensymphony doctor` reports a `[SKIP] project-set` check.
+
+### Schema (Phase 1)
+
+```yaml
+schema_version: 1
+
+project_set:
+  slug: opensymphony-updates
+  name: OpenSymphony Updates
+
+  linear:
+    endpoint: https://api.linear.app/graphql
+    project_slug: opensymphony-bootstrap-e7b957855cb7
+    api_key_env: LINEAR_API_KEY
+    active_states: [Todo, In Progress, Human Review, Merging, Rework]
+    terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
+
+  polling:
+    interval_ms: 5000
+
+  agent:
+    max_concurrent_agents: 4
+
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:kumanday/OpenSymphony.git
+          default_branch: main
+          path: ../OpenSymphony
+```
+
+Required fields:
+
+- `schema_version` — must equal `1` for Phase 1; rejected otherwise.
+- `project_set.slug` — globally-unique project-set identifier (used in logs
+  and inventory keys).
+- `project_set.linear.project_slug` — the single Linear project this
+  orchestrator polls in Phase 1.
+- `project_set.linear.active_states` / `terminal_states` — the Linear
+  state set that drives dispatch.
+- `project_set.projects[].repos[].slug` and `url` — the inventory facts.
+  Duplicate repo slugs across the whole project set are rejected.
+
+### Repo slugs vs `RepoRef.key`
+
+`project_set.projects[].repos[].slug` is a **team-local repo identifier** —
+it is what the rest of the orchestrator uses as `RepoRef.key` to look the
+repo up in the project-set inventory. The orchestrator only ever sees this
+slug; it does not need to parse `url` for routing.
+
+The slug is intentionally NOT required to be a GitHub `org/repo` path. Bare
+names like `opensymphony` are fine and are what the resolver stores in
+`RepoRef.key`. `url` and `default_branch` carry the clone-source facts;
+`path` (optional) carries local boot metadata only and is intentionally not
+part of `RepoRef`.
+
+### `LINEAR_API_KEY` fallback
+
+`project_set.linear.api_key_env` is the env-var name that holds the Linear
+API token. The default is `LINEAR_API_KEY`; if the field is omitted the
+resolver still consults `LINEAR_API_KEY` directly. A missing or empty
+`LINEAR_API_KEY` (or the configured override) fails the doctor
+`[FAIL] project-set` check with `MissingEnvironmentVariable`.
+
+### What it owns vs `config.yaml` / `WORKFLOW.md`
+
+| Field | Lives in |
+|-------|----------|
+| `project_set.slug`, `project_set.projects[].repos[]` (inventory) | `.opensymphony/project-set.yaml` |
+| `project_set.linear.*`, `project_set.polling.*`, `project_set.agent.max_concurrent_agents` | `.opensymphony/project-set.yaml` |
+| `control_plane.bind`, `openhands.tool_dir`, `memory.*` | per-repo `config.yaml` |
+| Per-repo workflow, prompt template, agent/model contract | per-repo `WORKFLOW.md` |
+
+See [examples/project-set.yaml](../examples/project-set.yaml) for a
+ready-to-edit template.
+
 ## Planning Workspace
 
 The planning workspace is a dense, editable, review-oriented UI for the

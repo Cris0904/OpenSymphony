@@ -26,11 +26,11 @@ use super::{
         OpenHandsConversationToolConfig, OpenHandsFrontMatter, OpenHandsLlmConfig,
         OpenHandsLlmFrontMatter, OpenHandsLocalServerConfig, OpenHandsLocalServerFrontMatter,
         OpenHandsTransportConfig, OpenHandsWebSocketConfig, OpenHandsWebSocketFrontMatter,
-        PollingConfig, PollingFrontMatter, ProjectSetAgentConfig,
+        PROJECT_SET_SCHEMA_VERSION, PollingConfig, PollingFrontMatter, ProjectSetAgentConfig,
         ProjectSetConfig, ProjectSetFrontMatter, ProjectSetLinearConfig, ProjectSetPollingConfig,
         ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry, ResolvedWorkflow, TrackerConfig,
         TrackerFrontMatter, TrackerKind, WorkflowConfig, WorkflowDefinition, WorkflowExtensions,
-        WorkspaceConfig, WorkspaceFrontMatter, PROJECT_SET_SCHEMA_VERSION,
+        WorkspaceConfig, WorkspaceFrontMatter,
     },
 };
 
@@ -1195,18 +1195,19 @@ fn resolve_project_set_linear<E: Environment>(
         "project_set.linear.endpoint",
         DEFAULT_LINEAR_ENDPOINT,
     )?;
-    let project_slug =
-        require_literal(linear.project_slug.as_deref(), "project_set.linear.project_slug")?;
+    let project_slug = require_literal(
+        linear.project_slug.as_deref(),
+        "project_set.linear.project_slug",
+    )?;
 
     let api_key = match linear.api_key_env.as_deref().and_then(normalize_optional) {
-        Some(env_name) => {
-            env.get(&env_name)
-                .and_then(normalize_optional_owned)
-                .ok_or(WorkflowConfigError::MissingEnvironmentVariable {
-                    field: "project_set.linear.api_key_env",
-                    variable: env_name.to_owned(),
-                })?
-        }
+        Some(env_name) => env
+            .get(&env_name)
+            .and_then(normalize_optional_owned)
+            .ok_or(WorkflowConfigError::MissingEnvironmentVariable {
+                field: "project_set.linear.api_key_env",
+                variable: env_name.to_owned(),
+            })?,
         None => env
             .get("LINEAR_API_KEY")
             .and_then(normalize_optional_owned)
@@ -1270,8 +1271,7 @@ fn resolve_projects(
     projects
         .iter()
         .map(|project| {
-            let slug =
-                require_literal(project.slug.as_deref(), "project_set.projects[].slug")?;
+            let slug = require_literal(project.slug.as_deref(), "project_set.projects[].slug")?;
             let name = project
                 .name
                 .as_deref()
@@ -1289,14 +1289,14 @@ fn resolve_projects(
                 .repos
                 .iter()
                 .map(|repo| {
-                    let repo_slug =
-                        require_literal(repo.slug.as_deref(), "project_set.projects[].repos[].slug")?;
+                    let repo_slug = require_literal(
+                        repo.slug.as_deref(),
+                        "project_set.projects[].repos[].slug",
+                    )?;
                     let url =
                         require_literal(repo.url.as_deref(), "project_set.projects[].repos[].url")?;
-                    let default_branch = repo
-                        .default_branch
-                        .as_deref()
-                        .and_then(normalize_optional);
+                    let default_branch =
+                        repo.default_branch.as_deref().and_then(normalize_optional);
                     let path = repo.path.as_deref().and_then(normalize_optional);
 
                     Ok(ResolvedRepoEntry {
@@ -1329,6 +1329,13 @@ fn build_inventory(
                     message: format!("duplicate repo slug `{}` across project set", repo.slug),
                 });
             }
+            // The `RepoRef.key` field uses the project-set repo slug verbatim
+            // (e.g. `opensymphony`), not the `org/repo` form documented on the
+            // `RepoRef` type. This is intentional: each project set defines
+            // its own slug namespace (duplicate slugs are rejected above) and
+            // LOC-13's `repo:<slug>` label resolution is anchored to that
+            // namespace. Downstream consumers that need the `org/repo` shape
+            // derive it from `RepoRef.url` at the openhands frontier.
             inventory.insert(
                 repo.slug.clone(),
                 crate::opensymphony_domain::RepoRef {

@@ -19,13 +19,13 @@ pub use model::{
     OpenHandsConversationToolFrontMatter, OpenHandsFrontMatter, OpenHandsLlmConfig,
     OpenHandsLlmFrontMatter, OpenHandsLocalServerConfig, OpenHandsLocalServerFrontMatter,
     OpenHandsTransportConfig, OpenHandsTransportFrontMatter, OpenHandsWebSocketConfig,
-    OpenHandsWebSocketFrontMatter, PollingConfig, PollingFrontMatter,
-    PROJECT_SET_SCHEMA_VERSION, ProcessEnvironment, ProjectEntry, ProjectSetAgentConfig,
-    ProjectSetAgentFrontMatter, ProjectSetBody, ProjectSetConfig, ProjectSetFrontMatter,
-    ProjectSetLinearConfig, ProjectSetLinearFrontMatter, ProjectSetPollingConfig,
-    ProjectSetPollingFrontMatter, PromptContext, RepoEntry, ResolvedProject, ResolvedProjectSet,
-    ResolvedRepoEntry, ResolvedWorkflow, TrackerConfig, TrackerFrontMatter, TrackerKind,
-    WorkflowConfig, WorkflowDefinition, WorkflowExtensions, WorkflowFrontMatter, WorkspaceConfig,
+    OpenHandsWebSocketFrontMatter, PROJECT_SET_SCHEMA_VERSION, PollingConfig, PollingFrontMatter,
+    ProcessEnvironment, ProjectEntry, ProjectSetAgentConfig, ProjectSetAgentFrontMatter,
+    ProjectSetBody, ProjectSetConfig, ProjectSetFrontMatter, ProjectSetLinearConfig,
+    ProjectSetLinearFrontMatter, ProjectSetPollingConfig, ProjectSetPollingFrontMatter,
+    PromptContext, RepoEntry, ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry,
+    ResolvedWorkflow, TrackerConfig, TrackerFrontMatter, TrackerKind, WorkflowConfig,
+    WorkflowDefinition, WorkflowExtensions, WorkflowFrontMatter, WorkspaceConfig,
     WorkspaceFrontMatter,
 };
 
@@ -153,7 +153,7 @@ mod tests {
     use serde::Serialize;
 
     use super::{
-        PromptTemplateError, ProjectSetFrontMatter, TrackerKind, WorkflowConfigError,
+        ProjectSetFrontMatter, PromptTemplateError, TrackerKind, WorkflowConfigError,
         WorkflowDefinition, WorkflowLoadError,
         model::{
             DEFAULT_HOOK_TIMEOUT_MS, DEFAULT_LINEAR_ENDPOINT, DEFAULT_MAX_CONCURRENT_AGENTS,
@@ -2452,14 +2452,20 @@ Ticket: {{ issue.identifier }}
 
         assert_eq!(resolved.config.schema_version, 1);
         assert_eq!(resolved.config.slug, "opensymphony-updates");
-        assert_eq!(resolved.config.linear.project_slug, "opensymphony-bootstrap-e7b957855cb7");
+        assert_eq!(
+            resolved.config.linear.project_slug,
+            "opensymphony-bootstrap-e7b957855cb7"
+        );
         assert_eq!(resolved.config.linear.api_key, "test-linear-key");
         assert_eq!(resolved.config.polling.interval_ms, 5000);
         assert_eq!(resolved.config.agent.max_concurrent_agents, 4);
         assert_eq!(resolved.config.projects.len(), 1);
         assert_eq!(resolved.config.projects[0].slug, "opensymphony");
         assert_eq!(resolved.config.projects[0].repos[0].slug, "opensymphony");
-        assert_eq!(resolved.config.projects[0].repos[0].path.as_deref(), Some("../OpenSymphony"));
+        assert_eq!(
+            resolved.config.projects[0].repos[0].path.as_deref(),
+            Some("../OpenSymphony")
+        );
     }
 
     #[test]
@@ -2478,10 +2484,28 @@ Ticket: {{ issue.identifier }}
         assert_eq!(repo_ref.default_branch.as_deref(), Some("main"));
 
         // path is NOT part of RepoRef
-        assert!(resolved
-            .inventory()
-            .values()
-            .all(|r| r.default_branch.is_some()));
+        assert!(
+            resolved
+                .inventory()
+                .values()
+                .all(|r| r.default_branch.is_some())
+        );
+
+        // The `RepoRef.key` field uses the project-set repo slug verbatim
+        // (e.g. `opensymphony`), not the `org/repo` shape documented on the
+        // `RepoRef` type. The project-set enforces slug uniqueness, so the
+        // bare slug is a globally-stable identifier inside the project set's
+        // namespace. Downstream consumers that need the `org/repo` shape
+        // (e.g. for `clap` arg parsing) derive it from `RepoRef.url`.
+        assert_eq!(
+            repo_ref.key, "opensymphony",
+            "project-set repo key should match the repo slug verbatim, not org/repo"
+        );
+        // The URL is still the canonical org/repo source-of-truth.
+        assert!(
+            repo_ref.url.contains("OpenSymphony"),
+            "RepoRef.url should preserve the canonical org/repo form"
+        );
     }
 
     #[test]
@@ -2564,9 +2588,7 @@ project_set:
         let raw = ProjectSetFrontMatter::parse(source).expect("should parse");
         let env = env([("LINEAR_API_KEY", "key")]);
 
-        let error = raw
-            .resolve(&env)
-            .expect_err("empty projects should fail");
+        let error = raw.resolve(&env).expect_err("empty projects should fail");
         assert!(matches!(
             error,
             WorkflowConfigError::InvalidField {

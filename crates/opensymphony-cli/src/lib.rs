@@ -1190,7 +1190,10 @@ fn check_project_set(config_root: &Path) -> CheckResult {
     if !path.is_file() {
         return CheckResult::skip(
             "project-set",
-            format!("no {} present; legacy single-repo flow in use", path.display()),
+            format!(
+                "no {} present; legacy single-repo flow in use",
+                path.display()
+            ),
         );
     }
 

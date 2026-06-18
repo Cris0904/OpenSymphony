@@ -698,7 +698,10 @@ fn doctor_passes_project_set_when_global_config_is_valid() {
     .expect("workflow should be written");
     std::fs::write(
         &project_set_path,
-        project_set_yaml_source("opensymphony-updates", "opensymphony-bootstrap-e7b957855cb7"),
+        project_set_yaml_source(
+            "opensymphony-updates",
+            "opensymphony-bootstrap-e7b957855cb7",
+        ),
     )
     .expect("project-set should be written");
     let config = serde_yaml::to_string(&Value::Mapping(

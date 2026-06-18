@@ -8,7 +8,9 @@ use std::{
 
 use crate::opensymphony_memory::DEFAULT_PRIVATE_MEMORY_CONFIG_FILE;
 use crate::opensymphony_openhands::OpenHandsConversationStorePaths;
-use crate::opensymphony_workflow::{ResolvedProjectSet, ResolvedWorkflow, WorkflowDefinition};
+use crate::opensymphony_workflow::{
+    ResolvedProjectSet, ResolvedWorkflow, TrackerKind, WorkflowDefinition,
+};
 use serde::Deserialize;
 use tokio::fs;
 
@@ -247,10 +249,7 @@ fn load_optional_project_set(
 
     raw.resolve_with_process_env()
         .map(|resolved| (Some(resolved), Some(path.clone())))
-        .map_err(|source| RunCommandError::ResolveProjectSet {
-            path,
-            source,
-        })
+        .map_err(|source| RunCommandError::ResolveProjectSet { path, source })
 }
 
 /// Applies project-set-level overrides to the workflow's resolved config.
@@ -263,6 +262,7 @@ fn load_optional_project_set(
 /// prompt template, etc.) are preserved from the workflow.
 fn apply_project_set_overrides(workflow: &mut ResolvedWorkflow, project_set: &ResolvedProjectSet) {
     let config = &project_set.config;
+    workflow.config.tracker.kind = TrackerKind::Linear;
     workflow.config.tracker.endpoint = config.linear.endpoint.clone();
     workflow.config.tracker.project_slug = config.linear.project_slug.clone();
     workflow.config.tracker.api_key = config.linear.api_key.clone();
