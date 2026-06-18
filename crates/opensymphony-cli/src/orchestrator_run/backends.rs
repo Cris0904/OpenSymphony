@@ -1052,6 +1052,10 @@ fn issue_descriptor(issue: &NormalizedIssue) -> IssueDescriptor {
         title: issue.title.clone(),
         current_state: issue.state.name.clone(),
         last_seen_tracker_refresh_at: issue.updated_at.map(timestamp_to_datetime),
+        // LOC-15: thread the resolved `RepoRef` (from `repo_for_issue` /
+        // LOC-13) through the workspace manager so `after_create` can clone
+        // the correct repo without templating the URL into `sh -c`.
+        execution_repo_ref: issue.execution_repo_ref.clone(),
     }
 }
 

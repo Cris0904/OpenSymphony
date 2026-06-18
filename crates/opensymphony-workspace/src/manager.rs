@@ -23,6 +23,26 @@ use super::{
     models::AfterCreateBootstrapReceipt,
     paths::{normalize_absolute_path, resolve_path_within_root, sanitize_workspace_key},
 };
+use crate::opensymphony_domain::RepoRef;
+
+/// Env-var names injected into the hook subprocess when the workspace manager
+/// has a resolved `RepoRef` to expose (LOC-15). They are the static seam
+/// between the runtime-owned clone (`after_create` becomes the literal
+/// `opensymphony workspace clone`) and the resolved `RepoRef` — the dynamic
+/// clone URL never enters the hook's `sh -c` string.
+pub const HOOK_REPO_URL_ENV: &str = "OPENSYMPHONY_EXECUTION_REPO_URL";
+pub const HOOK_REPO_BRANCH_ENV: &str = "OPENSYMPHONY_EXECUTION_REPO_BRANCH";
+pub const HOOK_REPO_KEY_ENV: &str = "OPENSYMPHONY_EXECUTION_REPO_KEY";
+
+/// Pairs the workspace under a hook with the resolved `RepoRef` (if any) the
+/// runtime wants to expose to that hook via env vars. `WorkspaceHandle`
+/// intentionally stays identifier-only so `RepoRef` does not leak into
+/// recovery paths that reconstruct handles from manifests.
+#[derive(Debug, Clone)]
+pub(crate) struct HookContext<'a> {
+    pub workspace: &'a WorkspaceHandle,
+    pub repo_ref: Option<&'a RepoRef>,
+}
 
 pub struct WorkspaceManager {
     config: WorkspaceManagerConfig,
@@ -124,7 +144,11 @@ impl WorkspaceManager {
             ExistingWorkspaceState::Missing | ExistingWorkspaceState::ForeignArtifact
         );
         let after_create = if created {
-            match self.execute_hook(HookKind::AfterCreate, &handle).await {
+            let context = HookContext {
+                workspace: &handle,
+                repo_ref: issue.execution_repo_ref.as_ref(),
+            };
+            match self.execute_hook(HookKind::AfterCreate, context).await {
                 Ok(record) => {
                     if record.is_some() {
                         self.write_after_create_receipt(issue, &handle).await?;
@@ -157,7 +181,16 @@ impl WorkspaceManager {
         let mut manifest = RunManifest::new(workspace, run);
         self.write_run_manifest(workspace, &manifest).await?;
 
-        match self.execute_hook(HookKind::BeforeRun, workspace).await {
+        match self
+            .execute_hook(
+                HookKind::BeforeRun,
+                HookContext {
+                    workspace,
+                    repo_ref: None,
+                },
+            )
+            .await
+        {
             Ok(Some(record)) => manifest.hooks.push(record),
             Ok(None) => {}
             Err(failure) => {
@@ -188,7 +221,16 @@ impl WorkspaceManager {
         run_manifest.updated_at = Utc::now();
         self.write_run_manifest(workspace, run_manifest).await?;
 
-        match self.execute_hook(HookKind::AfterRun, workspace).await {
+        match self
+            .execute_hook(
+                HookKind::AfterRun,
+                HookContext {
+                    workspace,
+                    repo_ref: None,
+                },
+            )
+            .await
+        {
             Ok(Some(record)) => run_manifest.hooks.push(record),
             Ok(None) => {}
             Err(failure) => run_manifest.hooks.push(failure.record),
@@ -225,7 +267,16 @@ impl WorkspaceManager {
             });
         }
 
-        let before_remove = match self.execute_hook(HookKind::BeforeRemove, workspace).await {
+        let before_remove = match self
+            .execute_hook(
+                HookKind::BeforeRemove,
+                HookContext {
+                    workspace,
+                    repo_ref: None,
+                },
+            )
+            .await
+        {
             Ok(record) => record,
             Err(failure) => Some(failure.record),
         };
@@ -728,14 +779,17 @@ impl WorkspaceManager {
     async fn execute_hook(
         &self,
         kind: HookKind,
-        workspace: &WorkspaceHandle,
+        context: HookContext<'_>,
     ) -> Result<Option<HookExecutionRecord>, Box<HookFailure>> {
+        let workspace = context.workspace;
+        let repo_ref = context.repo_ref;
         let Some(hook) = self.hook_definition(kind) else {
             return Ok(None);
         };
         let cwd = self.resolve_hook_cwd(workspace, kind, hook).await?;
         let mut command = build_shell_command(&hook.command);
         configure_hook_command(&mut command);
+        inject_repo_env(&mut command, repo_ref);
         command
             .current_dir(&cwd)
             .stdout(Stdio::piped())
@@ -1173,6 +1227,25 @@ fn configure_hook_command(command: &mut Command) {
 
 #[cfg(not(unix))]
 fn configure_hook_command(_command: &mut Command) {}
+
+/// Injects the resolved `RepoRef` (LOC-15) as env vars on the hook subprocess
+/// without ever touching the hook's shell string. When `repo_ref` is `None`,
+/// no env vars are added (so callers that lack repo resolution — `start_run`,
+/// `finish_run`, `cleanup` — still pass through unchanged). When `Some`, the
+/// `URL`/`KEY` are always set and `BRANCH` is set only when present, matching
+/// the clone subcommand's contract: branch is optional.
+fn inject_repo_env(command: &mut Command, repo_ref: Option<&RepoRef>) {
+    let Some(repo_ref) = repo_ref else {
+        return;
+    };
+    command.env(HOOK_REPO_URL_ENV, &repo_ref.url);
+    command.env(HOOK_REPO_KEY_ENV, &repo_ref.key);
+    if let Some(branch) = repo_ref.default_branch.as_deref()
+        && !branch.is_empty()
+    {
+        command.env(HOOK_REPO_BRANCH_ENV, branch);
+    }
+}
 
 #[cfg(unix)]
 async fn terminate_hook_process_tree(

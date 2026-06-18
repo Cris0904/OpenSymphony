@@ -26,7 +26,7 @@ workspace:
 
 hooks:
   after_create: |
-    git clone --depth 1 'git@github.com:kumanday/OpenSymphony.git' .
+    opensymphony workspace clone
   before_run: |
     git status --short
   after_run: |

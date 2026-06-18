@@ -125,6 +125,26 @@ Use for:
 
 Do not rerun it on every worker attempt.
 
+### 6.1.1 Static clone hook + env-injected `RepoRef` (LOC-15)
+
+The canonical `after_create` for OpenSymphony is the static string
+`opensymphony workspace clone`. The CLI subcommand reads the resolved
+`RepoRef` (URL / branch / key) from these environment variables, which
+the workspace manager injects into the hook subprocess when the
+scheduler has resolved a repo for the issue:
+
+- `OPENSYMPHONY_EXECUTION_REPO_URL` (required)
+- `OPENSYMPHONY_EXECUTION_REPO_KEY` (required)
+- `OPENSYMPHONY_EXECUTION_REPO_BRANCH` (optional; absent → clone the
+  remote default branch)
+
+The dynamic clone URL never enters the hook's `sh -c` string — it rides
+only as env, and the subcommand invokes `git` via
+`Command::new("git").args([...])` (no shell interpolation). This removes
+the shell-injection surface that a templated hook would re-introduce,
+and the URL never re-resolves, so there is no drift between
+resolution sites.
+
 If the first `after_create` attempt fails before bootstrap completes, the next `ensure` attempt should retry `after_create` instead of treating the partially initialized workspace directory as fully reusable.
 
 After a successful first-time `after_create`, OpenSymphony must persist a root-scoped bootstrap receipt before it starts creating `.opensymphony/` metadata. If later bootstrap steps fail, the next `ensure` should resume metadata bootstrap without rerunning `after_create`.

@@ -19,6 +19,7 @@ fn sample_issue(identifier: &str) -> IssueDescriptor {
         title: format!("Issue {identifier}"),
         current_state: "In Progress".to_string(),
         last_seen_tracker_refresh_at: None,
+        execution_repo_ref: None,
     }
 }
 
@@ -1359,4 +1360,314 @@ async fn managed_manifest_paths_reject_symlinked_reads_and_writes() {
         prompt_write_error,
         WorkspaceError::ManagedPathSymlink { .. }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// LOC-15: env injection for resolved `RepoRef` on `after_create` hooks.
+//
+// The dynamic clone URL must NEVER enter the hook shell command — it rides
+// only as `OPENSYMPHONY_EXECUTION_REPO_URL` / `_BRANCH` / `_KEY` env vars
+// (see `crates/opensymphony-workspace/src/manager.rs`).
+// ---------------------------------------------------------------------------
+
+use crate::opensymphony_domain::RepoRef;
+
+fn sample_issue_with_repo(identifier: &str, repo: Option<RepoRef>) -> IssueDescriptor {
+    IssueDescriptor {
+        issue_id: format!("id-{identifier}"),
+        identifier: identifier.to_string(),
+        title: format!("Issue {identifier}"),
+        current_state: "In Progress".to_string(),
+        last_seen_tracker_refresh_at: None,
+        execution_repo_ref: repo,
+    }
+}
+
+fn repo_ref_with_branch(url: &str, key: &str, branch: &str) -> RepoRef {
+    RepoRef {
+        url: url.to_string(),
+        key: key.to_string(),
+        default_branch: Some(branch.to_string()),
+    }
+}
+
+fn repo_ref_without_branch(url: &str, key: &str) -> RepoRef {
+    RepoRef {
+        url: url.to_string(),
+        key: key.to_string(),
+        default_branch: None,
+    }
+}
+
+#[cfg(unix)]
+fn env_dump_command(out_path: &str) -> String {
+    format!(
+        "{{ printf '%s' \"$OPENSYMPHONY_EXECUTION_REPO_URL\" > {out_path}.url; \
+         printf '%s' \"$OPENSYMPHONY_EXECUTION_REPO_KEY\" > {out_path}.key; \
+         printf '%s' \"$OPENSYMPHONY_EXECUTION_REPO_BRANCH\" > {out_path}.branch; }} \
+         && echo ok > {out_path}.status"
+    )
+}
+
+#[cfg(windows)]
+fn env_dump_command(out_path: &str) -> String {
+    format!(
+        "echo %OPENSYMPHONY_EXECUTION_REPO_URL% > {out_path}.url && \
+         echo %OPENSYMPHONY_EXECUTION_REPO_KEY% > {out_path}.key && \
+         echo %OPENSYMPHONY_EXECUTION_REPO_BRANCH% > {out_path}.branch && \
+         echo ok > {out_path}.status"
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ensure_injects_repo_env_into_after_create_hook_with_branch() {
+    let temp_dir = TempDir::new().expect("temp dir should exist");
+    let workspace_root = temp_dir.path().join("workspaces");
+    let manager = WorkspaceManager::new(manager_config(
+        &workspace_root,
+        HookConfig {
+            after_create: Some(HookDefinition::shell(env_dump_command("env.txt"))),
+            ..HookConfig::default()
+        },
+        CleanupConfig::default(),
+    ))
+    .expect("manager should build");
+    let issue = sample_issue_with_repo(
+        "COE-352",
+        Some(repo_ref_with_branch(
+            "git@github.com:foo/bar.git",
+            "foo/bar",
+            "develop",
+        )),
+    );
+
+    manager.ensure(&issue).await.expect("ensure should succeed");
+
+    let status = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-352",
+        "env.txt.status",
+    ))
+    .await
+    .expect("status file should exist");
+    assert_eq!(status.trim(), "ok");
+    let url = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-352",
+        "env.txt.url",
+    ))
+    .await
+    .expect("url file should exist");
+    let key = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-352",
+        "env.txt.key",
+    ))
+    .await
+    .expect("key file should exist");
+    let branch = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-352",
+        "env.txt.branch",
+    ))
+    .await
+    .expect("branch file should exist");
+    assert_eq!(url, "git@github.com:foo/bar.git");
+    assert_eq!(key, "foo/bar");
+    assert_eq!(branch, "develop");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ensure_injects_repo_env_into_after_create_hook_without_branch() {
+    let temp_dir = TempDir::new().expect("temp dir should exist");
+    let workspace_root = temp_dir.path().join("workspaces");
+    let manager = WorkspaceManager::new(manager_config(
+        &workspace_root,
+        HookConfig {
+            after_create: Some(HookDefinition::shell(env_dump_command("env.txt"))),
+            ..HookConfig::default()
+        },
+        CleanupConfig::default(),
+    ))
+    .expect("manager should build");
+    let issue = sample_issue_with_repo(
+        "COE-353",
+        Some(repo_ref_without_branch(
+            "git@github.com:foo/bar.git",
+            "foo/bar",
+        )),
+    );
+
+    manager.ensure(&issue).await.expect("ensure should succeed");
+
+    let status = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-353",
+        "env.txt.status",
+    ))
+    .await
+    .expect("status file should exist");
+    assert_eq!(status.trim(), "ok");
+    let url = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-353",
+        "env.txt.url",
+    ))
+    .await
+    .expect("url file should exist");
+    assert_eq!(url, "git@github.com:foo/bar.git");
+    let branch_path = manager_config_path_for(&workspace_root, "COE-353", "env.txt.branch");
+    let branch = tokio::fs::read_to_string(&branch_path)
+        .await
+        .expect("branch file should exist");
+    assert!(
+        branch.is_empty(),
+        "BRANCH env var should be empty when default_branch is None; got: {branch:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ensure_injects_distinct_repos_for_distinct_issues() {
+    // Acceptance criterion #1: two terminal issues with different `repo:` slugs
+    // clone DIFFERENT repos. The dispatcher routes each issue's resolved
+    // RepoRef through `execution_repo_ref`, so each `after_create` must see
+    // its own URL in the injected env. Verify both end-to-end through the
+    // manager so a future refactor that re-uses a single `RepoRef` cannot
+    // silently leak across workspaces.
+    let temp_dir = TempDir::new().expect("temp dir should exist");
+    let workspace_root = temp_dir.path().join("workspaces");
+    let manager = WorkspaceManager::new(manager_config(
+        &workspace_root,
+        HookConfig {
+            after_create: Some(HookDefinition::shell(env_dump_command("env.txt"))),
+            ..HookConfig::default()
+        },
+        CleanupConfig::default(),
+    ))
+    .expect("manager should build");
+
+    let issue_a = sample_issue_with_repo(
+        "COE-501",
+        Some(repo_ref_with_branch(
+            "git@github.com:alpha/one.git",
+            "alpha/one",
+            "main",
+        )),
+    );
+    let issue_b = sample_issue_with_repo(
+        "COE-502",
+        Some(repo_ref_with_branch(
+            "git@github.com:beta/two.git",
+            "beta/two",
+            "develop",
+        )),
+    );
+
+    manager
+        .ensure(&issue_a)
+        .await
+        .expect("ensure A should succeed");
+    manager
+        .ensure(&issue_b)
+        .await
+        .expect("ensure B should succeed");
+
+    let url_a = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-501",
+        "env.txt.url",
+    ))
+    .await
+    .expect("A url file should exist");
+    let key_a = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-501",
+        "env.txt.key",
+    ))
+    .await
+    .expect("A key file should exist");
+    let branch_a = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-501",
+        "env.txt.branch",
+    ))
+    .await
+    .expect("A branch file should exist");
+    let url_b = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-502",
+        "env.txt.url",
+    ))
+    .await
+    .expect("B url file should exist");
+    let key_b = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-502",
+        "env.txt.key",
+    ))
+    .await
+    .expect("B key file should exist");
+    let branch_b = tokio::fs::read_to_string(manager_config_path_for(
+        &workspace_root,
+        "COE-502",
+        "env.txt.branch",
+    ))
+    .await
+    .expect("B branch file should exist");
+
+    assert_eq!(url_a, "git@github.com:alpha/one.git");
+    assert_eq!(key_a, "alpha/one");
+    assert_eq!(branch_a, "main");
+    assert_eq!(url_b, "git@github.com:beta/two.git");
+    assert_eq!(key_b, "beta/two");
+    assert_eq!(branch_b, "develop");
+    assert_ne!(url_a, url_b, "distinct issues must see distinct clone URLs");
+    assert_ne!(key_a, key_b, "distinct issues must see distinct repo keys");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ensure_does_not_inject_repo_env_when_repo_ref_absent() {
+    let temp_dir = TempDir::new().expect("temp dir should exist");
+    let workspace_root = temp_dir.path().join("workspaces");
+    let manager = WorkspaceManager::new(manager_config(
+        &workspace_root,
+        HookConfig {
+            after_create: Some(HookDefinition::shell(env_dump_command("env.txt"))),
+            ..HookConfig::default()
+        },
+        CleanupConfig::default(),
+    ))
+    .expect("manager should build");
+    let issue = sample_issue("COE-354"); // execution_repo_ref: None
+
+    manager.ensure(&issue).await.expect("ensure should succeed");
+
+    let status_path = manager_config_path_for(&workspace_root, "COE-354", "env.txt.status");
+    let status_exists = tokio::fs::try_exists(&status_path)
+        .await
+        .expect("status existence lookup should succeed");
+    assert!(
+        status_exists,
+        "after_create hook should still run; env vars are simply absent"
+    );
+    let url_path = manager_config_path_for(&workspace_root, "COE-354", "env.txt.url");
+    let url = tokio::fs::read_to_string(&url_path)
+        .await
+        .expect("url file should exist");
+    assert!(
+        url.is_empty(),
+        "OPENSYMPHONY_EXECUTION_REPO_URL should be empty when no RepoRef is resolved"
+    );
+}
+
+fn manager_config_path_for(
+    workspace_root: &std::path::Path,
+    identifier: &str,
+    relative: &str,
+) -> std::path::PathBuf {
+    workspace_root.join(identifier).join(relative)
 }
