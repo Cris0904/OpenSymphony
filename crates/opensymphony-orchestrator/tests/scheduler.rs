@@ -7,10 +7,10 @@ use crate::opensymphony_orchestrator::{
     ConversationId, ConversationMetadata, IssueId, IssueIdentifier, IssueRef, IssueState,
     IssueStateCategory, NormalizedIssue, RecoveryRecord, ReleaseReason, RepoRef, RetryReason,
     RuntimeStreamState, Scheduler, SchedulerConfig, SchedulerStatus, TimestampMs, TrackerBackend,
-    TrackerIssue, TrackerIssueState, TrackerIssueStateKind, TrackerIssueStateSnapshot,
-    WorkerAbortReason, WorkerBackend, WorkerId, WorkerLaunch, WorkerOutcomeKind,
-    WorkerOutcomeRecord, WorkerStartRequest, WorkerUpdate, WorkspaceBackend, WorkspaceKey,
-    WorkspaceRecord,
+    TrackerIssue, TrackerIssueRef, TrackerIssueState, TrackerIssueStateKind,
+    TrackerIssueStateSnapshot, WorkerAbortReason, WorkerBackend, WorkerId, WorkerLaunch,
+    WorkerOutcomeKind, WorkerOutcomeRecord, WorkerStartRequest, WorkerUpdate, WorkspaceBackend,
+    WorkspaceKey, WorkspaceRecord,
 };
 use chrono::{TimeZone, Utc};
 
@@ -25,6 +25,11 @@ fn dt(value: u64) -> chrono::DateTime<Utc> {
 }
 
 fn scheduler_config() -> SchedulerConfig {
+    // LOC-13: default helper includes the project-set inventory used by
+    // `repo_for_issue` so the LOC-14 dispatch gate (D6) does not block
+    // the legacy "dispatch happy-path" tests below. Tests that exercise
+    // the gate's missing-repo behavior use `scheduler_config_with_inventory`
+    // explicitly with an empty or different inventory.
     SchedulerConfig {
         poll_interval_ms: 1_000,
         max_concurrent_agents: 2,
@@ -34,12 +39,30 @@ fn scheduler_config() -> SchedulerConfig {
         stall_timeout_ms: Some(100),
         active_states: vec!["In Progress".to_string()],
         terminal_states: vec!["Done".to_string(), "Canceled".to_string()],
-        project_set_inventory: BTreeMap::new(),
+        project_set_inventory: default_repo_inventory(),
     }
 }
 
+fn default_repo_inventory() -> BTreeMap<String, RepoRef> {
+    let mut map = BTreeMap::new();
+    map.insert(
+        "test-repo".to_string(),
+        RepoRef {
+            url: "https://example.com/test-repo.git".to_string(),
+            key: "test-repo".to_string(),
+            default_branch: Some("main".to_string()),
+        },
+    );
+    map
+}
+
 fn tracker_issue(id: &str, identifier: &str, state: &str, created_at: u64) -> TrackerIssue {
-    tracker_issue_with_labels(id, identifier, state, created_at, &[])
+    // LOC-14 D6 dispatch gate: by default we attach a single, resolvable
+    // `repo:test-repo` label so the gate does not block the legacy
+    // dispatch happy-path tests. Tests that exercise missing-repo
+    // behavior override this with `tracker_issue_with_labels(..., &[])`
+    // or an explicit unresolved label set.
+    tracker_issue_with_labels(id, identifier, state, created_at, &["repo:test-repo"])
 }
 
 fn tracker_issue_with_labels(
@@ -66,6 +89,32 @@ fn tracker_issue_with_labels(
         created_at: dt(created_at),
         updated_at: dt(created_at),
     }
+}
+
+/// LOC-14 D10: build a parent tracker issue whose `sub_issues` carry
+/// terminal children, so the LOC-14 parent-deferred gate can fire in
+/// `dispatch_ready_issues`. `child_states` are the states of each child
+/// (e.g. `&[("COE-CHILD", "Done")]`).
+fn tracker_parent_with_children(
+    id: &str,
+    identifier: &str,
+    state: &str,
+    created_at: u64,
+    labels: &[&str],
+    child_states: &[(&str, &str)],
+) -> TrackerIssue {
+    let mut issue = tracker_issue_with_labels(id, identifier, state, created_at, labels);
+    issue.sub_issues = child_states
+        .iter()
+        .map(|(child_identifier, child_state)| TrackerIssueRef {
+            id: format!("lin-{child_identifier}"),
+            identifier: child_identifier.to_string(),
+            title: Some(format!("Child {child_identifier}")),
+            url: Some(format!("https://linear.app/example/{child_identifier}")),
+            state: child_state.to_string(),
+        })
+        .collect();
+    issue
 }
 
 fn normalized_issue(id: &str, identifier: &str, state: &str) -> NormalizedIssue {
@@ -1148,4 +1197,409 @@ async fn poll_normalize_leaves_execution_repo_ref_none_when_inventory_empty() {
         execution_repo_ref.is_none(),
         "empty inventory must not resolve"
     );
+}
+
+// --- LOC-14 dispatch-gate integration tests -------------------------------
+
+fn assert_release_reason(
+    execution: &crate::opensymphony_orchestrator::IssueExecution,
+    expected: ReleaseReason,
+) {
+    match execution.state() {
+        crate::opensymphony_orchestrator::SchedulerState::Released { reason, .. } => {
+            assert_eq!(*reason, expected, "release reason mismatch");
+        }
+        other => panic!("expected Released state, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn dispatch_gate_blocks_terminal_leaf_with_no_repo_label() {
+    // AC1: terminal leaf without any `repo:` label is never dispatched
+    // (no clone, no agent). The execution is released with `MissingRepo`.
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-missing-repo",
+            "COE-MISSING-REPO",
+            "In Progress",
+            0,
+            &[],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(
+        tracker,
+        workspace,
+        worker,
+        scheduler_config_with_inventory(default_repo_inventory()),
+    );
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-missing-repo").expect("issue id should be valid");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist after gate fires");
+
+    // Operator-visible release reason.
+    assert_release_reason(execution, ReleaseReason::MissingRepo);
+
+    // Gate fired BEFORE ensure_workspace — no workspace should have been
+    // attached and no worker should have been launched.
+    assert_eq!(
+        scheduler.workspace().ensured,
+        Vec::<String>::new(),
+        "gate must skip ensure_workspace"
+    );
+    assert_eq!(
+        scheduler.worker().launches.len(),
+        0,
+        "gate must skip worker launch"
+    );
+    assert_eq!(
+        scheduler.workspace().cleaned,
+        Vec::<(String, bool)>::new(),
+        "no workspace cleanup should happen"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_gate_releases_terminal_leaf_with_multiple_repo_labels() {
+    // AC3: a terminal leaf with multiple `repo:` labels is treated as
+    // unresolved and blocked — the repo resolver returns None (D5).
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-multi-repo",
+            "COE-MULTI-REPO",
+            "In Progress",
+            0,
+            &["repo:alpha", "repo:beta"],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut config =
+        scheduler_config_with_inventory(default_repo_inventory_with(&[("alpha", "alpha.git")]));
+    // Use `beta` so the resolver also has a single-label match available,
+    // proving the multi-label case is what trips the gate.
+    let _ = config
+        .project_set_inventory
+        .insert("beta".to_string(), test_repo_ref("beta", "beta.git"));
+    let mut scheduler = Scheduler::new(tracker, workspace, worker, config);
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-multi-repo").expect("issue id should be valid");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist after gate fires");
+
+    assert_release_reason(execution, ReleaseReason::MissingRepo);
+    assert_eq!(
+        scheduler.workspace().ensured,
+        Vec::<String>::new(),
+        "multi-repo labels must be treated as unresolved"
+    );
+    assert_eq!(scheduler.worker().launches.len(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_gate_releases_terminal_leaf_with_unknown_repo_slug() {
+    // D6: a `repo:` label whose slug is absent from the project-set
+    // inventory is also unresolved. Same operator-visible reason.
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-unknown-slug",
+            "COE-UNKNOWN-SLUG",
+            "In Progress",
+            0,
+            &["repo:unknown-slug"],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(
+        tracker,
+        workspace,
+        worker,
+        scheduler_config_with_inventory(default_repo_inventory()),
+    );
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-unknown-slug").expect("issue id should be valid");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist after gate fires");
+
+    assert_release_reason(execution, ReleaseReason::MissingRepo);
+    assert_eq!(scheduler.worker().launches.len(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_gate_skips_parent_with_all_terminal_children() {
+    // AC4: a parent whose children are all terminal does NOT enter the
+    // work-clone path. The execution is released with `ParentDeferred`.
+    let tracker = FakeTracker {
+        active: vec![tracker_parent_with_children(
+            "lin-parent",
+            "COE-PARENT",
+            "In Progress",
+            0,
+            &[],
+            &[("COE-CHILD-A", "Done"), ("COE-CHILD-B", "Canceled")],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(tracker, workspace, worker, scheduler_config());
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-parent").expect("issue id should be valid");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist after gate fires");
+
+    // Operator-visible deferral reason.
+    assert_release_reason(execution, ReleaseReason::ParentDeferred);
+
+    // Gate fired BEFORE ensure_workspace — no workspace, no worker.
+    assert_eq!(scheduler.workspace().ensured, Vec::<String>::new());
+    assert_eq!(scheduler.worker().launches.len(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_gate_skips_parent_with_accidental_repo_label() {
+    // AC5: a parent that accidentally carries `repo:` labels still does
+    // not enter the work-clone path. The repo resolver already returns
+    // None for parents (D3); the gate then emits `ParentDeferred`
+    // rather than `MissingRepo` so operators see the right reason.
+    let tracker = FakeTracker {
+        active: vec![tracker_parent_with_children(
+            "lin-parent-repo",
+            "COE-PARENT-REPO",
+            "In Progress",
+            0,
+            &["repo:test-repo"],
+            &[("COE-CHILD-A", "Done")],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(tracker, workspace, worker, scheduler_config());
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-parent-repo").expect("issue id should be valid");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist after gate fires");
+
+    assert_release_reason(execution, ReleaseReason::ParentDeferred);
+    assert_eq!(scheduler.workspace().ensured, Vec::<String>::new());
+    assert_eq!(scheduler.worker().launches.len(), 0);
+
+    // Sanity: parent's `execution_repo_ref` is None because the resolver
+    // ignores `repo:` on parents. The gate therefore cannot have fired
+    // the missing-repo branch.
+    assert!(
+        execution.issue().execution_repo_ref.is_none(),
+        "parent must not carry a repo, even with stray labels"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_gate_allows_terminal_leaf_with_valid_repo() {
+    // AC2 sanity: with a single resolvable `repo:` label and a matching
+    // inventory entry, dispatch proceeds normally (no gate fires).
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-good-repo",
+            "COE-GOOD-REPO",
+            "In Progress",
+            0,
+            &["repo:test-repo"],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(tracker, workspace, worker, scheduler_config());
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-good-repo").expect("issue id should be valid");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should exist");
+
+    // Dispatched normally — Running, not Released.
+    assert_eq!(execution.status(), SchedulerStatus::Running);
+    assert_eq!(scheduler.worker().launches.len(), 1);
+    assert_eq!(
+        scheduler.workspace().ensured,
+        vec!["COE-GOOD-REPO".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn missing_repo_release_preserves_reactivation_state() {
+    // AC7: after a MissingRepo release, adding a valid `repo:` label
+    // and re-polling must reopen the execution so it can dispatch.
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-recover",
+            "COE-RECOVER",
+            "In Progress",
+            0,
+            &[],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(
+        tracker,
+        workspace,
+        worker,
+        scheduler_config_with_inventory(default_repo_inventory()),
+    );
+
+    // Tick 1: gate fires, execution released with MissingRepo.
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+    let issue_id = IssueId::new("lin-recover").expect("issue id should be valid");
+    assert_release_reason(
+        scheduler
+            .execution(&issue_id)
+            .expect("execution should exist"),
+        ReleaseReason::MissingRepo,
+    );
+
+    // Tick 2: operator adds a resolvable `repo:` label. The tracker
+    // snapshot now reports the updated labels. The reconciliation path
+    // refreshes the issue data and reopens the execution because the
+    // release reason preserves reactivation state.
+    scheduler.tracker_mut().active = vec![tracker_issue_with_labels(
+        "lin-recover",
+        "COE-RECOVER",
+        "In Progress",
+        100,
+        &["repo:test-repo"],
+    )];
+    scheduler
+        .tick(ts(200))
+        .await
+        .expect("second tick should reactivate and dispatch");
+
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist");
+    assert_eq!(
+        execution.status(),
+        SchedulerStatus::Running,
+        "execution should reopen and dispatch once a resolvable repo label is present"
+    );
+    assert_eq!(scheduler.worker().launches.len(), 1);
+    assert_eq!(
+        scheduler.workspace().ensured,
+        vec!["COE-RECOVER".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn parent_deferred_release_does_not_preserve_reactivation_state() {
+    // AC7: once a parent is deferred, it stays deferred even if the
+    // tracker state oscillates. `ParentDeferred` is sticky because
+    // parents are always review nodes in Phase 1.
+    let tracker = FakeTracker {
+        active: vec![tracker_parent_with_children(
+            "lin-parent-sticky",
+            "COE-PARENT-STICKY",
+            "In Progress",
+            0,
+            &[],
+            &[("COE-CHILD-A", "Done")],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(tracker, workspace, worker, scheduler_config());
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should defer the parent");
+    let issue_id = IssueId::new("lin-parent-sticky").expect("issue id should be valid");
+    assert_release_reason(
+        scheduler
+            .execution(&issue_id)
+            .expect("execution should exist"),
+        ReleaseReason::ParentDeferred,
+    );
+
+    // Tick 2: tracker still shows the same active parent with terminal
+    // children. Reconciliation may reopen it; the dispatch gate then
+    // fires again and re-releases it as ParentDeferred. The execution
+    // must never reach the work-clone path.
+    scheduler
+        .tick(ts(200))
+        .await
+        .expect("second tick should keep the parent deferred");
+    let execution = scheduler
+        .execution(&issue_id)
+        .expect("execution should still exist");
+    assert_release_reason(execution, ReleaseReason::ParentDeferred);
+    assert_eq!(
+        scheduler.worker().launches.len(),
+        0,
+        "parent must never launch a worker"
+    );
+    assert_eq!(scheduler.workspace().ensured, Vec::<String>::new());
+}
+
+// --- helpers used by LOC-14 tests ---------------------------------------
+
+fn test_repo_ref(slug: &str, url_suffix: &str) -> RepoRef {
+    RepoRef {
+        url: format!("https://example.com/{url_suffix}"),
+        key: slug.to_string(),
+        default_branch: Some("main".to_string()),
+    }
+}
+
+fn default_repo_inventory_with(extra: &[(&str, &str)]) -> BTreeMap<String, RepoRef> {
+    let mut map = default_repo_inventory();
+    for (slug, suffix) in extra {
+        map.insert((*slug).to_string(), test_repo_ref(slug, suffix));
+    }
+    map
 }

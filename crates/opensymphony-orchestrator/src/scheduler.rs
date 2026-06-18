@@ -20,7 +20,9 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
-use super::filter_issues_for_dispatch;
+use super::{
+    filter_issues_for_dispatch, issue_is_blocked_for_missing_repo, issue_is_parent_deferred,
+};
 
 const DISABLED_STALL_TIMEOUT_MS: u64 = u64::MAX / 4;
 
@@ -656,6 +658,63 @@ where
 
             let normalized = normalize_tracker_issue(&tracker_issue, &self.config)?;
             let issue_id = normalized.id.clone();
+
+            // LOC-14 dispatch gate (D6 / D10). Applied after normalize and
+            // before `ensure_workspace` so we never clone a workspace or
+            // start a worker for an issue the gate rejects.
+            //
+            // D10 first — parents take precedence over D6 because the
+            // repo resolver already returns `None` for parents, so a
+            // parent with stray `repo:` labels would otherwise be
+            // indistinguishable from a missing-repo leaf in the
+            // operator surface. We want the deferred reason to read as
+            // "parent review node", not "missing repo".
+            if issue_is_parent_deferred(&normalized) {
+                let identifier = normalized.identifier.clone();
+                let id_for_log = issue_id.clone();
+                self.release_issue(
+                    issue_id,
+                    normalized,
+                    observed_at,
+                    ReleaseReason::ParentDeferred,
+                    // No workspace was ensured and no worker was launched;
+                    // there is nothing to clean up.
+                    false,
+                    None,
+                )
+                .await?;
+                debug!(
+                    issue_id = %id_for_log,
+                    %identifier,
+                    "LOC-14: deferred parent issue as review node"
+                );
+                continue;
+            }
+
+            if issue_is_blocked_for_missing_repo(
+                normalized.sub_issues.is_empty(),
+                normalized.execution_repo_ref.is_some(),
+            ) {
+                let identifier = normalized.identifier.clone();
+                let id_for_log = issue_id.clone();
+                self.release_issue(
+                    issue_id,
+                    normalized,
+                    observed_at,
+                    ReleaseReason::MissingRepo,
+                    // Same as above — gate fires before ensure_workspace.
+                    false,
+                    None,
+                )
+                .await?;
+                debug!(
+                    issue_id = %id_for_log,
+                    %identifier,
+                    "LOC-14: blocked terminal leaf for missing repo"
+                );
+                continue;
+            }
+
             let should_dispatch = match self.executions.get(&issue_id) {
                 Some(execution) => match execution.status() {
                     SchedulerStatus::Unclaimed => true,
