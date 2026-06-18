@@ -1,14 +1,22 @@
 //! Static `opensymphony workspace clone` subcommand (LOC-15).
 //!
 //! `after_create` is the static string `opensymphony workspace clone`. The
-//! workspace manager injects the resolved `RepoRef` (URL / branch / key) into
-//! the hook subprocess via env vars; this subcommand reads them, materializes
-//! the `git` argv, and never invokes a shell. The contract:
+//! workspace manager injects the resolved `RepoRef` into the hook subprocess
+//! via env vars; this subcommand reads them, materializes the `git` argv, and
+//! never invokes a shell. The contract:
 //!
-//! * `OPENSYMPHONY_EXECUTION_REPO_URL` is required.
-//! * `OPENSYMPHONY_EXECUTION_REPO_KEY` is required.
-//! * `OPENSYMPHONY_EXECUTION_REPO_BRANCH` is optional. If absent, clone the
-//!   remote default branch.
+//! * `OPENSYMPHONY_EXECUTION_REPO_URL` (required): the resolved clone URL
+//!   (e.g. `git@github.com:org/repo.git`). Used as the `<url>` argv of
+//!   `git clone`.
+//! * `OPENSYMPHONY_EXECUTION_REPO_KEY` (required): the resolved
+//!   `RepoRef.key` — the canonical short identifier of the repo
+//!   (e.g. `org/repo`). **Not** a credential/SSH key. The subcommand uses it
+//!   for log correlation so operators can match the clone output to the
+//!   `RepoRef` that was resolved upstream; it is also exposed via the env
+//!   contract for future consumers (credential routing, per-repo workspace
+//!   organization) without requiring another seam.
+//! * `OPENSYMPHONY_EXECUTION_REPO_BRANCH` (optional): the default branch to
+//!   clone. If absent (or blank), clone the remote default branch.
 //! * Empty cwd → clone. Cwd already contains `.git` → succeed (idempotent).
 //! * Cwd contains partial non-git contents → fail with a clear error so the
 //!   existing retry-after-failed-bootstrap behavior remains deterministic.
@@ -174,7 +182,8 @@ pub async fn run(_args: WorkspaceCloneArgs) -> ExitCode {
     match execute(inputs).await {
         Ok(report) => {
             eprintln!(
-                "workspace clone: ok (url={}, branch={}, cwd={})",
+                "workspace clone: ok key={} url={} branch={} cwd={}",
+                report.key,
                 report.url,
                 report.branch.as_deref().unwrap_or("<default>"),
                 report.cwd.display()
@@ -193,6 +202,7 @@ pub struct WorkspaceCloneArgs {}
 
 #[derive(Debug)]
 struct ExecutionReport {
+    key: String,
     url: String,
     branch: Option<String>,
     cwd: PathBuf,
@@ -208,6 +218,7 @@ async fn execute(inputs: CloneInputs) -> Result<ExecutionReport, WorkspaceCloneE
     match state {
         WorkspaceDirState::AlreadyCloned => {
             return Ok(ExecutionReport {
+                key: plan.key,
                 url: plan.url,
                 branch: plan.branch,
                 cwd: plan.cwd,
@@ -222,6 +233,7 @@ async fn execute(inputs: CloneInputs) -> Result<ExecutionReport, WorkspaceCloneE
     spawn_git_clone(&plan).await?;
 
     Ok(ExecutionReport {
+        key: plan.key,
         url: plan.url,
         branch: plan.branch,
         cwd: plan.cwd,
@@ -415,5 +427,51 @@ mod tests {
             classify_workspace_dir(dir.path()).await.unwrap(),
             WorkspaceDirState::Partial
         );
+    }
+
+    /// Confirms that `OPENSYMPHONY_EXECUTION_REPO_KEY` is used (not dead code):
+    /// `execute()` must thread the resolved key through `ExecutionReport` so
+    /// the success log line can correlate the clone with the `RepoRef` the
+    /// scheduler resolved upstream. We drive this through the `AlreadyCloned`
+    /// short-circuit so no real `git` process is spawned.
+    #[tokio::test]
+    async fn execute_carries_resolved_key_for_logging() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir(dir.path().join(".git"))
+            .await
+            .unwrap();
+
+        let mut inputs = inputs(
+            Some("git@github.com:foo/bar.git"),
+            Some("foo/bar"),
+            Some("develop"),
+        );
+        inputs.cwd = dir.path().to_path_buf();
+
+        let report = execute(inputs)
+            .await
+            .expect("already-cloned should succeed");
+        assert_eq!(report.key, "foo/bar");
+        assert_eq!(report.url, "git@github.com:foo/bar.git");
+        assert_eq!(report.branch.as_deref(), Some("develop"));
+    }
+
+    /// Same guarantee for the missing-branch path so the resolved `key` still
+    /// reaches the log line even when no branch is injected.
+    #[tokio::test]
+    async fn execute_carries_resolved_key_when_branch_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir(dir.path().join(".git"))
+            .await
+            .unwrap();
+
+        let mut inputs = inputs(Some("git@github.com:foo/bar.git"), Some("foo/bar"), None);
+        inputs.cwd = dir.path().to_path_buf();
+
+        let report = execute(inputs)
+            .await
+            .expect("already-cloned should succeed");
+        assert_eq!(report.key, "foo/bar");
+        assert!(report.branch.is_none());
     }
 }
