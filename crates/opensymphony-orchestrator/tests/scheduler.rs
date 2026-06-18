@@ -1431,7 +1431,7 @@ async fn dispatch_gate_skips_parent_with_accidental_repo_label() {
 }
 
 #[tokio::test]
-async fn dispatch_gate_releases_terminal_leaf_as_missing_repo_with_inventory_present() {
+async fn dispatch_gate_allows_terminal_leaf_with_valid_repo() {
     // AC2 sanity: with a single resolvable `repo:` label and a matching
     // inventory entry, dispatch proceeds normally (no gate fires).
     let tracker = FakeTracker {

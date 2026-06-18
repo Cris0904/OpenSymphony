@@ -25,15 +25,21 @@ pub fn should_dispatch_issue(issue: &TrackerIssue, terminal_states: &HashSet<Str
         && !parent_issue_blocked_by_incomplete_children(issue, terminal_states)
 }
 
-/// Dispatch-gate predicate for **D6** — terminal leaf issues without a
+/// Dispatch-gate predicate for **D6** — leaf issues without a
 /// resolvable repo are blocked from the work-clone path (LOC-14).
 ///
-/// `is_terminal_leaf` is `true` when the issue is a leaf (no sub-issues).
+/// `is_leaf` is `true` when the issue is a leaf in the issue hierarchy
+/// (no sub-issues). It is intentionally NOT named `is_terminal`: the
+/// scheduler domain uses "terminal" to mean a tracker state of
+/// Done/Canceled, which is a different axis from "is a leaf in the
+/// issue hierarchy". The D6 gate is hierarchical, not tracker-state,
+/// so the parameter is named to match that axis.
+///
 /// `repo_resolved` is the boolean outcome of
 /// [`crate::repo_resolver::repo_for_issue`] — i.e. whether the issue has
 /// exactly one `repo:<slug>` label that maps to the project-set inventory.
 ///
-/// Returns `true` only when the issue is a terminal leaf **and** has no
+/// Returns `true` only when the issue is a leaf **and** has no
 /// resolvable repo. Parents never trigger this predicate (they are
 /// handled by [`issue_is_parent_deferred`]); leaves with a resolvable
 /// repo always return `false`.
@@ -41,8 +47,8 @@ pub fn should_dispatch_issue(issue: &TrackerIssue, terminal_states: &HashSet<Str
 /// The predicate is pure and side-effect-free; the orchestrator passes
 /// the resolved-repo fact in from the scheduler because the selection
 /// layer has no inventory of its own.
-pub fn issue_is_blocked_for_missing_repo(is_terminal_leaf: bool, repo_resolved: bool) -> bool {
-    is_terminal_leaf && !repo_resolved
+pub fn issue_is_blocked_for_missing_repo(is_leaf: bool, repo_resolved: bool) -> bool {
+    is_leaf && !repo_resolved
 }
 
 /// Dispatch-gate predicate for **D10** — cross-repo parent issues are
