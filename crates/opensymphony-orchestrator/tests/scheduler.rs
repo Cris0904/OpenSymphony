@@ -5,7 +5,7 @@ use std::{
 
 use crate::opensymphony_orchestrator::{
     ConversationId, ConversationMetadata, IssueId, IssueIdentifier, IssueRef, IssueState,
-    IssueStateCategory, NormalizedIssue, RecoveryRecord, ReleaseReason, RetryReason,
+    IssueStateCategory, NormalizedIssue, RecoveryRecord, ReleaseReason, RepoRef, RetryReason,
     RuntimeStreamState, Scheduler, SchedulerConfig, SchedulerStatus, TimestampMs, TrackerBackend,
     TrackerIssue, TrackerIssueState, TrackerIssueStateKind, TrackerIssueStateSnapshot,
     WorkerAbortReason, WorkerBackend, WorkerId, WorkerLaunch, WorkerOutcomeKind,
@@ -34,10 +34,21 @@ fn scheduler_config() -> SchedulerConfig {
         stall_timeout_ms: Some(100),
         active_states: vec!["In Progress".to_string()],
         terminal_states: vec!["Done".to_string(), "Canceled".to_string()],
+        project_set_inventory: BTreeMap::new(),
     }
 }
 
 fn tracker_issue(id: &str, identifier: &str, state: &str, created_at: u64) -> TrackerIssue {
+    tracker_issue_with_labels(id, identifier, state, created_at, &[])
+}
+
+fn tracker_issue_with_labels(
+    id: &str,
+    identifier: &str,
+    state: &str,
+    created_at: u64,
+    labels: &[&str],
+) -> TrackerIssue {
     TrackerIssue {
         id: id.to_string(),
         identifier: identifier.to_string(),
@@ -46,7 +57,7 @@ fn tracker_issue(id: &str, identifier: &str, state: &str, created_at: u64) -> Tr
         description: Some("scheduler test fixture".to_string()),
         priority: Some(1),
         state: state.to_string(),
-        labels: Vec::new(),
+        labels: labels.iter().map(|label| label.to_string()).collect(),
         parent_id: None,
         parent: None,
         project_milestone: None,
@@ -88,6 +99,7 @@ fn normalized_issue(id: &str, identifier: &str, state: &str) -> NormalizedIssue 
         }],
         created_at: Some(ts(0)),
         updated_at: Some(ts(0)),
+        execution_repo_ref: None,
     }
 }
 
@@ -984,4 +996,156 @@ async fn cancel_failed_outcome_does_not_schedule_retry() {
     assert!(execution.retry().is_none());
     // No new launches should have occurred
     assert_eq!(scheduler.worker().launches.len(), 1);
+}
+
+// --- LOC-13: `normalize_tracker_issue` wires `repo_for_issue` end-to-end ---
+
+fn scheduler_config_with_inventory(inventory: BTreeMap<String, RepoRef>) -> SchedulerConfig {
+    SchedulerConfig {
+        poll_interval_ms: 1_000,
+        max_concurrent_agents: 2,
+        max_turns: 4,
+        max_concurrent_agents_by_state: BTreeMap::new(),
+        retry_policy: Default::default(),
+        stall_timeout_ms: Some(100),
+        active_states: vec!["In Progress".to_string()],
+        terminal_states: vec!["Done".to_string(), "Canceled".to_string()],
+        project_set_inventory: inventory,
+    }
+}
+
+fn single_repo_inventory(slug: &str, url: &str) -> BTreeMap<String, RepoRef> {
+    let mut map = BTreeMap::new();
+    map.insert(
+        slug.to_string(),
+        RepoRef {
+            url: url.to_string(),
+            key: slug.to_string(),
+            default_branch: Some("main".to_string()),
+        },
+    );
+    map
+}
+
+#[tokio::test]
+async fn poll_normalize_populates_execution_repo_ref_from_known_slug() {
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-repo-1",
+            "COE-REPO-1",
+            "In Progress",
+            0,
+            &["area:linear", "repo:test-repo"],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(
+        tracker,
+        workspace,
+        worker,
+        scheduler_config_with_inventory(single_repo_inventory(
+            "test-repo",
+            "https://example.com/test-repo.git",
+        )),
+    );
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-repo-1").expect("issue id should be valid");
+    let execution_repo_ref = scheduler
+        .execution(&issue_id)
+        .expect("execution should exist")
+        .issue()
+        .execution_repo_ref
+        .clone();
+    assert_eq!(
+        execution_repo_ref.expect("repo should resolve").key,
+        "test-repo"
+    );
+}
+
+#[tokio::test]
+async fn poll_normalize_leaves_execution_repo_ref_none_for_unknown_slug() {
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-repo-2",
+            "COE-REPO-2",
+            "In Progress",
+            0,
+            &["repo:unknown-slug"],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(
+        tracker,
+        workspace,
+        worker,
+        scheduler_config_with_inventory(single_repo_inventory(
+            "test-repo",
+            "https://example.com/test-repo.git",
+        )),
+    );
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-repo-2").expect("issue id should be valid");
+    let execution_repo_ref = scheduler
+        .execution(&issue_id)
+        .expect("execution should exist")
+        .issue()
+        .execution_repo_ref
+        .clone();
+    assert!(
+        execution_repo_ref.is_none(),
+        "unknown slug must not resolve"
+    );
+}
+
+#[tokio::test]
+async fn poll_normalize_leaves_execution_repo_ref_none_when_inventory_empty() {
+    let tracker = FakeTracker {
+        active: vec![tracker_issue_with_labels(
+            "lin-repo-3",
+            "COE-REPO-3",
+            "In Progress",
+            0,
+            &["repo:test-repo"],
+        )],
+        ..Default::default()
+    };
+    let workspace = FakeWorkspace::default();
+    let worker = FakeWorker::default();
+    let mut scheduler = Scheduler::new(
+        tracker,
+        workspace,
+        worker,
+        scheduler_config_with_inventory(BTreeMap::new()),
+    );
+
+    scheduler
+        .tick(ts(100))
+        .await
+        .expect("first tick should succeed");
+
+    let issue_id = IssueId::new("lin-repo-3").expect("issue id should be valid");
+    let execution_repo_ref = scheduler
+        .execution(&issue_id)
+        .expect("execution should exist")
+        .issue()
+        .execution_repo_ref
+        .clone();
+    assert!(
+        execution_repo_ref.is_none(),
+        "empty inventory must not resolve"
+    );
 }

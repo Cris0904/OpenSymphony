@@ -433,6 +433,7 @@ tracker:
                     sub_issues: Vec::<IssueRef>::new(),
                     created_at: None,
                     updated_at: None,
+                    execution_repo_ref: None,
                 },
                 runtime: RuntimeStateSnapshot {
                     state: SchedulerStatus::Running,

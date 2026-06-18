@@ -226,7 +226,13 @@ async fn run_orchestrator(args: RunArgs) -> Result<(), RunCommandError> {
         tracker,
         workspace,
         worker,
-        SchedulerConfig::from_workflow(&runtime.workflow)?,
+        SchedulerConfig::from_workflow(&runtime.workflow)?.with_project_set_inventory(
+            runtime
+                .project_set
+                .as_ref()
+                .map(|project_set| project_set.inventory().clone())
+                .unwrap_or_default(),
+        ),
     );
 
     let mut recent_events = VecDeque::new();

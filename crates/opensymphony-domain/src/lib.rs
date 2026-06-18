@@ -144,6 +144,7 @@ mod tests {
             }],
             created_at: Some(ts(10)),
             updated_at: Some(ts(20)),
+            execution_repo_ref: None,
         }
     }
 

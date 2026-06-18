@@ -1,3 +1,4 @@
+mod repo_resolver;
 mod scheduler;
 mod selection;
 
@@ -7,13 +8,14 @@ pub use crate::opensymphony_domain::{
     ComponentHealthSnapshot, ConversationId, ConversationMetadata, DaemonSnapshot, DurationMs,
     HealthStatus, IdentifierError, IssueExecution, IssueId, IssueIdentifier, IssueRef,
     IssueSnapshot, IssueState, IssueStateCategory, NormalizedIssue, OrchestratorSnapshot,
-    ReleaseReason, RetryAttempt, RetryCalculationError, RetryEntry, RetryPolicy, RetryReason,
-    RunAttempt, RuntimeStreamState, RuntimeUsageTotals, SchedulerState, SchedulerStatus,
-    StallMetadata, StateTransitionError, TimestampMs, TrackerIssue, TrackerIssueBlocker,
-    TrackerIssueRef, TrackerIssueState, TrackerIssueStateKind, TrackerIssueStateSnapshot,
-    TrackerStateId, TransitionAction, WorkerAttemptSnapshot, WorkerId, WorkerOutcomeKind,
-    WorkerOutcomeRecord, WorkspaceKey, WorkspaceRecord,
+    ReleaseReason, RepoRef, RetryAttempt, RetryCalculationError, RetryEntry, RetryPolicy,
+    RetryReason, RunAttempt, RuntimeStreamState, RuntimeUsageTotals, SchedulerState,
+    SchedulerStatus, StallMetadata, StateTransitionError, TimestampMs, TrackerIssue,
+    TrackerIssueBlocker, TrackerIssueRef, TrackerIssueState, TrackerIssueStateKind,
+    TrackerIssueStateSnapshot, TrackerStateId, TransitionAction, WorkerAttemptSnapshot, WorkerId,
+    WorkerOutcomeKind, WorkerOutcomeRecord, WorkspaceKey, WorkspaceRecord,
 };
+pub use repo_resolver::repo_for_issue;
 pub use scheduler::{
     RecoveryRecord, Scheduler, SchedulerConfig, SchedulerError, TrackerBackend, WorkerAbortReason,
     WorkerBackend, WorkerLaunch, WorkerStartRequest, WorkerUpdate, WorkspaceBackend,
@@ -70,6 +72,7 @@ mod tests {
             }],
             created_at: None,
             updated_at: None,
+            execution_repo_ref: None,
         };
 
         let workspace = WorkspaceRecord {

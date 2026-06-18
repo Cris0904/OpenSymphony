@@ -34,6 +34,10 @@ pub struct SchedulerConfig {
     pub stall_timeout_ms: Option<u64>,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
+    /// Project-set `slug → RepoRef` inventory used by `repo_for_issue` (LOC-13).
+    /// Empty when no `.opensymphony/project-set.yaml` is loaded (legacy
+    /// single-repo flow) — the resolver then always returns `None`.
+    pub project_set_inventory: BTreeMap<String, crate::opensymphony_domain::RepoRef>,
 }
 
 impl SchedulerConfig {
@@ -81,7 +85,22 @@ impl SchedulerConfig {
             stall_timeout_ms: workflow.config.agent.stall_timeout_ms,
             active_states: workflow.config.tracker.active_states.clone(),
             terminal_states: workflow.config.tracker.terminal_states.clone(),
+            project_set_inventory: BTreeMap::new(),
         })
+    }
+
+    /// Builder-style helper to attach the project-set `slug → RepoRef`
+    /// inventory (LOC-12) used by `repo_for_issue` (LOC-13). Callers that have
+    /// a [`crate::opensymphony_workflow::ResolvedProjectSet`] — typically the
+    /// CLI's `orchestrator_run` — clone `inventory()` into here. Empty
+    /// inventory preserves the legacy single-repo behavior (resolver always
+    /// returns `None`).
+    pub fn with_project_set_inventory(
+        mut self,
+        inventory: BTreeMap<String, crate::opensymphony_domain::RepoRef>,
+    ) -> Self {
+        self.project_set_inventory = inventory;
+        self
     }
 
     fn terminal_state_set(&self) -> HashSet<String> {
@@ -1084,7 +1103,37 @@ fn normalize_tracker_issue(
     issue: &TrackerIssue,
     config: &SchedulerConfig,
 ) -> Result<NormalizedIssue, SchedulerError> {
-    Ok(NormalizedIssue {
+    let sub_issues: Vec<IssueRef> = issue
+        .sub_issues
+        .iter()
+        .map(|child| {
+            Ok(IssueRef {
+                id: IssueId::new(child.id.clone())?,
+                identifier: IssueIdentifier::new(child.identifier.clone())?,
+                state: child.state.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, SchedulerError>>()?;
+    let labels = issue.labels.clone();
+    let blocked_by: Vec<crate::opensymphony_domain::BlockerRef> = issue
+        .blocked_by
+        .iter()
+        .map(|blocker| {
+            Ok(crate::opensymphony_domain::BlockerRef {
+                id: Some(IssueId::new(blocker.id.clone())?),
+                identifier: Some(IssueIdentifier::new(blocker.identifier.clone())?),
+                state: Some(blocker.state.name.clone()),
+                created_at: None,
+                updated_at: None,
+            })
+        })
+        .collect::<Result<Vec<_>, SchedulerError>>()?;
+    let parent_id = match &issue.parent_id {
+        Some(parent_id) => Some(IssueId::new(parent_id.clone())?),
+        None => None,
+    };
+
+    let candidate = NormalizedIssue {
         id: IssueId::new(issue.id.clone())?,
         identifier: IssueIdentifier::new(issue.identifier.clone())?,
         title: issue.title.clone(),
@@ -1093,37 +1142,19 @@ fn normalize_tracker_issue(
         state: issue_state_from_name(&issue.state, config),
         branch_name: None,
         url: Some(issue.url.clone()),
-        labels: issue.labels.clone(),
-        parent_id: match &issue.parent_id {
-            Some(parent_id) => Some(IssueId::new(parent_id.clone())?),
-            None => None,
-        },
-        blocked_by: issue
-            .blocked_by
-            .iter()
-            .map(|blocker| {
-                Ok(crate::opensymphony_domain::BlockerRef {
-                    id: Some(IssueId::new(blocker.id.clone())?),
-                    identifier: Some(IssueIdentifier::new(blocker.identifier.clone())?),
-                    state: Some(blocker.state.name.clone()),
-                    created_at: None,
-                    updated_at: None,
-                })
-            })
-            .collect::<Result<Vec<_>, SchedulerError>>()?,
-        sub_issues: issue
-            .sub_issues
-            .iter()
-            .map(|child| {
-                Ok(IssueRef {
-                    id: IssueId::new(child.id.clone())?,
-                    identifier: IssueIdentifier::new(child.identifier.clone())?,
-                    state: child.state.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, SchedulerError>>()?,
+        labels,
+        parent_id,
+        blocked_by,
+        sub_issues,
         created_at: Some(datetime_to_timestamp(issue.created_at)),
         updated_at: Some(datetime_to_timestamp(issue.updated_at)),
+        execution_repo_ref: None,
+    };
+    let execution_repo_ref =
+        super::repo_resolver::repo_for_issue(&candidate, &config.project_set_inventory);
+    Ok(NormalizedIssue {
+        execution_repo_ref,
+        ..candidate
     })
 }
 
@@ -1146,6 +1177,7 @@ fn minimal_issue_from_state_snapshot(
         sub_issues: Vec::new(),
         created_at: None,
         updated_at: Some(datetime_to_timestamp(snapshot.updated_at)),
+        execution_repo_ref: None,
     })
 }
 
