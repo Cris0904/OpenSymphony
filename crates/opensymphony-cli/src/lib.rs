@@ -842,6 +842,7 @@ async fn run_doctor_rehydration(
             sub_issues: vec![],
             created_at: None,
             updated_at: None,
+            execution_repo_ref: None,
         };
 
         let options = RehydrationOptions {
@@ -2185,6 +2186,7 @@ async fn run_rehydrate_command(args: RehydrateArgs) -> Result<(), String> {
         sub_issues: vec![],
         created_at: None,
         updated_at: None,
+        execution_repo_ref: None,
     };
 
     let result = runner

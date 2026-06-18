@@ -758,6 +758,7 @@ fn sample_issue() -> NormalizedIssue {
         sub_issues: Vec::new(),
         created_at: Some(TimestampMs::new(1)),
         updated_at: Some(TimestampMs::new(2)),
+        execution_repo_ref: None,
     }
 }
 

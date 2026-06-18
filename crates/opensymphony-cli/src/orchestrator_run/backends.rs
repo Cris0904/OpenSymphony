@@ -1038,6 +1038,10 @@ fn normalized_issue_from_manifest(
         sub_issues: Vec::new(),
         created_at: Some(datetime_to_timestamp_ms(manifest.created_at)),
         updated_at: Some(datetime_to_timestamp_ms(manifest.updated_at)),
+        // Recovery from a workspace manifest has no live tracker labels, so
+        // the per-issue execution repo cannot be re-derived here. The resolver
+        // will repopulate this on the next poll/normalize pass (LOC-13).
+        execution_repo_ref: None,
     })
 }
 
@@ -1476,6 +1480,7 @@ Run the scheduler.
             sub_issues: Vec::new(),
             created_at: None,
             updated_at: None,
+            execution_repo_ref: None,
         }
     }
 

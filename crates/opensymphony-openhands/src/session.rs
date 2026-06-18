@@ -3429,6 +3429,7 @@ mod tests {
             }],
             created_at: None,
             updated_at: None,
+            execution_repo_ref: None,
         };
 
         let context = fetch_memory_context_from_server(&access, &issue)

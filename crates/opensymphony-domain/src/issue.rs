@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::repo::RepoRef;
 use super::{IssueId, IssueIdentifier, TimestampMs, TrackerStateId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,4 +52,12 @@ pub struct NormalizedIssue {
     pub sub_issues: Vec<IssueRef>,
     pub created_at: Option<TimestampMs>,
     pub updated_at: Option<TimestampMs>,
+    /// Resolved repo for execution, populated by the orchestrator's
+    /// `repo_for_issue` resolver from a `repo:<slug>` Linear label that resolves
+    /// through the project-set inventory (see LOC-13). `None` for parent
+    /// (non-leaf) issues, unlabeled leaves, unknown slugs, or any
+    /// `NormalizedIssue` built without live tracker labels (recovery helpers,
+    /// tests, manifest rebuilds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_repo_ref: Option<RepoRef>,
 }
