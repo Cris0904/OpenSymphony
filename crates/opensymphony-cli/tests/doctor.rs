@@ -751,6 +751,7 @@ fn doctor_passes_project_set_when_global_config_is_valid() {
         .arg(&config_path)
         .current_dir(temp_dir.path())
         .env("PATH", path_only(fake_bin_dir.path()))
+        .env("LINEAR_API_KEY", "test-linear-key")
         .output()
         .expect("doctor command should run");
     let stdout = String::from_utf8_lossy(&output.stdout);
