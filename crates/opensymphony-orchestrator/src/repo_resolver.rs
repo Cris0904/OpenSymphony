@@ -72,11 +72,7 @@ fn canonical_repo_label_slug(value: &str) -> Option<&str> {
         return None;
     }
     let slug = suffix.trim();
-    if slug.is_empty() {
-        None
-    } else {
-        Some(slug)
-    }
+    if slug.is_empty() { None } else { Some(slug) }
 }
 
 #[cfg(test)]
@@ -133,12 +129,7 @@ mod tests {
     fn inventory(pairs: &[(&str, &str)]) -> BTreeMap<String, RepoRef> {
         pairs
             .iter()
-            .map(|(slug, url)| {
-                (
-                    (*slug).to_string(),
-                    repo(url, slug),
-                )
-            })
+            .map(|(slug, url)| ((*slug).to_string(), repo(url, slug)))
             .collect()
     }
 
@@ -255,7 +246,8 @@ mod tests {
         let issue = leaf_issue(&["REPO:test-repo"]);
         let inv = inventory(&[("test-repo", "https://example.com/test-repo.git")]);
 
-        let resolved = repo_for_issue(&issue, &inv).expect("case-insensitive prefix should resolve");
+        let resolved =
+            repo_for_issue(&issue, &inv).expect("case-insensitive prefix should resolve");
         assert_eq!(resolved.key, "test-repo");
     }
 
@@ -264,7 +256,8 @@ mod tests {
         let issue = leaf_issue(&["area:linear", "foundation", "repo:test-repo"]);
         let inv = inventory(&[("test-repo", "https://example.com/test-repo.git")]);
 
-        let resolved = repo_for_issue(&issue, &inv).expect("repo label should resolve alongside area/foundation");
+        let resolved = repo_for_issue(&issue, &inv)
+            .expect("repo label should resolve alongside area/foundation");
         assert_eq!(resolved.key, "test-repo");
     }
 

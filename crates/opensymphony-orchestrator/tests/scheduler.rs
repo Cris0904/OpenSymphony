@@ -1000,9 +1000,7 @@ async fn cancel_failed_outcome_does_not_schedule_retry() {
 
 // --- LOC-13: `normalize_tracker_issue` wires `repo_for_issue` end-to-end ---
 
-fn scheduler_config_with_inventory(
-    inventory: BTreeMap<String, RepoRef>,
-) -> SchedulerConfig {
+fn scheduler_config_with_inventory(inventory: BTreeMap<String, RepoRef>) -> SchedulerConfig {
     SchedulerConfig {
         poll_interval_ms: 1_000,
         max_concurrent_agents: 2,
@@ -1151,4 +1149,3 @@ async fn poll_normalize_leaves_execution_repo_ref_none_when_inventory_empty() {
         "empty inventory must not resolve"
     );
 }
-

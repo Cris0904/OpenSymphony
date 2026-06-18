@@ -1150,7 +1150,8 @@ fn normalize_tracker_issue(
         updated_at: Some(datetime_to_timestamp(issue.updated_at)),
         execution_repo_ref: None,
     };
-    let execution_repo_ref = super::repo_resolver::repo_for_issue(&candidate, &config.project_set_inventory);
+    let execution_repo_ref =
+        super::repo_resolver::repo_for_issue(&candidate, &config.project_set_inventory);
     Ok(NormalizedIssue {
         execution_repo_ref,
         ..candidate

@@ -12,9 +12,10 @@ pub use crate::opensymphony_domain::{
     RetryReason, RunAttempt, RuntimeStreamState, RuntimeUsageTotals, SchedulerState,
     SchedulerStatus, StallMetadata, StateTransitionError, TimestampMs, TrackerIssue,
     TrackerIssueBlocker, TrackerIssueRef, TrackerIssueState, TrackerIssueStateKind,
-    TrackerIssueStateSnapshot, TrackerStateId, TransitionAction, WorkerAttemptSnapshot,
-    WorkerId, WorkerOutcomeKind, WorkerOutcomeRecord, WorkspaceKey, WorkspaceRecord,
+    TrackerIssueStateSnapshot, TrackerStateId, TransitionAction, WorkerAttemptSnapshot, WorkerId,
+    WorkerOutcomeKind, WorkerOutcomeRecord, WorkspaceKey, WorkspaceRecord,
 };
+pub use repo_resolver::repo_for_issue;
 pub use scheduler::{
     RecoveryRecord, Scheduler, SchedulerConfig, SchedulerError, TrackerBackend, WorkerAbortReason,
     WorkerBackend, WorkerLaunch, WorkerStartRequest, WorkerUpdate, WorkspaceBackend,
@@ -23,7 +24,6 @@ pub use selection::{
     filter_issues_for_dispatch, issue_blocked_by_non_terminal_blockers,
     parent_issue_blocked_by_incomplete_children, should_dispatch_issue, sort_issues_for_dispatch,
 };
-pub use repo_resolver::repo_for_issue;
 
 pub fn boundary_summary() -> &'static str {
     "poll tick, runtime state machine, worker supervision, retry queue, cancellation/reconciliation, and snapshot derivation inputs"
