@@ -8,7 +8,9 @@ use std::{
 
 use crate::opensymphony_memory::DEFAULT_PRIVATE_MEMORY_CONFIG_FILE;
 use crate::opensymphony_openhands::OpenHandsConversationStorePaths;
-use crate::opensymphony_workflow::{ResolvedWorkflow, WorkflowDefinition};
+use crate::opensymphony_workflow::{
+    ResolvedProjectSet, ResolvedWorkflow, TrackerKind, WorkflowDefinition,
+};
 use serde::Deserialize;
 use tokio::fs;
 
@@ -74,6 +76,11 @@ pub(super) struct RunRuntimeConfig {
     pub(super) target_repo: PathBuf,
     pub(super) workflow_path: PathBuf,
     pub(super) workflow: ResolvedWorkflow,
+    /// Optional `.opensymphony/project-set.yaml` resolution; `None` for legacy
+    /// single-repo flow (LOC-12). Reserved for the resolver/gate in LOC-13/14.
+    #[allow(dead_code)]
+    pub(super) project_set: Option<ResolvedProjectSet>,
+    pub(super) project_set_path: Option<PathBuf>,
     pub(super) bind: SocketAddr,
     pub(super) tool_dir: Option<PathBuf>,
     pub(super) openhands_conversation_store: Option<OpenHandsConversationStorePaths>,
@@ -178,11 +185,24 @@ pub(super) async fn resolve_runtime_config(
     };
     validate_memory_bootstrap(&target_repo, &memory)?;
 
+    // Optional global `.opensymphony/project-set.yaml` (LOC-12). Absent →
+    // legacy single-repo flow. When present, the project-set's linear scope,
+    // polling interval, and total `max_concurrent_agents` override the
+    // workflow's per-repo values; the inventory is exposed for the resolver
+    // and gate (LOC-13/LOC-14).
+    let (project_set, project_set_path) = load_optional_project_set(config_root)?;
+    let mut workflow = workflow;
+    if let Some(resolved) = &project_set {
+        apply_project_set_overrides(&mut workflow, resolved);
+    }
+
     Ok(RunRuntimeConfig {
         config_path,
         target_repo,
         workflow_path,
         workflow,
+        project_set,
+        project_set_path,
         bind,
         tool_dir,
         openhands_conversation_store,
@@ -202,6 +222,54 @@ fn validate_memory_bootstrap(
         return Ok(());
     }
     Err(RunCommandError::MissingMemoryConfig { path })
+}
+
+/// Loads `.opensymphony/project-set.yaml` from `config_root` when present.
+///
+/// Returns `(None, None)` if the file is absent (preserves the legacy
+/// single-repo flow). The resolved path is returned for diagnostic logging.
+fn load_optional_project_set(
+    config_root: &Path,
+) -> Result<(Option<ResolvedProjectSet>, Option<PathBuf>), RunCommandError> {
+    let path = config_root.join(".opensymphony").join("project-set.yaml");
+    if !path.is_file() {
+        return Ok((None, None));
+    }
+
+    let raw = match crate::opensymphony_workflow::ProjectSetFrontMatter::load_from_path(&path) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return Ok((None, Some(path))),
+        Err(source) => {
+            return Err(RunCommandError::LoadProjectSet {
+                path: path.clone(),
+                source,
+            });
+        }
+    };
+
+    raw.resolve_with_process_env()
+        .map(|resolved| (Some(resolved), Some(path.clone())))
+        .map_err(|source| RunCommandError::ResolveProjectSet { path, source })
+}
+
+/// Applies project-set-level overrides to the workflow's resolved config.
+///
+/// Per LOC-12, when `.opensymphony/project-set.yaml` is present, the
+/// project-set's `linear.*`, `polling.interval_ms`, and
+/// `agent.max_concurrent_agents` are the authoritative values for the single
+/// orchestrator and override the corresponding fields in the per-repo
+/// `WORKFLOW.md`. Per-repo fields (workspace, hooks, per-repo agent caps,
+/// prompt template, etc.) are preserved from the workflow.
+fn apply_project_set_overrides(workflow: &mut ResolvedWorkflow, project_set: &ResolvedProjectSet) {
+    let config = &project_set.config;
+    workflow.config.tracker.kind = TrackerKind::Linear;
+    workflow.config.tracker.endpoint = config.linear.endpoint.clone();
+    workflow.config.tracker.project_slug = config.linear.project_slug.clone();
+    workflow.config.tracker.api_key = config.linear.api_key.clone();
+    workflow.config.tracker.active_states = config.linear.active_states.clone();
+    workflow.config.tracker.terminal_states = config.linear.terminal_states.clone();
+    workflow.config.polling.interval_ms = config.polling.interval_ms;
+    workflow.config.agent.max_concurrent_agents = config.agent.max_concurrent_agents;
 }
 
 async fn load_run_config(path: &Path) -> Result<RunConfigFile, RunCommandError> {

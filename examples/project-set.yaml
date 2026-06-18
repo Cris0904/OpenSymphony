@@ -1,0 +1,39 @@
+# Example global project-set config for `opensymphony run` (Phase 1).
+#
+# Copy this file to `<config_root>/.opensymphony/project-set.yaml` and edit
+# the inventory + Linear scope for your project set. The file is optional:
+# when it is absent, the orchestrator falls back to today's legacy
+# single-repo `config.yaml` + `WORKFLOW.md` flow unchanged.
+#
+# See `docs/configuration.md` (`## Global Project Set`) for the full
+# schema and the required-vs-optional field contract.
+
+schema_version: 1
+
+project_set:
+  slug: opensymphony-updates
+  name: OpenSymphony Updates
+
+  linear:
+    endpoint: https://api.linear.app/graphql
+    project_slug: opensymphony-bootstrap-e7b957855cb7
+    # Optional. Defaults to LINEAR_API_KEY when omitted.
+    api_key_env: LINEAR_API_KEY
+    active_states: [Todo, In Progress, Human Review, Merging, Rework]
+    terminal_states: [Done, Closed, Cancelled, Canceled, Duplicate]
+
+  polling:
+    interval_ms: 5000
+
+  agent:
+    max_concurrent_agents: 4
+
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:kumanday/OpenSymphony.git
+          default_branch: main
+          # Optional local path metadata; NOT part of RepoRef.
+          path: ../OpenSymphony
