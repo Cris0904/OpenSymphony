@@ -5,6 +5,7 @@ mod memory;
 mod memory_init_summary;
 mod orchestrator_run;
 mod update_repo;
+mod workspace_clone;
 
 use std::{
     collections::BTreeSet,
@@ -61,6 +62,8 @@ enum Command {
     Update(update_repo::UpdateArgs),
     #[command(about = "Install app-managed runtimes and integrations")]
     Install(InstallArgs),
+    #[command(about = "Manage workspaces for issue runs (static hooks, no shell templating)")]
+    Workspace(WorkspaceArgs),
     #[command(about = "Run the real orchestrator against the current project workflow")]
     Run(orchestrator_run::RunArgs),
     #[command(about = "Resume an issue conversation for interactive debugging")]
@@ -92,6 +95,24 @@ enum InstallTarget {
         about = "Install the pinned app-managed OpenHands agent-server runtime"
     )]
     OpenHands(InstallOpenHandsArgs),
+}
+
+#[derive(Debug, Args)]
+struct WorkspaceArgs {
+    #[command(subcommand)]
+    target: WorkspaceTarget,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkspaceTarget {
+    #[command(
+        name = "clone",
+        about = "Static workspace clone. Reads OPENSYMPHONY_EXECUTION_REPO_URL/BRANCH/KEY \
+                 from the environment (injected by the workspace manager from the resolved \
+                 RepoRef) and invokes `git clone --depth 1 [--branch <branch>] <url> .` with no \
+                 shell. Idempotent if the workspace already contains a `.git` directory."
+    )]
+    Clone(workspace_clone::WorkspaceCloneArgs),
 }
 
 #[derive(Debug, Args)]
@@ -312,6 +333,7 @@ pub async fn run() -> ExitCode {
         Command::Init(args) => init_repo::run_command(args).await,
         Command::Update(args) => update_repo::run_command(args).await,
         Command::Install(args) => run_install(args).await,
+        Command::Workspace(args) => run_workspace(args).await,
         Command::Run(args) => orchestrator_run::run_command(args).await,
         Command::Debug(args) => debug_session::run_command(args).await,
         Command::Memory(args) => memory::run_command(args).await,
@@ -326,6 +348,12 @@ pub async fn run() -> ExitCode {
 async fn run_install(args: InstallArgs) -> ExitCode {
     match args.target {
         InstallTarget::OpenHands(args) => run_install_openhands(args).await,
+    }
+}
+
+async fn run_workspace(args: WorkspaceArgs) -> ExitCode {
+    match args.target {
+        WorkspaceTarget::Clone(args) => workspace_clone::run(args).await,
     }
 }
 
@@ -2427,6 +2455,7 @@ mod tests {
             | Command::Tui(_)
             | Command::Doctor(_)
             | Command::Install(_)
+            | Command::Workspace(_)
             | Command::Memory(_)
             | Command::Linear(_)
             | Command::Update(_)

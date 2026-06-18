@@ -7,6 +7,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::opensymphony_domain::RepoRef;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueDescriptor {
     pub issue_id: String,
@@ -14,6 +16,12 @@ pub struct IssueDescriptor {
     pub title: String,
     pub current_state: String,
     pub last_seen_tracker_refresh_at: Option<DateTime<Utc>>,
+    /// Resolved `RepoRef` carried from scheduler normalization. When `Some`,
+    /// the workspace manager injects it into the `after_create` hook as
+    /// `OPENSYMPHONY_EXECUTION_REPO_URL` / `_BRANCH` / `_KEY` env vars so the
+    /// static `opensymphony workspace clone` subcommand receives the resolved
+    /// repo without ever seeing a templated shell string (LOC-15).
+    pub execution_repo_ref: Option<RepoRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

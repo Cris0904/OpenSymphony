@@ -68,6 +68,7 @@ fn issue_descriptor(issue: &NormalizedIssue) -> IssueDescriptor {
         title: issue.title.clone(),
         current_state: issue.state.name.clone(),
         last_seen_tracker_refresh_at: None,
+        execution_repo_ref: issue.execution_repo_ref.clone(),
     }
 }
 
