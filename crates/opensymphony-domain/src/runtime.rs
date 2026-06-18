@@ -903,6 +903,14 @@ impl WorkerOutcomeRecord {
     }
 }
 
+/// Reasons a [`super::IssueExecution`] transitions into
+/// [`super::SchedulerState::Released`].
+///
+/// The `*Repo` variants below are emitted by the orchestrator's
+/// **dispatch gate** (LOC-14) when an issue is ready for work but the
+/// gate's invariants fail. They are surface-stable: the strings serialize
+/// to `snake_case` and are intended to be human-visible on the run-detail
+/// view and the orchestrator snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseReason {
@@ -911,10 +919,42 @@ pub enum ReleaseReason {
     TrackerTerminal,
     Cancelled,
     RetryExhausted,
+    /// **D6 — terminal leaf without a resolvable `repo:` label.**
+    ///
+    /// Emitted by `dispatch_ready_issues` when an otherwise-dispatchable
+    /// leaf issue (no sub-issues, all blockers terminal) has
+    /// `execution_repo_ref == None`. The orchestrator does NOT clone a
+    /// workspace and does NOT start a worker for this issue. Operators
+    /// see this in the snapshot/run-detail and must add a single
+    /// resolvable `repo:<slug>` label to unblock dispatch.
+    ///
+    /// **Preserves reactivation state**: when the operator adds a valid
+    /// `repo:` label and the tracker re-polls, the execution reopens and
+    /// is dispatched normally.
+    MissingRepo,
+    /// **D10 — parent issue deferred as a read-only review node.**
+    ///
+    /// Emitted by `dispatch_ready_issues` for any issue whose
+    /// `sub_issues` is non-empty (a cross-repo parent). Even when all
+    /// children are terminal and no other blockers apply, the parent
+    /// must not clone a workspace or run a work agent — Phase 1 ships
+    /// the principle only; the parent reads child workspaces in a
+    /// later phase (exploration E2).
+    ///
+    /// **Does not preserve reactivation state**: parents are always
+    /// review nodes in Phase 1, so once deferred the execution stays
+    /// released even if the parent's tracker state oscillates.
+    ParentDeferred,
 }
 
 impl ReleaseReason {
     pub const fn preserves_reactivation_state(self) -> bool {
-        matches!(self, Self::TrackerInactive)
+        // `TrackerInactive` keeps the issue dispatchable across tracker
+        // state oscillations (e.g. Todo ↔ In Progress). `MissingRepo` is
+        // a configuration gap that the operator can fix by adding a
+        // `repo:` label, so the execution should reopen when the next
+        // poll sees a resolvable repo. `ParentDeferred` and every other
+        // terminal reason are sticky.
+        matches!(self, Self::TrackerInactive | Self::MissingRepo)
     }
 }

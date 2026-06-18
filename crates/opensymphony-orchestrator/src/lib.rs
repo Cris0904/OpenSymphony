@@ -22,6 +22,7 @@ pub use scheduler::{
 };
 pub use selection::{
     filter_issues_for_dispatch, issue_blocked_by_non_terminal_blockers,
+    issue_is_blocked_for_missing_repo, issue_is_parent_deferred,
     parent_issue_blocked_by_incomplete_children, should_dispatch_issue, sort_issues_for_dispatch,
 };
 

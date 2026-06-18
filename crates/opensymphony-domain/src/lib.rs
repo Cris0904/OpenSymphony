@@ -540,6 +540,104 @@ mod tests {
         assert!(execution.conversation().is_none());
     }
 
+    // ---- LOC-14 dispatch-gate release-reason semantics ---------------------
+
+    #[test]
+    fn missing_repo_preserves_reactivation_state_and_retains_workspace() {
+        // D6 MissingRepo is a configuration gap the operator can fix by
+        // adding a `repo:` label — reactivation must preserve the
+        // attached workspace and conversation so the next dispatch
+        // resumes cleanly.
+        let issue = sample_issue();
+        let workspace = sample_workspace();
+        let mut execution = IssueExecution::new(issue.clone(), ts(30));
+        must(execution.attach_workspace(workspace.clone()));
+
+        let run = sample_run(&issue, &workspace, None, ts(40));
+        let execution = must(execution.claim(run));
+        let execution = must(execution.start_running(
+            ts(50),
+            super::DurationMs::new(300_000),
+            Some(sample_conversation(false)),
+        ));
+        let execution = must(execution.release(ts(60), ReleaseReason::MissingRepo, None));
+        let execution = must(execution.reopen(ts(70)));
+
+        assert_eq!(execution.status(), SchedulerStatus::Unclaimed);
+        assert!(
+            ReleaseReason::MissingRepo.preserves_reactivation_state(),
+            "MissingRepo must preserve reactivation state"
+        );
+        assert_eq!(
+            execution.workspace(),
+            Some(&workspace),
+            "MissingRepo reactivation should keep the workspace attached"
+        );
+        assert!(
+            execution.conversation().is_some(),
+            "MissingRepo reactivation should keep the conversation attached"
+        );
+    }
+
+    #[test]
+    fn parent_deferred_is_terminal_and_clears_state_on_reopen() {
+        // D10 ParentDeferred is sticky — parents are always review
+        // nodes in Phase 1, so the execution stays released even after
+        // a synthetic reopen. The non-preserving branch must clear
+        // workspace and conversation like other terminal reasons.
+        assert!(
+            !ReleaseReason::ParentDeferred.preserves_reactivation_state(),
+            "ParentDeferred must be terminal — parents never become work units in Phase 1"
+        );
+
+        let issue = sample_issue();
+        let workspace = sample_workspace();
+        let mut execution = IssueExecution::new(issue.clone(), ts(30));
+        must(execution.attach_workspace(workspace.clone()));
+
+        let run = sample_run(&issue, &workspace, None, ts(40));
+        let execution = must(execution.claim(run));
+        let execution = must(execution.start_running(
+            ts(50),
+            super::DurationMs::new(300_000),
+            Some(sample_conversation(false)),
+        ));
+        let execution = must(execution.release(ts(60), ReleaseReason::ParentDeferred, None));
+        let execution = must(execution.reopen(ts(70)));
+
+        // Even though reopen transitions to Unclaimed, the released
+        // state cleared the workspace/conversation because
+        // ParentDeferred does NOT preserve reactivation state. The
+        // orchestrator's gate will re-fire on the next tick and re-
+        // release the execution, leaving it observable as
+        // `ParentDeferred` on the snapshot.
+        assert_eq!(execution.status(), SchedulerStatus::Unclaimed);
+        assert!(execution.workspace().is_none());
+        assert!(execution.conversation().is_none());
+    }
+
+    #[test]
+    fn existing_release_reasons_preserve_their_reactivation_semantics() {
+        // Regression guard: only TrackerInactive and MissingRepo
+        // preserve reactivation state in Phase 1. Every other reason is
+        // terminal from the orchestrator's point of view.
+        assert!(ReleaseReason::TrackerInactive.preserves_reactivation_state());
+        assert!(ReleaseReason::MissingRepo.preserves_reactivation_state());
+
+        for reason in [
+            ReleaseReason::Completed,
+            ReleaseReason::TrackerTerminal,
+            ReleaseReason::Cancelled,
+            ReleaseReason::RetryExhausted,
+            ReleaseReason::ParentDeferred,
+        ] {
+            assert!(
+                !reason.preserves_reactivation_state(),
+                "{reason:?} must not preserve reactivation state"
+            );
+        }
+    }
+
     #[test]
     fn recent_worker_outcomes_are_bounded_to_latest_window() {
         let issue = sample_issue();
