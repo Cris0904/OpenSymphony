@@ -98,8 +98,14 @@ cd /path/to/target-repo
 opensymphony init
 ```
 
-`opensymphony init` guides the bootstrap flow, customizes `WORKFLOW.md`, and
-can optionally scaffold automated code review via the [OpenHands PR Review Plugin](https://github.com/OpenHands/extensions/tree/main/plugins/pr-review), including GitHub setup through `gh` when it is installed and authorized for the target repo. It also ensures `.gitignore` ignores local OpenSymphony runtime state.
+`opensymphony init` guides the bootstrap flow, customizes `WORKFLOW.md` (with
+the static `opensymphony workspace clone` hook and without project-set-owned
+global fields), registers the onboarded repo into the project-set inventory
+under `<cwd>/.opensymphony/project-set.yaml`, and can optionally scaffold
+automated code review via the [OpenHands PR Review Plugin](https://github.com/OpenHands/extensions/tree/main/plugins/pr-review),
+including GitHub setup through `gh` when it is installed and authorized for
+the target repo. It also ensures `.gitignore` ignores local OpenSymphony
+runtime state while keeping the project-set file versioned.
 If `AGENTS.md` already exists during first-time setup, `init` leaves it alone
 and writes the starter guidance to `AGENTS-example.md` for review.
 It also initializes `.opensymphony/memory/memory.yaml`, the shared policy and

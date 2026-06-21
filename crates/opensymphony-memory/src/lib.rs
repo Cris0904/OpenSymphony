@@ -767,7 +767,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(repo.path().join(".gitignore")).expect(".gitignore"),
-            ".opensymphony*\n!.opensymphony/\n.opensymphony/*\n!.opensymphony/memory/\n.opensymphony/memory/*\n!.opensymphony/memory/memory.yaml\n"
+            ".opensymphony*\n!.opensymphony/\n.opensymphony/*\n!.opensymphony/memory/\n.opensymphony/memory/*\n!.opensymphony/memory/memory.yaml\n!.opensymphony/project-set.yaml\n"
         );
 
         let second = ensure_memory_initialized(repo.path(), None).expect("memory init idempotent");

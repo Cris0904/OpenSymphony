@@ -233,7 +233,7 @@ pub struct OpenHandsWebSocketFrontMatter {
     pub query_param_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum IntegerLike {
     Integer(i64),
@@ -419,7 +419,12 @@ where
 pub const PROJECT_SET_SCHEMA_VERSION: u64 = 1;
 
 /// Raw deserialized shape of `.opensymphony/project-set.yaml`.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+///
+/// `Serialize` is included so the CLI can write the file back via raw YAML
+/// round-trips (LOC-19). The CLI must not serialize [`ResolvedProjectSet`],
+/// because resolved config contains secret values; raw front-matter is the
+/// safe on-disk shape.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct ProjectSetFrontMatter {
     pub schema_version: Option<u64>,
     #[serde(default)]
@@ -427,7 +432,7 @@ pub struct ProjectSetFrontMatter {
 }
 
 /// Top-level `project_set:` mapping.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct ProjectSetBody {
     pub slug: Option<String>,
     pub name: Option<String>,
@@ -442,7 +447,7 @@ pub struct ProjectSetBody {
 }
 
 /// Per-project entry inside `projects:`.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct ProjectEntry {
     pub slug: Option<String>,
     pub name: Option<String>,
@@ -451,7 +456,7 @@ pub struct ProjectEntry {
 }
 
 /// Per-repo entry inside a project.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct RepoEntry {
     pub slug: Option<String>,
     pub url: Option<String>,
@@ -463,7 +468,7 @@ pub struct RepoEntry {
 }
 
 /// Linear tracker configuration at the project-set level.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectSetLinearFrontMatter {
     pub endpoint: Option<String>,
     pub project_slug: Option<String>,
@@ -475,13 +480,13 @@ pub struct ProjectSetLinearFrontMatter {
 }
 
 /// Polling configuration at the project-set level.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectSetPollingFrontMatter {
     pub interval_ms: Option<IntegerLike>,
 }
 
 /// Agent configuration at the project-set level.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectSetAgentFrontMatter {
     pub max_concurrent_agents: Option<IntegerLike>,
 }

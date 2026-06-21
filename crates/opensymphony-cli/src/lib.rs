@@ -4,6 +4,8 @@ mod install_tooling;
 mod memory;
 mod memory_init_summary;
 mod orchestrator_run;
+mod project_set_writer;
+mod repo_detection;
 mod update_repo;
 mod workspace_clone;
 

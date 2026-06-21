@@ -34,13 +34,41 @@ async fn init_copies_template_files_and_customizes_workflow() {
     let workflow =
         fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should exist");
     let config = fs::read_to_string(repo.path().join("config.yaml")).expect("config should exist");
-    assert!(workflow.contains("project_slug: \"demo-project\""));
-    assert!(workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."));
+    // LOC-19: WORKFLOW.md no longer bakes the clone URL or Linear project
+    // slug into the front matter. The static `opensymphony workspace clone`
+    // hook is emitted instead, and the project-set inventory lives in
+    // `<cwd>/.opensymphony/project-set.yaml`.
+    assert!(workflow.contains("opensymphony workspace clone"));
+    assert!(
+        !workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."),
+        "WORKFLOW.md must not bake the detected remote URL into the clone hook"
+    );
+    assert!(
+        !workflow.contains("project_slug: \"demo-project\""),
+        "Linear project_slug must move to project-set.yaml, not WORKFLOW.md"
+    );
     assert!(config.contains("tool_dir: ~/.opensymphony/openhands-server"));
 
     assert!(
         repo.path().join("AGENTS.md").is_file(),
         "AGENTS.md should be created"
+    );
+    // LOC-19 (D9): project-set inventory lives in
+    // `<cwd>/.opensymphony/project-set.yaml` for fresh init.
+    let project_set_path = repo.path().join(".opensymphony/project-set.yaml");
+    assert!(
+        project_set_path.is_file(),
+        "project-set.yaml should be created under .opensymphony/"
+    );
+    let project_set = fs::read_to_string(&project_set_path).expect("project-set.yaml readable");
+    assert!(
+        project_set.contains("project_slug: \"demo-project\"")
+            || project_set.contains("project_slug: demo-project"),
+        "project-set.yaml should contain the Linear project_slug; got:\n{project_set}"
+    );
+    assert!(
+        project_set.contains("url: https://github.com/example/demo.git"),
+        "project-set.yaml should contain the detected git remote URL; got:\n{project_set}"
     );
     assert!(
         repo.path().join(".agents/skills/pull/SKILL.md").is_file(),
@@ -176,8 +204,32 @@ async fn init_non_interactive_succeeds_with_flags_and_closed_stdin() {
 
     let workflow =
         fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should exist");
-    assert!(workflow.contains("project_slug: \"demo-project\""));
-    assert!(workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."));
+    // LOC-19: WORKFLOW.md no longer bakes the clone URL or Linear project
+    // slug; static `opensymphony workspace clone` hook + project-set.yaml.
+    assert!(workflow.contains("opensymphony workspace clone"));
+    assert!(
+        !workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."),
+        "WORKFLOW.md must not bake the detected remote URL into the clone hook"
+    );
+    assert!(
+        !workflow.contains("project_slug: \"demo-project\""),
+        "Linear project_slug must move to project-set.yaml, not WORKFLOW.md"
+    );
+    // LOC-19 (D9): project-set inventory must be registered from the
+    // non-interactive `--linear-project-slug` flag into
+    // `<cwd>/.opensymphony/project-set.yaml`.
+    let project_set_path = repo.path().join(".opensymphony/project-set.yaml");
+    let project_set =
+        fs::read_to_string(&project_set_path).expect("project-set.yaml should be written");
+    assert!(
+        project_set.contains("project_slug: \"demo-project\"")
+            || project_set.contains("project_slug: demo-project"),
+        "project-set.yaml should contain the Linear project_slug; got:\n{project_set}"
+    );
+    assert!(
+        project_set.contains("url: https://github.com/example/demo.git"),
+        "project-set.yaml should contain the detected git remote URL; got:\n{project_set}"
+    );
     assert!(
         stdout.contains("Skipped automatic commit/push. Pass `--commit-and-push`"),
         "non-interactive init should skip commit/push without prompting: {stdout}",
@@ -318,10 +370,19 @@ async fn init_non_interactive_conflict_policy_overwrite_replaces_existing_files(
     );
     let workflow =
         fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow should exist");
+    // LOC-19: overwrite replaces the workflow with the static hook
+    // template (no hardcoded clone URL or Linear project_slug).
     assert!(
-        workflow.contains("project_slug: \"demo-project\"")
-            && workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."),
-        "overwrite should replace the workflow with customized template content: {workflow}",
+        workflow.contains("opensymphony workspace clone"),
+        "overwrite should replace the workflow with the static clone hook: {workflow}",
+    );
+    assert!(
+        !workflow.contains("git clone --depth 1 'https://github.com/example/demo.git' ."),
+        "overwrite must not bake the detected remote URL into the clone hook: {workflow}",
+    );
+    assert!(
+        !workflow.contains("project_slug: \"demo-project\""),
+        "overwrite must not bake the Linear project_slug into WORKFLOW.md: {workflow}",
     );
     assert!(
         !workflow.contains("user workflow"),
@@ -973,7 +1034,7 @@ fn assert_bootstrap_commit_pushed(repo_root: &std::path::Path, remote_root: &std
 
 fn memory_gitignore_policy(prefix: &str) -> String {
     format!(
-        "{prefix}.opensymphony*\n!.opensymphony/\n.opensymphony/*\n!.opensymphony/memory/\n.opensymphony/memory/*\n!.opensymphony/memory/memory.yaml\n"
+        "{prefix}.opensymphony*\n!.opensymphony/\n.opensymphony/*\n!.opensymphony/memory/\n.opensymphony/memory/*\n!.opensymphony/memory/memory.yaml\n!.opensymphony/project-set.yaml\n"
     )
 }
 
@@ -1063,9 +1124,6 @@ fn template_assets() -> BTreeMap<String, String> {
         (
             "WORKFLOW.md".to_string(),
             r#"---
-tracker:
-  kind: linear
-  project_slug: "YOUR-PROJECT-SLUG"
 hooks:
   after_create: |
     git clone --depth 1 https://github.com/YOUR-ORG/YOUR-REPO.git .

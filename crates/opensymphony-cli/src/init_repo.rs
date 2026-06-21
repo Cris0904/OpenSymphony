@@ -8,6 +8,14 @@ use std::{
 };
 
 use super::memory_init_summary::record_memory_init_changes;
+use super::project_set_writer::ProjectSetAppliedOutcome;
+use super::repo_detection::{
+    GitRemoteDetection, detect_git_default_branch, detect_git_remote_url,
+    derive_repo_slug_from_dir, derive_repo_slug_from_remote,
+};
+// `git_remote_url` and `git_remote_name` were the `init`-private free
+// functions; their equivalents now live as inherent methods on
+// [`GitRemoteDetection`] in [`super::repo_detection`] (LOC-19).
 use crate::opensymphony_memory::ensure_memory_initialized;
 use clap::{Args, ValueEnum};
 use reqwest::{Client, StatusCode, Url};
@@ -36,8 +44,25 @@ const OPENHANDS_PR_REVIEW_SETUP_GUIDE_URL: &str =
     "https://github.com/kumanday/OpenSymphony/blob/main/docs/ai-pr-review-human-setup.md";
 const AI_REVIEW_LABEL_NAME: &str = "review-this";
 const AGENTS_EXAMPLE_PATH: &str = "AGENTS-example.md";
-const WORKFLOW_PROJECT_SLUG_PLACEHOLDER: &str = "\"YOUR-PROJECT-SLUG\"";
+
+/// Sentinel URL string that the upstream template's `after_create` hook uses
+/// as its `git clone` placeholder. Kept here so `customize_workflow` can
+/// build the exact `git clone --depth 1 <placeholder> .` needle without
+/// depending on the operator's detected remote URL.
 const WORKFLOW_GIT_REMOTE_PLACEHOLDER: &str = "https://github.com/YOUR-ORG/YOUR-REPO.git";
+
+/// Default repo slug used when neither the remote nor the directory produces
+/// a usable slug. Matches the workspace-friendly slug operators see in the
+/// `init` summary output.
+const DEFAULT_REPO_SLUG_FALLBACK: &str = "repo";
+
+/// Sentinel for the project-set slug when none was supplied; falls back to
+/// the repo slug so the freshly written file still resolves.
+const DEFAULT_PROJECT_SET_SLUG_FALLBACK: &str = "default-project-set";
+
+/// Default Linear `api_key_env` for fresh project-set bootstrap. Operators can
+/// override via flags or by editing the generated `project-set.yaml` after init.
+const DEFAULT_LINEAR_API_KEY_ENV: &str = "LINEAR_API_KEY";
 
 #[derive(Debug, Args, Clone, Default)]
 pub struct InitArgs {
@@ -54,9 +79,34 @@ pub struct InitArgs {
     #[arg(
         long,
         value_name = "SLUG",
-        help = "Linear project slug/key to write into WORKFLOW.md"
+        help = "Linear project slug/key to write into \
+                `<cwd>/.opensymphony/project-set.yaml` (`project_set.linear.project_slug`)"
     )]
     linear_project_slug: Option<String>,
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "Override the git remote URL used for the project-set inventory entry \
+                (`slug -> { url, default_branch }`). When omitted, init probes the local \
+                git remote; in non-interactive mode a missing/ambiguous remote fails fast."
+    )]
+    repo_url: Option<String>,
+    #[arg(
+        long,
+        value_name = "SLUG",
+        help = "Override the repo slug used for the project-set inventory entry. \
+                Defaults to the last path segment of the detected remote URL, \
+                falling back to the directory name when no remote is available."
+    )]
+    repo_slug: Option<String>,
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        help = "Override the default branch recorded in the project-set inventory entry. \
+                Defaults to the symbolic ref `refs/remotes/<remote>/HEAD` when it can be \
+                determined; omitted otherwise."
+    )]
+    repo_default_branch: Option<String>,
     #[arg(
         long,
         value_enum,
@@ -330,6 +380,17 @@ pub(crate) enum InitCommandError {
     ConflictPolicyAbort { path: String },
     #[error("failed to initialize project memory: {0}")]
     MemoryInit(#[from] crate::opensymphony_memory::MemoryError),
+    #[error(transparent)]
+    ProjectSetUpsert(#[from] super::project_set_writer::ProjectSetUpsertError),
+    #[error("could not register the repo in the project-set inventory: {guidance}")]
+    ProjectSetRemoteMissing { guidance: String },
+    #[error("could not register the repo in the project-set inventory (remotes: {}): {guidance}", remotes.join(", "))]
+    ProjectSetRemoteAmbiguous {
+        remotes: Vec<String>,
+        guidance: String,
+    },
+    #[error("could not register the repo in the project-set inventory: {guidance}")]
+    ProjectSetSlugUnresolved { guidance: String },
 }
 
 #[derive(Clone, Copy)]
@@ -440,12 +501,6 @@ struct AiReviewGhAutomationResult {
     secret_updated: bool,
 }
 
-enum GitRemoteDetection {
-    Selected { remote_name: String, url: String },
-    None,
-    Ambiguous(Vec<String>),
-}
-
 trait EnvLookup {
     fn get(&self, name: &str) -> Option<String>;
 }
@@ -482,6 +537,10 @@ where
 
     fn set_allow_prompts(&mut self, allow_prompts: bool) {
         self.allow_prompts = allow_prompts;
+    }
+
+    fn allow_prompts(&self) -> bool {
+        self.allow_prompts
     }
 
     fn line(&mut self, message: impl AsRef<str>) -> Result<(), InitCommandError> {
@@ -657,6 +716,13 @@ where
     }
 
     let linear_project_slug = if workflow_will_change {
+        // Phase 1 ([LOC-19](https://linear.app/localgputokenscrazy/issue/LOC-19/init-multi-repo-onboarding)):
+        // the Linear project slug/key now lives in `<cwd>/.opensymphony/project-set.yaml`
+        // (`project_set.linear.project_slug`), not in `WORKFLOW.md`. We still
+        // capture the same value at init time so we can populate it into the
+        // project-set file; if the operator skips, the project-set writer
+        // falls back to a sensible default slug derived from the directory
+        // name.
         if let Some(slug) = args
             .linear_project_slug
             .as_deref()
@@ -667,8 +733,10 @@ where
         } else if args.non_interactive {
             None
         } else {
-            let response =
-                ui.prompt("Enter your Linear project slug/key (leave blank to set it later): ")?;
+            let response = ui.prompt(
+                "Enter your Linear project slug/key (leave blank to set it later in \
+                 `<cwd>/.opensymphony/project-set.yaml`): ",
+            )?;
             let response = response.trim();
             (!response.is_empty()).then(|| response.to_owned())
         }
@@ -691,12 +759,7 @@ where
             agents_example_available = true;
         }
 
-        let final_result = apply_asset(
-            &destination,
-            planned,
-            git_remote_url(&git_remote),
-            linear_project_slug.as_deref(),
-        )?;
+        let final_result = apply_asset(&destination, planned)?;
 
         match final_result {
             AppliedChange::Created => {
@@ -729,6 +792,53 @@ where
         &mut updated,
         &mut unchanged,
     );
+
+    // Phase 1 multi-repo onboarding ([LOC-19](https://linear.app/localgputokenscrazy/issue/LOC-19/init-multi-repo-onboarding)):
+    // register the freshly onboarded repo into the project-set inventory
+    // under `<cwd>/.opensymphony/project-set.yaml`. The `config_root` for
+    // Phase 1 is always the cwd, so we never touch any external project-set
+    // root.
+    match upsert_project_set_entry_for_init(
+        &target_repo,
+        &git_remote,
+        args.repo_url.as_deref(),
+        args.repo_slug.as_deref(),
+        args.repo_default_branch.as_deref(),
+        linear_project_slug.as_deref(),
+        ui,
+    )? {
+        Some(applied) => match applied {
+            ProjectSetAppliedOutcome::Created(path) => {
+                ui.line(format!(
+                    "Created project-set inventory entry at {}; commit it as a regular config file.",
+                    path.display()
+                ))?;
+                created.push(".opensymphony/project-set.yaml".to_string());
+            }
+            ProjectSetAppliedOutcome::Updated(path) => {
+                ui.line(format!(
+                    "Updated project-set inventory entry at {}.",
+                    path.display()
+                ))?;
+                updated.push(".opensymphony/project-set.yaml".to_string());
+            }
+            ProjectSetAppliedOutcome::Unchanged(path) => {
+                ui.line(format!(
+                    "Project-set inventory entry at {} is already up to date.",
+                    path.display()
+                ))?;
+                unchanged.push(".opensymphony/project-set.yaml".to_string());
+            }
+        },
+        None => {
+            // Operator chose to skip project-set registration; that's a
+            // supported Phase 1 outcome. The next `opensymphony update`
+            // run (or a re-invocation of `init`) can pick it up.
+            ui.line(
+                "Skipped project-set inventory registration; the repo is not yet in `<cwd>/.opensymphony/project-set.yaml`.",
+            )?;
+        }
+    }
 
     ui.blank_line()?;
     ui.line("Initialization summary:")?;
@@ -1081,17 +1191,10 @@ where
 fn apply_asset(
     destination: &Path,
     planned: PlannedAsset,
-    git_remote_url: Option<&str>,
-    linear_project_slug: Option<&str>,
 ) -> Result<AppliedChange, InitCommandError> {
     let existing = planned.existing.as_deref();
 
-    let Some(final_contents) = build_final_contents(
-        &planned.asset,
-        &planned.action,
-        git_remote_url,
-        linear_project_slug,
-    ) else {
+    let Some(final_contents) = build_final_contents(&planned.asset, &planned.action) else {
         return Ok(match planned.action {
             PlannedAction::Skip => AppliedChange::Skipped,
             PlannedAction::Unchanged => AppliedChange::Unchanged,
@@ -1136,24 +1239,13 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn build_final_contents(
-    asset: &FetchedAsset,
-    action: &PlannedAction,
-    git_remote_url: Option<&str>,
-    linear_project_slug: Option<&str>,
-) -> Option<String> {
+fn build_final_contents(asset: &FetchedAsset, action: &PlannedAction) -> Option<String> {
     match action {
         PlannedAction::Create | PlannedAction::Overwrite => Some(match asset.kind {
-            AssetKind::Workflow => {
-                customize_workflow(&asset.contents, git_remote_url, linear_project_slug)
-            }
+            AssetKind::Workflow => customize_workflow(&asset.contents),
             _ => asset.contents.clone(),
         }),
-        PlannedAction::CustomizeWorkflow => Some(customize_workflow(
-            &asset.contents,
-            git_remote_url,
-            linear_project_slug,
-        )),
+        PlannedAction::CustomizeWorkflow => Some(customize_workflow(&asset.contents)),
         PlannedAction::Skip | PlannedAction::Unchanged => None,
         PlannedAction::Prompt => None,
     }
@@ -1271,7 +1363,7 @@ where
         "OpenSymphony wrote bootstrap files that should be committed and pushed before story work so shared agent skills and any AI PR Review setup are available.",
     )?;
 
-    let Some(remote_name) = git_remote_name(git_remote) else {
+    let Some(remote_name) = git_remote.remote_name() else {
         ui.line(
             "Skipping automatic commit/push because no single git remote was detected. Commit and push the generated OpenSymphony files before starting story work.",
         )?;
@@ -1536,99 +1628,192 @@ fn template_fetch_timeout_from_env(value: Option<&str>) -> Duration {
         .unwrap_or_else(|| Duration::from_millis(DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS))
 }
 
-fn detect_git_remote_url(target_repo: &Path) -> GitRemoteDetection {
-    let output = std::process::Command::new("git")
-        .args(["remote"])
-        .current_dir(target_repo)
-        .output();
-    let Ok(output) = output else {
-        return GitRemoteDetection::None;
-    };
-    if !output.status.success() {
-        return GitRemoteDetection::None;
-    }
-
-    let remotes = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let Some(remote_name) = select_remote_name(&remotes) else {
-        return if remotes.len() > 1 {
-            GitRemoteDetection::Ambiguous(remotes)
-        } else {
-            GitRemoteDetection::None
-        };
-    };
-
-    let get_url = std::process::Command::new("git")
-        .args(["remote", "get-url", &remote_name])
-        .current_dir(target_repo)
-        .output();
-    let Ok(get_url) = get_url else {
-        return GitRemoteDetection::None;
-    };
-    if !get_url.status.success() {
-        return GitRemoteDetection::None;
-    }
-
-    let url = String::from_utf8_lossy(&get_url.stdout).trim().to_owned();
-    if url.is_empty() {
-        GitRemoteDetection::None
-    } else {
-        GitRemoteDetection::Selected { remote_name, url }
-    }
-}
-
-fn select_remote_name(remotes: &[String]) -> Option<String> {
-    if remotes.iter().any(|remote| remote == "origin") {
-        Some("origin".to_string())
-    } else if remotes.len() == 1 {
-        remotes.first().cloned()
-    } else {
-        None
-    }
-}
-
-fn git_remote_url(detection: &GitRemoteDetection) -> Option<&str> {
-    match detection {
-        GitRemoteDetection::Selected { url, .. } => Some(url.as_str()),
-        GitRemoteDetection::None | GitRemoteDetection::Ambiguous(_) => None,
-    }
-}
-
-fn git_remote_name(detection: &GitRemoteDetection) -> Option<&str> {
-    match detection {
-        GitRemoteDetection::Selected { remote_name, .. } => Some(remote_name.as_str()),
-        GitRemoteDetection::None | GitRemoteDetection::Ambiguous(_) => None,
-    }
-}
-
-fn customize_workflow(
-    template: &str,
-    git_remote_url: Option<&str>,
-    linear_project_slug: Option<&str>,
-) -> String {
-    let mut customized = template.to_string();
-
-    if let Some(url) = git_remote_url {
-        customized = customized.replace(WORKFLOW_GIT_REMOTE_PLACEHOLDER, &shell_single_quote(url));
-    }
-
-    if let Some(slug) = linear_project_slug
-        .map(str::trim)
-        .filter(|slug| !slug.is_empty())
-    {
-        customized =
-            customized.replace(WORKFLOW_PROJECT_SLUG_PLACEHOLDER, &yaml_double_quote(slug));
-    }
-
+fn customize_workflow(template: &str) -> String {
+    // The customizer turns the template's `WORKFLOW.md` into a
+    // project-set-mode-clean bootstrap:
+    //
+    // 1. The `after_create` clone hook is rewritten to the static
+    //    `opensymphony workspace clone` command. The runtime injects the
+    //    resolved `RepoRef` via env vars at clone time (D7); we no longer
+    //    bake a hardcoded clone URL into `WORKFLOW.md`.
+    // 2. Project-set-owned global fields (`tracker.*`, `polling.interval_ms`,
+    //    `agent.max_concurrent_agents`) are stripped from the front matter
+    //    so the file is already valid under strict project-set mode. The
+    //    canonical list lives in
+    //    [`crate::opensymphony_workflow::STALE_MOVED_FIELDS`] and is the
+    //    single source of truth for which fields move to
+    //    `.opensymphony/project-set.yaml`.
+    let mut customized = rewrite_after_create_to_static_hook(template);
+    customized = strip_project_set_owned_fields(&customized);
     customized
+}
+
+const STATIC_AFTER_CREATE_HOOK: &str = "opensymphony workspace clone";
+
+fn rewrite_after_create_to_static_hook(template: &str) -> String {
+    // The bootstrap template ships a `git clone --depth 1 <remote> .` placeholder
+    // hook. Replace the entire placeholder line(s) with the static
+    // `opensymphony workspace clone` command so the generated `WORKFLOW.md`
+    // never contains a hardcoded URL.
+    const PLACEHOLDER_URL: &str = "https://github.com/YOUR-ORG/YOUR-REPO.git";
+    let needle = format!("git clone --depth 1 {PLACEHOLDER_URL} .");
+    template.replace(&needle, STATIC_AFTER_CREATE_HOOK)
+}
+
+fn strip_project_set_owned_fields(template: &str) -> String {
+    // The template's front matter is fenced between two `---\n` markers.
+    // If parsing fails for any reason we fall back to returning the
+    // template unchanged — the strict project-set mode resolver will
+    // surface the field-migration error to the operator.
+    let Some((head, front_matter_yaml, body)) = split_front_matter(template) else {
+        return template.to_string();
+    };
+    let Ok(mut value) = serde_yaml::from_str::<serde_yaml::Value>(front_matter_yaml) else {
+        return template.to_string();
+    };
+    let Some(mapping) = value.as_mapping_mut() else {
+        return template.to_string();
+    };
+
+    // `tracker.*` — every sub-field is project-set-owned, so we drop the
+    // whole key to avoid leaving empty mappings behind.
+    mapping.remove("tracker");
+
+    // `polling.interval_ms` is the only sub-field of `polling`. Drop the
+    // whole key to match the same policy as `tracker`.
+    mapping.remove("polling");
+
+    // `agent.max_concurrent_agents` is one sub-field of `agent` (the others
+    // — `max_turns`, `stall_timeout_ms`, etc. — are repo-local). Remove
+    // only the sub-key.
+    if let Some(agent) = mapping.get_mut("agent").and_then(|v| v.as_mapping_mut()) {
+        agent.remove("max_concurrent_agents");
+        if agent.is_empty() {
+            mapping.remove("agent");
+        }
+    }
+
+    let serialized_front_matter = match serde_yaml::to_string(&value) {
+        Ok(serialized) => serialized,
+        Err(_) => return template.to_string(),
+    };
+    format!("{head}{serialized_front_matter}{body}")
+}
+
+fn split_front_matter(template: &str) -> Option<(&str, &str, &str)> {
+    let trimmed = template.strip_prefix("---\n").or_else(|| template.strip_prefix("---\r\n"))?;
+    let (front_matter, body) = trimmed.split_once("\n---")?;
+    Some(("---\n", front_matter, body))
 }
 
 fn comparable_text(value: &str) -> String {
     value.replace("\r\n", "\n").trim_end().to_owned()
+}
+
+/// Registers the freshly onboarded repo into the project-set inventory
+/// under `<target_repo>/.opensymphony/project-set.yaml` (LOC-19 / D9).
+///
+/// Returns `Ok(None)` when the operator explicitly skips the registration
+/// (either by passing `--skip-project-set-registration` or by answering
+/// "no" to the interactive prompt). Returns `Ok(Some(_))` whenever the
+/// upsert succeeded so callers can surface the change in the summary.
+#[allow(clippy::too_many_arguments)]
+fn upsert_project_set_entry_for_init<R, W>(
+    target_repo: &Path,
+    git_remote: &GitRemoteDetection,
+    repo_url_override: Option<&str>,
+    repo_slug_override: Option<&str>,
+    repo_default_branch_override: Option<&str>,
+    linear_project_slug: Option<&str>,
+    ui: &mut PromptUi<R, W>,
+) -> Result<Option<ProjectSetAppliedOutcome>, InitCommandError>
+where
+    R: BufRead,
+    W: Write,
+{
+    use super::project_set_writer::{
+        ProjectSetAppliedOutcome, ProjectSetUpsertPlan, project_set_path,
+        upsert_project_set_yaml_with_path,
+    };
+
+    // The repo URL comes from one of these sources, in priority order:
+    // 1. `--repo-url` flag (highest priority; lets operators register a repo
+    //    that isn't the cwd).
+    // 2. The confidently detected git remote URL.
+    // 3. None (the operator will be prompted for one, unless non-interactive).
+    let trimmed_override = trimmed_non_empty(repo_url_override);
+    let detected_url = git_remote.url().map(ToOwned::to_owned);
+    let repo_url = trimmed_override
+        .clone()
+        .or_else(|| detected_url.clone());
+
+    let repo_url = match repo_url {
+        Some(url) => url,
+        None => {
+            // Phase-1 missing remote: prompt interactively; fail with actionable
+            // guidance in non-interactive mode.
+            let reason = "OpenSymphony detected no git remote and no `--repo-url` flag, so it cannot register this repo into the project-set inventory.";
+            if ui.allow_prompts {
+                let response = ui.prompt(
+                    "Enter the clone URL for this repo (leave blank to skip project-set registration): ",
+                )?;
+                let trimmed = response.trim();
+                if trimmed.is_empty() {
+                    return Ok(None);
+                }
+                trimmed.to_owned()
+            } else {
+                return Err(InitCommandError::ProjectSetRemoteMissing {
+                    guidance: format!(
+                        "{reason} Re-run `opensymphony init --repo-url <url>` to register the repo."
+                    ),
+                });
+            }
+        }
+    };
+
+    let trimmed_default_branch_override = trimmed_non_empty(repo_default_branch_override);
+    let detected_default_branch = git_remote
+        .remote_name()
+        .and_then(|remote| detect_git_default_branch(target_repo, remote));
+    let default_branch = trimmed_default_branch_override
+        .clone()
+        .or(detected_default_branch);
+
+    let repo_slug = trimmed_non_empty(repo_slug_override)
+        .or_else(|| derive_repo_slug_from_remote(&repo_url))
+        .or_else(|| derive_repo_slug_from_dir(target_repo))
+        .unwrap_or_else(|| DEFAULT_REPO_SLUG_FALLBACK.to_owned());
+
+    // The Linear project slug is reused for both `project_set.projects[].slug`
+    // and `project_set.linear.project_slug`. When the operator skipped the
+    // Linear prompt we still create a usable project-set file with sentinel
+    // values so the inventory is committed and editable.
+    let linear_project_slug = trimmed_non_empty(linear_project_slug)
+        .unwrap_or_else(|| repo_slug.clone());
+
+    // Build the upsert plan. We let the writer fill in defaults (polling
+    // interval, max concurrent agents, active/terminal states) when no
+    // override was supplied — see `project_set_writer::apply_upsert_plan`.
+    let plan = ProjectSetUpsertPlan {
+        repo_slug: repo_slug.clone(),
+        repo_url: repo_url.clone(),
+        default_branch,
+        project_set_slug: DEFAULT_PROJECT_SET_SLUG_FALLBACK.to_owned(),
+        project_slug: linear_project_slug.clone(),
+        linear_project_slug,
+        linear_api_key_env: Some(DEFAULT_LINEAR_API_KEY_ENV.to_owned()),
+        polling_interval_ms: None,
+        max_concurrent_agents: None,
+        linear_active_states: None,
+        linear_terminal_states: None,
+    };
+
+    let path = project_set_path(target_repo);
+    match upsert_project_set_yaml_with_path(&path, &plan) {
+        Ok(applied) => Ok(Some(applied)),
+        Err(source) => Err(InitCommandError::ProjectSetUpsert(source)),
+    }
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -1688,7 +1873,7 @@ where
 {
     ui.blank_line()?;
     ui.line("OpenHands PR review scaffolding was added.")?;
-    let Some(repo_slug) = git_remote_url(git_remote).and_then(github_repo_slug_from_remote) else {
+    let Some(repo_slug) = git_remote.url().and_then(github_repo_slug_from_remote) else {
         ui.line(
             "GitHub automation was skipped because the detected git remote is missing or is not a GitHub repository URL.",
         )?;
@@ -1876,6 +2061,15 @@ where
     }
 }
 
+/// Derives the GitHub `owner/repo` slug used for `gh` CLI invocations from
+/// a remote URL.
+///
+/// Distinct from
+/// [`super::super::repo_detection::derive_repo_slug_from_remote`], which is
+/// the project-set inventory slug (last path segment only). The AI PR
+/// review path needs the full `owner/repo` form so `gh` accepts the
+/// `repo view ... --json nameWithOwner` and `gh variable set ... -R owner/repo`
+/// commands.
 fn github_repo_slug_from_remote(remote_url: &str) -> Option<String> {
     if let Ok(url) = Url::parse(remote_url)
         && matches!(url.host_str(), Some("github.com" | "www.github.com"))
@@ -2218,10 +2412,12 @@ mod tests {
         AiReviewConfig, AiReviewProviderKindArg, DEFAULT_AI_REVIEW_MODEL_ID, DEFAULT_LLM_BASE_URL,
         DEFAULT_LLM_MODEL, DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS, GitRemoteDetection, InitArgs,
         InitCommandError, PromptUi, comparable_text, custom_codereview_guide_contents,
-        customize_workflow, git_remote_url, github_repo_slug_from_remote,
-        normalize_github_repo_slug, prompt_ai_review_config, prompt_for_missing_llm_env,
-        prompt_yes_no, resolve_ai_review_secret, select_remote_name, shell_single_quote,
-        template_fetch_timeout_from_env,
+        customize_workflow, github_repo_slug_from_remote, normalize_github_repo_slug,
+        prompt_ai_review_config, prompt_for_missing_llm_env, prompt_yes_no,
+        resolve_ai_review_secret, shell_single_quote, template_fetch_timeout_from_env,
+    };
+    use super::super::repo_detection::{
+        derive_repo_slug_from_remote, select_remote_name,
     };
 
     struct StubEnvironment {
@@ -2235,7 +2431,98 @@ mod tests {
     }
 
     #[test]
-    fn customize_workflow_replaces_repo_url_and_project_slug() {
+    fn customize_workflow_emits_static_hook_and_strips_tracker_block() {
+        let workflow = r#"---
+tracker:
+  project_slug: "YOUR-PROJECT-SLUG"
+  endpoint: https://api.linear.app/graphql
+hooks:
+  after_create: |
+    git clone --depth 1 https://github.com/YOUR-ORG/YOUR-REPO.git .
+openhands:
+  conversation:
+    agent:
+      llm:
+        model: ${LLM_MODEL}
+---
+"#;
+
+        let customized = customize_workflow(workflow);
+
+        // Static clone hook is emitted; no hardcoded URL is left behind.
+        assert!(
+            customized.contains("opensymphony workspace clone"),
+            "expected static hook in:\n{customized}"
+        );
+        assert!(
+            !customized.contains("git clone"),
+            "hardcoded git clone line must be removed; got:\n{customized}"
+        );
+        assert!(
+            !customized.contains("YOUR-ORG/YOUR-REPO"),
+            "placeholder URL must not leak through; got:\n{customized}"
+        );
+        // Project-set-owned global fields are stripped; the resulting
+        // `WORKFLOW.md` is valid under strict project-set mode.
+        assert!(
+            !customized.contains("tracker:"),
+            "tracker block must be removed; got:\n{customized}"
+        );
+        assert!(
+            !customized.contains("YOUR-PROJECT-SLUG"),
+            "Linear project slug placeholder must be removed; got:\n{customized}"
+        );
+        // Reputable non-project-set-owned fields are preserved.
+        assert!(
+            customized.contains("openhands:"),
+            "openhands block must remain; got:\n{customized}"
+        );
+    }
+
+    #[test]
+    fn customize_workflow_strips_polling_and_agent_max_concurrent_agents() {
+        let workflow = r#"---
+tracker:
+  kind: linear
+polling:
+  interval_ms: 5000
+agent:
+  max_concurrent_agents: 4
+  max_turns: 32
+hooks:
+  after_create: |
+    git clone --depth 1 https://github.com/YOUR-ORG/YOUR-REPO.git .
+---
+"#;
+
+        let customized = customize_workflow(workflow);
+
+        // Project-set-owned global fields are stripped.
+        assert!(
+            !customized.contains("tracker:"),
+            "tracker block must be removed; got:\n{customized}"
+        );
+        assert!(
+            !customized.contains("polling:"),
+            "polling block must be removed; got:\n{customized}"
+        );
+        assert!(
+            !customized.contains("max_concurrent_agents"),
+            "agent.max_concurrent_agents must be removed; got:\n{customized}"
+        );
+        // Repo-local `agent.max_turns` is preserved.
+        assert!(
+            customized.contains("max_turns: 32"),
+            "agent.max_turns must be preserved; got:\n{customized}"
+        );
+        assert!(
+            customized.contains("opensymphony workspace clone"),
+            "static hook must be emitted; got:\n{customized}"
+        );
+    }
+
+    #[test]
+    fn customize_workflow_preserves_body_when_stripping_fields() {
         let workflow = r#"---
 tracker:
   project_slug: "YOUR-PROJECT-SLUG"
@@ -2243,37 +2530,18 @@ hooks:
   after_create: |
     git clone --depth 1 https://github.com/YOUR-ORG/YOUR-REPO.git .
 ---
+
+# Workflow description
+
+Some body content that must be preserved.
 "#;
 
-        let customized = customize_workflow(
-            workflow,
-            Some("git@github.com:kumanday/demo.git"),
-            Some("demo-project"),
-        );
+        let customized = customize_workflow(workflow);
 
-        assert!(customized.contains("project_slug: \"demo-project\""));
-        assert!(customized.contains("git clone --depth 1 'git@github.com:kumanday/demo.git' ."));
-    }
-
-    #[test]
-    fn customize_workflow_replaces_placeholders_without_exact_line_matching() {
-        let workflow = r#"---
-tracker:
-  project_slug:    "YOUR-PROJECT-SLUG"
-hooks:
-  after_create: |
-        if [ ! -d .git ]; then git clone --depth 1 https://github.com/YOUR-ORG/YOUR-REPO.git .; fi
----
-"#;
-
-        let customized = customize_workflow(
-            workflow,
-            Some("https://github.com/example/demo.git"),
-            Some("demo-project"),
-        );
-
-        assert!(customized.contains("project_slug:    \"demo-project\""));
-        assert!(customized.contains("git clone --depth 1 'https://github.com/example/demo.git' ."));
+        assert!(customized.contains("# Workflow description"));
+        assert!(customized.contains("Some body content that must be preserved."));
+        assert!(!customized.contains("tracker:"));
+        assert!(customized.contains("opensymphony workspace clone"));
     }
 
     #[test]
@@ -2337,17 +2605,36 @@ hooks:
 
     #[test]
     fn git_remote_url_returns_selected_only() {
+        let selected = GitRemoteDetection::Selected {
+            remote_name: "origin".to_string(),
+            url: "https://github.com/kumanday/OpenSymphony-template.git".to_string(),
+        };
         assert_eq!(
-            git_remote_url(&GitRemoteDetection::Selected {
-                remote_name: "origin".to_string(),
-                url: "https://github.com/kumanday/OpenSymphony-template.git".to_string(),
-            }),
+            selected.url(),
             Some("https://github.com/kumanday/OpenSymphony-template.git")
         );
-        assert_eq!(git_remote_url(&GitRemoteDetection::None), None);
+        assert_eq!(GitRemoteDetection::None.url(), None);
         assert_eq!(
-            git_remote_url(&GitRemoteDetection::Ambiguous(vec!["fork".to_string()])),
+            GitRemoteDetection::Ambiguous(vec!["fork".to_string()]).url(),
             None
+        );
+    }
+
+    #[test]
+    fn derive_repo_slug_parser_supports_https_and_ssh_remotes() {
+        assert_eq!(
+            derive_repo_slug_from_remote("https://github.com/kumanday/OpenSymphony.git"),
+            Some("OpenSymphony".to_string())
+        );
+        assert_eq!(
+            derive_repo_slug_from_remote("git@github.com:kumanday/OpenSymphony.git"),
+            Some("OpenSymphony".to_string())
+        );
+        // Non-GitHub remotes still derive the last path segment so the project-set
+        // inventory stays populated.
+        assert_eq!(
+            derive_repo_slug_from_remote("https://gitlab.com/kumanday/OpenSymphony.git"),
+            Some("OpenSymphony".to_string())
         );
     }
 
