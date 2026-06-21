@@ -83,11 +83,19 @@ collide with them:
 
 The two namespaces are deliberately separate:
 
-- `areas` frontmatter produces only `area:<slug>` labels. A `repo:<slug>`
-  entry MUST NOT appear in `areas`; the converter rejects `areas` values
-  that use reserved non-area namespaces such as `repo:`.
-- `repo` frontmatter (when present) produces exactly one `repo:<slug>`
+- `areas` frontmatter MUST produce only `area:<slug>` labels. A `repo:<slug>`
+  entry MUST NOT appear in `areas`; the converter MUST reject `areas` values
+  that use reserved non-area namespaces such as `repo:` (today this
+  validation lives in the planning-side frontmatter parser; the converter
+  will enforce it directly once [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate)
+  lands the `repo` frontmatter parser alongside the inventory validator).
+- `repo` frontmatter (when present) MUST produce exactly one `repo:<slug>`
   label per leaf task; parents and review nodes MUST NOT carry `repo:`.
+  Repo label emission and the inventory-validated exact slug are part of
+  [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate);
+  the namespace-aware update path that keeps live `repo:` labels from being
+  wiped or stale-preserved belongs to
+  [LOC-22](https://linear.app/localgputokenscrazy/issue/LOC-22/converter-additive-label-update).
 
 ### Area slug normalization vs exact repo slug matching
 

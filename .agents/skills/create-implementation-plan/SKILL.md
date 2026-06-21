@@ -156,8 +156,14 @@ work MUST NOT reuse, reinterpret, or collide with them:
 The two namespaces are deliberately separate:
 
 - `areas` frontmatter owns only `area:<slug>` labels. A planning task MUST NOT
-  place a `repo:<slug>` entry in its `areas` list; the converter rejects
-  `areas` values that use reserved non-area namespaces such as `repo:`.
+  place a `repo:<slug>` entry (or any other reserved non-area namespace) in
+  its `areas` list. The converter MUST reject `areas` values that use a
+  reserved non-area namespace such as `repo:`; until that validation lands
+  (see [LOC-22](https://linear.app/localgputokenscrazy/issue/LOC-22/converter-additive-label-update)
+  and [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate)),
+  `area_slug()` still silently normalizes a bare `repo:foo` entry to the
+  area slug `repo-foo`, so keep `areas` strictly area-shaped at planning
+  time.
 - `repo:<slug>` is published from the task's `repo` frontmatter (see
   `convert-tasks-to-linear/SKILL.md`) and uses the **exact** project-set repo
   slug / `RepoRef.key`. It is not lowercased, slugified, or otherwise coerced.
