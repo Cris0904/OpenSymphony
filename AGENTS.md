@@ -53,6 +53,26 @@ Do not silently invent behavior when the upstream spec or chosen integration con
 - Tracker writes are done by agent-side GraphQL helpers and checked-in query assets unless a future operator API explicitly documents otherwise.
 - Scheduler correctness must not depend on agent-side tracker writes succeeding.
 
+### Reserved Linear label namespaces
+
+OpenSymphony owns and manages two reserved Linear label namespaces. Future
+work MUST NOT reuse, reinterpret, or collide with them:
+
+- `area:<slug>` — the canonical Memory / docs area label. Produced only from
+  planning-task `areas` frontmatter (slug-normalized). Treated as Memory area
+  metadata.
+- `repo:<slug>` — the canonical repository identity label. Resolved by the
+  single `repo_for_issue` resolver into a `RepoRef` via the project-set
+  inventory. `repo:<slug>` MUST map to the exact inventory slug /
+  `RepoRef.key`; do not lowercase, slugify, or otherwise coerce it.
+
+The split is deliberate: `areas` frontmatter produces only `area:<slug>`
+labels (a `repo:<slug>` entry MUST NOT appear there), while `repo:<slug>`
+labels are managed by the resolver and by the planning `repo` frontmatter
+(described in `create-implementation-plan/SKILL.md` and
+`convert-tasks-to-linear/SKILL.md`). Treat both namespaces as reserved and
+keep them out of any future hand-curated label vocabulary.
+
 ### UI separation
 
 - FrankenTUI is optional.

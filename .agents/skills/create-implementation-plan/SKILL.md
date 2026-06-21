@@ -142,6 +142,47 @@ Field rules:
   canonical Linear labels named `area:<slug>`.
 - `parent` is `null` for top-level issues or a task ID for a Linear sub-issue.
 
+### Reserved Linear label namespaces
+
+OpenSymphony owns and manages two reserved Linear label namespaces. Future
+work MUST NOT reuse, reinterpret, or collide with them:
+
+- `area:<slug>` — the canonical Memory / docs area label. Only `areas`
+  frontmatter produces these labels.
+- `repo:<slug>` — the canonical repository identity label, resolved by the
+  single Linear `repo_for_issue` resolver into a `RepoRef`. Only the project-set
+  inventory and explicit `repo:` frontmatter produce these labels.
+
+The two namespaces are deliberately separate:
+
+- `areas` frontmatter owns only `area:<slug>` labels. A planning task MUST NOT
+  place a `repo:<slug>` entry (or any other reserved non-area namespace) in
+  its `areas` list. The converter MUST reject `areas` values that use a
+  reserved non-area namespace such as `repo:`; until that validation lands
+  (see [LOC-22](https://linear.app/localgputokenscrazy/issue/LOC-22/converter-additive-label-update)
+  and [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate)),
+  `area_slug()` still silently normalizes a bare `repo:foo` entry to the
+  area slug `repo-foo`, so keep `areas` strictly area-shaped at planning
+  time.
+- `repo:<slug>` is published from the task's `repo` frontmatter (see
+  `convert-tasks-to-linear/SKILL.md`) and uses the **exact** project-set repo
+  slug / `RepoRef.key`. It is not lowercased, slugified, or otherwise coerced.
+
+### Area slug normalization vs exact repo slug matching
+
+`area:<slug>` and `repo:<slug>` follow different normalization rules on purpose:
+
+- Area slugs are **normalized**: the converter lowercases, trims, and
+  slugifies each `areas` entry (see `area_slug` in
+  `convert_tasks_to_linear.py`), so `OpenHands Runtime`, `OpenHands-Runtime`,
+  and `area:OpenHands Runtime` all collapse to the canonical `area:openhands-runtime`.
+- Repo slugs are **exact**: `repo:<slug>` MUST match the project-set inventory
+  slug / `RepoRef.key` character-for-character. Do not lowercase, slugify, or
+  reorder segments; the resolver depends on the exact key to look the repo up.
+
+This split keeps areas user-friendly at planning time while keeping repo
+identity strictly tied to the project-set inventory.
+
 Use this body structure:
 
 ```markdown
