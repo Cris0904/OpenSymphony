@@ -569,6 +569,14 @@ pub const STALE_MOVED_FIELDS: &[StaleMovedField] = &[
 ];
 
 /// Resolved project-set config produced by [`resolve_project_set`].
+///
+/// **Invariant (LOC-19):** [`ResolvedProjectSet`] MUST NOT gain a
+/// [`serde::Serialize`] impl. The CLI writer boundary relies on this
+/// invariant — `project_set_writer::serialize_front_matter` always
+/// round-trips raw [`crate::opensymphony_workflow::ProjectSetFrontMatter`]
+/// instead. Stable Rust has no negative trait bounds, so the invariant
+/// is enforced by code review and the documentation on this type rather
+/// than by a compile-time trait fence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedProjectSet {
     pub config: ProjectSetConfig,
@@ -650,57 +658,4 @@ pub struct ResolvedRepoEntry {
     pub default_branch: Option<String>,
     /// Optional local path metadata (not part of RepoRef).
     pub path: Option<String>,
-}
-/// Compile-time guard: ensures [`ResolvedProjectSet`] does NOT implement
-/// [`serde::Serialize`].
-///
-/// [`ResolvedProjectSet`] carries resolved Linear `api_key` secrets (see
-/// [`crate::opensymphony_workflow::ProjectSetConfig`] ->
-/// [`crate::opensymphony_workflow::ProjectSetLinearConfig::api_key`]),
-/// so the CLI must never accidentally round-trip it through YAML. The
-/// test below documents and enforces that `ResolvedProjectSet` does not
-/// expose a `Serialize` impl anywhere in the crate (LOC-19).
-#[cfg(test)]
-mod tests {
-    use super::ResolvedProjectSet;
-
-    /// If [`ResolvedProjectSet`] ever gains a `Serialize` impl, the
-    /// CLI writer boundary (LOC-19) is at risk of round-tripping resolved
-    /// Linear secrets. Refuse the change or carve out a deliberate,
-    /// reviewed exception that does not flow through
-    /// `project_set_writer::serialize_front_matter`.
-    ///
-    /// The guard encodes "T does not implement Serialize" as a coherence
-    /// conflict: a blanket impl for an `IsSerializable` marker trait
-    /// that is only implemented for `T: Serialize`. Adding a
-    /// `Serialize` impl to [`ResolvedProjectSet`] makes the blanket
-    /// `NotSerializable` impl below ambiguous, so the assertion fails
-    /// to type-check at compile time.
-    #[test]
-    fn resolved_project_set_is_not_serializable() {
-        // Marker trait that is *only* implemented for `Serialize` types
-        // via the blanket impl below. Adding `Serialize` to
-        // `ResolvedProjectSet` would make this blanket impl apply and
-        // collide with the negative `NotSerializable` blanket.
-        trait IsSerializable {}
-        impl<T: ?Sized + serde::Serialize> IsSerializable for T {}
-
-        // Negative blanket impl: `T` is `NotSerializable` unless there
-        // is a separate (e.g. `Serialize`-derived) impl. If someone adds
-        // `impl Serialize for ResolvedProjectSet`, the compiler can no
-        // longer pick between this blanket impl and the
-        // `IsSerializable`-gated one for the call site below, and the
-        // build fails.
-        trait NotSerializable {}
-        impl<T: ?Sized> NotSerializable for T {}
-
-        fn assert_not_serializable<T: ?Sized + NotSerializable>() {}
-        // This call must continue to resolve to the blanket
-        // `NotSerializable` impl for `ResolvedProjectSet`. If
-        // `ResolvedProjectSet` ever implements `Serialize`, the blanket
-        // `IsSerializable` impl above also applies and the
-        // `NotSerializable` call becomes ambiguous — breaking the build
-        // (LOC-19 compile-time guard).
-        assert_not_serializable::<ResolvedProjectSet>();
-    }
 }
