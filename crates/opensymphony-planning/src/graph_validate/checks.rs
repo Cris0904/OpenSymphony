@@ -16,7 +16,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::opensymphony_planning::generator::domain::{PlanArtifacts, PlannedMilestone, TaskId};
+use crate::opensymphony_planning::generator::domain::{
+    PlanArtifacts, PlannedMilestone, TaskId,
+};
 
 use super::domain::{PlanCheckCategory, PlanCheckFinding, PlanCheckSeverity};
 
@@ -401,6 +403,7 @@ fn topo_waves(dependency_map: &BTreeMap<TaskId, BTreeSet<TaskId>>) -> Vec<Vec<Ta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opensymphony_planning::generator::domain::TaskRoutingMetadata;
 
     use crate::opensymphony_planning::generator::domain::{PlannedIssue, PlannedMilestone};
 
@@ -428,6 +431,7 @@ mod tests {
             blocks: vec![],
             sub_issues: vec![],
             task_file: None,
+        routing: TaskRoutingMetadata::default(),
         }
     }
 
@@ -556,6 +560,7 @@ mod tests {
             blocked_by: vec![],
             blocks: vec![],
             task_file: None,
+        routing: TaskRoutingMetadata::default(),
         };
         let mut parent_issue = issue("I", &[]);
         parent_issue.acceptance_criteria = vec![

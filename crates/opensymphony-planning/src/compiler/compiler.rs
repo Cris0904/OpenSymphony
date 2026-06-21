@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use super::super::generator::domain::{
     PlanArtifacts, PlannedIssue, PlannedMilestone, PlannedSubIssue, TaskId,
-    TaskPackageManifest as GeneratedManifest,
+    TaskPackageManifest as GeneratedManifest, TaskRoutingMetadata,
 };
 use super::domain::{
     AppliedHierarchy, CompilationResult, CompiledMilestone, DependencyEdge, DependencyMetadata,
@@ -137,8 +137,29 @@ impl PlanCompiler {
         // step so the new diagnostic messages join the same deterministic order.
         sort_messages(&mut taxonomy_violations, &mut validation_messages);
 
-        let receipt_struct =
-            build_publish_receipt(planning_wave, &compiled_milestones, tasks_dir, manifest);
+        // LOC-25: gather routing metadata from each issue/sub-issue so
+        // the publish receipt can surface the leaf-vs-parent repo slug.
+        // We rebuild a small ``BTreeMap`` keyed by task id rather than
+        // threading ``PlannedIssue``/``PlannedSubIssue`` through every
+        // helper so the receipt builder keeps the same narrow input as
+        // before (H4: receipt shape stays additive only).
+        let mut routing_lookup: BTreeMap<TaskId, &TaskRoutingMetadata> = BTreeMap::new();
+        for milestone in &artifacts.milestones {
+            for issue in &milestone.issues {
+                routing_lookup.insert(issue.id.clone(), &issue.routing);
+                for sub in &issue.sub_issues {
+                    routing_lookup.insert(sub.id.clone(), &sub.routing);
+                }
+            }
+        }
+
+        let receipt_struct = build_publish_receipt(
+            planning_wave,
+            &compiled_milestones,
+            tasks_dir,
+            manifest,
+            &routing_lookup,
+        );
         let publish_receipt_yaml =
             serde_yaml::to_string(&receipt_struct).expect("publish receipt yaml should serialize");
 
@@ -537,6 +558,7 @@ fn build_publish_receipt(
     compiled_milestones: &[CompiledMilestone],
     _tasks_dir: &str,
     manifest: &GeneratedManifest,
+    routing_lookup: &BTreeMap<TaskId, &TaskRoutingMetadata>,
 ) -> LinearPublishReceipt {
     let mut milestones: BTreeMap<String, MilestoneReceipt> = BTreeMap::new();
     let mut tasks: BTreeMap<TaskId, LinearPublishEntity> = BTreeMap::new();
@@ -557,6 +579,15 @@ fn build_publish_receipt(
             } else {
                 issue.source_file.clone()
             };
+            // LOC-25: surface the leaf-vs-parent repo slug on the publish
+            // entity. Parents (issues with sub-issues) are not allowed to
+            // carry a slug; we still emit ``None`` here so the legacy
+            // receipt shape is preserved for tasks that have not
+            // onboarded LOC-25 yet.
+            let repo = routing_lookup
+                .get(&issue.task_id)
+                .map(|routing| routing.repo.clone())
+                .unwrap_or(None);
             let review_comments = Vec::new();
             tasks.insert(
                 issue.task_id.clone(),
@@ -569,6 +600,7 @@ fn build_publish_receipt(
                     blocked_by: issue.blocked_by.clone(),
                     blocks: issue.blocks.clone(),
                     review_comments,
+                    repo,
                     issue: None,
                     issue_id: None,
                     url: None,
@@ -583,6 +615,13 @@ fn build_publish_receipt(
                 } else {
                     sub.source_file.clone()
                 };
+                // LOC-25: every sub-issue is a leaf so it must carry a
+                // slug. The manifest validator already enforced that,
+                // so we propagate the value as-is.
+                let sub_repo = routing_lookup
+                    .get(&sub.task_id)
+                    .map(|routing| routing.repo.clone())
+                    .unwrap_or(None);
                 tasks.insert(
                     sub.task_id.clone(),
                     LinearPublishEntity {
@@ -594,6 +633,7 @@ fn build_publish_receipt(
                         blocked_by: sub.blocked_by.clone(),
                         blocks: sub.blocks.clone(),
                         review_comments: Vec::new(),
+                        repo: sub_repo,
                         issue: None,
                         issue_id: None,
                         url: None,
@@ -655,6 +695,7 @@ mod tests {
     use super::*;
     use crate::opensymphony_planning::generator::domain::{
         AcceptanceCriterion, PlanArtifacts, TaskPackageManifest as GeneratedManifest, TaskPriority,
+        TaskRoutingMetadata,
     };
     use chrono::Utc;
     use std::collections::BTreeMap;
@@ -704,6 +745,7 @@ mod tests {
                     blocked_by: vec![],
                     blocks: vec![sub_val.clone()],
                     task_file: Some("docs/tasks/osym-733-impl.md".to_string()),
+                    routing: TaskRoutingMetadata::default(),
                 },
                 PlannedSubIssue {
                     id: sub_val.clone(),
@@ -725,11 +767,13 @@ mod tests {
                     blocked_by: vec![sub_impl.clone()],
                     blocks: vec![],
                     task_file: Some("docs/tasks/osym-733-val.md".to_string()),
+                    routing: TaskRoutingMetadata::default(),
                 },
             ],
             task_file: Some(
                 "docs/tasks/osym-733-milestone-issue-and-sub-issue-compiler.md".to_string(),
             ),
+            routing: TaskRoutingMetadata::default(),
         };
 
         let mut tasks = Vec::new();
@@ -1191,11 +1235,22 @@ mod tests {
         let artifact = sample_artifact("rich-client-hosted-mode");
         let compiled_milestones: Vec<CompiledMilestone> =
             artifact.milestones.iter().map(compile_milestone).collect();
+        let mut routing_lookup: std::collections::BTreeMap<TaskId, &TaskRoutingMetadata> =
+            std::collections::BTreeMap::new();
+        for milestone in &artifact.milestones {
+            for issue in &milestone.issues {
+                routing_lookup.insert(issue.id.clone(), &issue.routing);
+                for sub in &issue.sub_issues {
+                    routing_lookup.insert(sub.id.clone(), &sub.routing);
+                }
+            }
+        }
         let receipt_struct = build_publish_receipt(
             &artifact.planning_wave,
             &compiled_milestones,
             "docs/tasks",
             &artifact.manifest,
+            &routing_lookup,
         );
         assert!(!receipt_struct.planning_wave.is_empty());
         assert_eq!(
@@ -1206,6 +1261,44 @@ mod tests {
                     + m.issues.iter().map(|i| i.sub_issues.len()).sum::<usize>())
                 .sum::<usize>()
         );
+    }
+
+    /// LOC-25: the publish receipt surfaces the leaf-vs-parent repo
+    /// slug on every entity. Parents (issues with sub-issues) get
+    /// `repo: None`; leaves (top-level issues without sub-issues and
+    /// every sub-issue) get the exact slug they declared in
+    /// `TaskRoutingMetadata.repo`.
+    #[test]
+    fn compile_publish_receipt_surfaces_repo_routing() {
+        let mut artifact = sample_artifact("rich-client-hosted-mode");
+        // OSYM-733 has two sub-issues so it is a parent/review node —
+        // its routing MUST stay empty on the receipt.
+        artifact.milestones[0].issues[0].routing = TaskRoutingMetadata::default();
+        // Sub-issues are leaves so each must carry a slug.
+        artifact.milestones[0].issues[0].sub_issues[0].routing =
+            TaskRoutingMetadata { repo: Some("opensymphony".to_string()) };
+        artifact.milestones[0].issues[0].sub_issues[1].routing =
+            TaskRoutingMetadata { repo: Some("OpenSymphony-Config".to_string()) };
+
+        let compiler = PlanCompiler::new();
+        let result = compiler.compile(&artifact);
+        assert!(result.is_publishable());
+
+        // Round-trip the receipt yaml and inspect the entities. The
+        // exact slug survives character-for-character — no
+        // lowercasing, no slugification.
+        let receipt: LinearPublishReceipt =
+            serde_yaml::from_str(&result.publish_receipt_yaml).expect("yaml parses");
+        let parent = receipt.tasks.get(&TaskId("OSYM-733".to_string())).expect("parent");
+        assert_eq!(parent.repo, None, "parent/review nodes must not carry repo");
+
+        let sub_impl =
+            receipt.tasks.get(&TaskId("OSYM-733-IMPL".to_string())).expect("sub-issue impl");
+        assert_eq!(sub_impl.repo.as_deref(), Some("opensymphony"));
+
+        let sub_val =
+            receipt.tasks.get(&TaskId("OSYM-733-VAL".to_string())).expect("sub-issue val");
+        assert_eq!(sub_val.repo.as_deref(), Some("OpenSymphony-Config"));
     }
 
     #[test]

@@ -132,6 +132,13 @@ pub enum PlanCheckCategory {
     AcceptanceCriteria,
     /// Sub-issue is missing verification expectations.
     VerificationExpectations,
+    /// LOC-25: a leaf task is missing a `repo` slug, a parent/review
+    /// task carries one, a slug is not a member of the project-set
+    /// inventory, or the task file's `repo` field cannot be
+    /// round-tripped. Surfaced as a separate category so a wave's
+    /// `validate` report can be filtered down to the routing errors
+    /// alone.
+    Routing,
 }
 
 /// A single plan-check finding. `task_id` is optional so the checker can
@@ -203,6 +210,13 @@ pub struct ManifestValidationResult {
     pub creation_order_cycles: Vec<Vec<TaskId>>,
     pub self_blocks: Vec<SelfBlock>,
     pub duplicate_task_ids: Vec<TaskId>,
+    /// LOC-25: tasks whose `repo` field violates the routing contract.
+    /// A leaf task missing a slug, a parent task carrying a slug, a slug
+    /// outside the project-set inventory, or any other invalid shape
+    /// surfaces here so the planning `validate` step can reject the
+    /// wave before any Linear write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_repo_routing: Vec<InvalidRepoRouting>,
 }
 
 impl ManifestValidationResult {
@@ -215,6 +229,7 @@ impl ManifestValidationResult {
             && self.creation_order_cycles.is_empty()
             && self.self_blocks.is_empty()
             && self.duplicate_task_ids.is_empty()
+            && self.invalid_repo_routing.is_empty()
     }
 
     /// Total error finding count. Useful for test assertions.
@@ -230,6 +245,7 @@ impl ManifestValidationResult {
                 .sum::<usize>()
             + self.self_blocks.len()
             + self.duplicate_task_ids.len()
+            + self.invalid_repo_routing.len()
     }
 }
 
@@ -273,6 +289,25 @@ pub struct UnknownDependency {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelfBlock {
     pub task_id: TaskId,
+}
+
+/// LOC-25 routing violation. Carries the precise reason a task failed the
+/// routing contract so the planning `validate` report can render an
+/// actionable error message without re-deriving the cause.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvalidRepoRouting {
+    pub task_id: TaskId,
+    /// Stable error code: `missing-leaf-repo`, `parent-with-repo`,
+    /// `unknown-repo-slug`, `empty-repo-slug`, `repo-on-invalid-node`.
+    pub code: String,
+    /// Declared repo value (after trimming) for context. Empty when
+    /// the task was missing the field.
+    pub declared_repo: String,
+    /// Optional inventory hint (e.g. the unknown slug the planner
+    /// attempted to use) so the rendered error can include the
+    /// exact string to fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// The full planning-session validation artefact: graph + plan checks +

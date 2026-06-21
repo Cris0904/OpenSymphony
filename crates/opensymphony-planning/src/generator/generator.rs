@@ -361,6 +361,7 @@ impl PlanGenerator {
                                 blocks: issue.blocks.clone(),
                                 sub_issues,
                                 task_file: issue.task_file.clone(),
+                                routing: TaskRoutingMetadata::default(),
                             }
                         } else {
                             issue.clone()
@@ -571,6 +572,7 @@ impl PlanGenerator {
                 blocks: Vec::new(),
                 sub_issues,
                 task_file: Some(format!("{}/{}.md", self.session.tasks_dir, issue_id)),
+                routing: TaskRoutingMetadata::default(),
             });
         }
 
@@ -625,6 +627,7 @@ impl PlanGenerator {
             blocked_by: Vec::new(),
             blocks: vec![val_id.clone()],
             task_file: Some(format!("{}/{}.md", self.session.tasks_dir, impl_id)),
+            routing: TaskRoutingMetadata::default(),
         });
 
         // Validation sub-issue is blocked by the implementation sub-issue
@@ -661,6 +664,7 @@ impl PlanGenerator {
             blocked_by: vec![impl_id],
             blocks: Vec::new(),
             task_file: Some(format!("{}/{}.md", self.session.tasks_dir, val_id)),
+            routing: TaskRoutingMetadata::default(),
         });
 
         sub_issues
@@ -751,7 +755,7 @@ estimate: {estimate}
 blockedBy: [{blocked_by}]
 blocks: [{blocks}]
 parent: null
----
+{repo_field}---
 
 ## Summary
 
@@ -801,6 +805,7 @@ parent: null
                 .unwrap_or_else(|| "null".to_string()),
             blocked_by = render_id_list(&issue.blocked_by),
             blocks = render_id_list(&issue.blocks),
+            repo_field = render_repo_field(issue.is_leaf(), issue.routing.trimmed_repo()),
             summary = collapse_markdown_line(&issue.summary),
             scope_in = render_bullets(&issue.scope_in),
             scope_out = render_optional_bullets(&issue.scope_out),
@@ -839,7 +844,7 @@ estimate: {estimate}
 blockedBy: [{blocked_by}]
 blocks: [{blocks}]
 parent: {parent}
----
+{repo_field}---
 
 ## Summary
 
@@ -890,6 +895,7 @@ parent: {parent}
             blocked_by = render_id_list(&sub_issue.blocked_by),
             blocks = render_id_list(&sub_issue.blocks),
             parent = parent_issue.id,
+            repo_field = render_repo_field(true, sub_issue.routing.trimmed_repo()),
             summary = collapse_markdown_line(&sub_issue.summary),
             scope_in = render_bullets(&sub_issue.scope_in),
             scope_out = render_optional_bullets(&sub_issue.scope_out),
@@ -902,6 +908,29 @@ parent: {parent}
         );
 
         content
+    }
+}
+
+/// Render the YAML frontmatter ``repo:`` line for a task file.
+///
+/// * Leaves (``is_leaf == true``) emit ``repo: <slug>`` when ``slug`` is
+///   ``Some`` and ``repo: null`` when the slug is missing. This mirrors
+///   the converter's contract: leaves MUST carry exactly one
+///   non-empty ``repo`` slug, and the manifest validator flags the
+///   ``repo: null`` shape so the planner can fill it in.
+/// * Parent/review nodes (``is_leaf == false``) emit an empty line so the
+///   frontmatter block stays well-formed; the contract forbids any
+///   ``repo:`` value on parents. The manifest validator surfaces a
+///   separate ``parent-with-repo`` finding if the slug is set anyway.
+///
+/// The slug is emitted as a YAML double-quoted scalar so a slug with a
+/// leading hyphen, embedded colon, or other YAML-special character round-
+/// trips through the parser without coercion.
+fn render_repo_field(is_leaf: bool, slug: Option<&str>) -> String {
+    match (is_leaf, slug) {
+        (_, Some(slug)) => format!("repo: \"{slug}\"\n"),
+        (true, None) => "repo: null\n".to_string(),
+        (false, None) => String::new(),
     }
 }
 
@@ -1304,6 +1333,7 @@ mod tests {
                         blocks: vec![],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                     PlannedIssue {
                         id: cycle_b.clone(),
@@ -1323,6 +1353,7 @@ mod tests {
                         blocks: vec![],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                     PlannedIssue {
                         id: cycle_c.clone(),
@@ -1342,6 +1373,7 @@ mod tests {
                         blocks: vec![],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                 ],
                 acceptance_criteria: vec![],
@@ -1415,6 +1447,7 @@ mod tests {
                         blocks: vec![cycle_b.clone()],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                     PlannedIssue {
                         id: cycle_b.clone(),
@@ -1434,6 +1467,7 @@ mod tests {
                         blocks: vec![cycle_c.clone()],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                     PlannedIssue {
                         id: cycle_c.clone(),
@@ -1453,6 +1487,7 @@ mod tests {
                         blocks: vec![],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                 ],
                 acceptance_criteria: vec![],
@@ -1527,6 +1562,7 @@ mod tests {
                         blocks: vec![cycle_b.clone()],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                     PlannedIssue {
                         id: cycle_b.clone(),
@@ -1546,6 +1582,7 @@ mod tests {
                         blocks: vec![cycle_c.clone()],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                     PlannedIssue {
                         id: cycle_c.clone(),
@@ -1565,6 +1602,7 @@ mod tests {
                         blocks: vec![cycle_a.clone()],
                         sub_issues: vec![],
                         task_file: None,
+                        routing: TaskRoutingMetadata::default(),
                     },
                 ],
                 acceptance_criteria: vec![],

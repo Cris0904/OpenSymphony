@@ -36,16 +36,17 @@ pub use compiler::{
 pub use generator::{
     AcceptanceCriterion, GenerationError, IntakeContext, ManifestTask, PlanArtifacts,
     PlanGenerator, PlannedIssue, PlannedMilestone, PlannedSubIssue, PlanningSession,
-    RegenerationScope, TaskId, TaskPackageManifest, TaskPriority, validate_dependency_graph,
+    RegenerationScope, TaskId, TaskPackageManifest, TaskPriority, TaskRoutingMetadata,
+    validate_dependency_graph,
 };
 pub use graph_validate::{
     DependencyGraph, DependencyGraphBuilder, GraphEdge, GraphEdgeReason, GraphNode, GraphNodeKind,
-    ManifestTaskEntry, ManifestValidationResult, ManifestValidator, ManifestValidatorError,
-    MissingTaskFile, ParsedTaskFile, PlanCheckCategory, PlanCheckFinding, PlanCheckSeverity,
-    PlanQualityChecker, PlanValidationReport, SelfBlock, TaskFrontmatter, TaskFrontmatterError,
-    TaskPackageManifestFile, UnknownDependency, UnknownMilestone, attach_manifest_validation,
-    build_blocker_inverse, build_in_memory_report, creation_order_waves, load_manifest,
-    parse_task_file, parse_task_text,
+    InvalidRepoRouting, ManifestTaskEntry, ManifestValidationResult, ManifestValidator,
+    ManifestValidatorError, MissingTaskFile, ParsedTaskFile, PlanCheckCategory, PlanCheckFinding,
+    PlanCheckSeverity, PlanQualityChecker, PlanValidationReport, SelfBlock, TaskFrontmatter,
+    TaskFrontmatterError, TaskPackageManifestFile, UnknownDependency, UnknownMilestone,
+    attach_manifest_validation, build_blocker_inverse, build_in_memory_report,
+    creation_order_waves, load_manifest, parse_task_file, parse_task_text,
 };
 pub use linear_graph::{
     BlockerChain, BlockerSnapshot, ChildRef, IssueSnapshot, LinearGraphAnalysis,

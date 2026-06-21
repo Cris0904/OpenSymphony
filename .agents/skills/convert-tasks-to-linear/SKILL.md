@@ -62,11 +62,21 @@ blocks: []
 areas:
   - gateway
 parent: null
+repo: opensymphony
 ```
 
 `areas` is optional for older task packages, but new packages should include
 stable lowercase area slugs. The converter applies them to Linear as canonical
 `area:<slug>` labels.
+
+`repo` is **required on leaf tasks** (top-level issues without `parent` and
+every sub-issue) and **forbidden on parent/review tasks** (top-level issues
+with sub-issues). The value MUST be the exact project-set repo slug /
+`RepoRef.key`. The converter publishes it as a canonical Linear label named
+`repo:<slug>` and rejects any other value as an invalid-repo-routing error
+during `validate`. See the *Reserved Linear label namespaces* section below
+and `create-implementation-plan/SKILL.md` for the planning-side contract
+that produces this frontmatter.
 
 ### Reserved Linear label namespaces
 
@@ -86,16 +96,16 @@ The two namespaces are deliberately separate:
 
 - `areas` frontmatter MUST produce only `area:<slug>` labels. A `repo:<slug>`
   entry (or any other reserved non-area namespace) MUST NOT appear in
-  `areas`; the converter MUST reject `areas` values that use a reserved
-  non-area namespace such as `repo:`. Until that validation lands (see
-  [LOC-22](https://linear.app/localgputokenscrazy/issue/LOC-22/converter-additive-label-update)
-  and [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate)),
-  `area_slug()` still silently normalizes a bare `repo:foo` entry to the
-  area slug `repo-foo`, so keep `areas` strictly area-shaped at planning
-  time.
+  `areas`; the converter validates `areas` values during `validate` and
+  rejects any reserved non-area namespace such as `repo:` (see
+  [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate)
+  and the `normalize_area_slugs` helper in
+  `convert_tasks_to_linear.py`). Keep `areas` strictly area-shaped at
+  planning time so the validation never has to fire on real waves.
 - `repo` frontmatter (when present) MUST produce exactly one `repo:<slug>`
   label per leaf task; parents and review nodes MUST NOT carry `repo:`.
-  Repo label emission and the inventory-validated exact slug are part of
+  Repo label emission, inventory validation, and the parent-vs-leaf
+  shape are part of
   [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate);
   the namespace-aware update path that keeps live `repo:` labels from being
   wiped or stale-preserved belongs to

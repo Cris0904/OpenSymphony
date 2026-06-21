@@ -60,8 +60,65 @@ impl TaskPriority {
     }
 }
 
+/// Shared routing metadata for publishable task shapes (LOC-25, H4).
+///
+/// The planning skill `.md` and this crate agree that:
+///
+/// * Leaf tasks (top-level issues without sub-issues and every sub-issue)
+///   MUST carry exactly one `repo` slug that matches a project-set
+///   inventory key character-for-character. The slug is **not**
+///   lowercased, slugified, or otherwise coerced.
+/// * Parent/review nodes (top-level issues with at least one sub-issue)
+///   MUST NOT carry `repo` because their work is decomposed into the
+///   leaves that own the repo routing.
+///
+/// The `TaskRoutingMetadata` type is the single place this contract lives
+/// in the Rust crate so the H4 "dual source of truth" requirement is
+/// maintained. Changing the rules here means changing the planning skill
+/// `.md` in lockstep (and vice versa).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRoutingMetadata {
+    /// Repository slug (must match a project-set inventory key exactly).
+    /// `Some(slug)` on a leaf; `None` on a parent/review node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+impl TaskRoutingMetadata {
+    /// Returns true when the routing metadata is consistent with a leaf
+    /// task (i.e. it carries exactly one repo slug).
+    pub fn is_valid_for_leaf(&self) -> bool {
+        self.repo
+            .as_ref()
+            .map(|slug| !slug.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Returns true when the routing metadata is consistent with a
+    /// parent/review node (i.e. it carries no repo slug).
+    pub fn is_valid_for_parent(&self) -> bool {
+        self.repo.is_none()
+    }
+
+    /// Returns the trimmed repo slug when one is present, or `None` if no
+    /// slug is set. Trims the underlying value without lowercasing or
+    /// slugifying it; the result is still the exact inventory key (or
+    /// empty, which downstream validators reject).
+    pub fn trimmed_repo(&self) -> Option<&str> {
+        self.repo
+            .as_ref()
+            .map(|slug| slug.trim())
+            .filter(|slug| !slug.is_empty())
+    }
+}
+
 /// A sub-issue represents a bounded implementation, validation, documentation,
 /// or cleanup unit small enough for one agent run or one bounded sequence of runs.
+///
+/// Sub-issues are always leaves in the task graph (a parent task is the
+/// top-level issue that owns them). Their `routing.repo` MUST be `Some`
+/// when the wave requests repo seeding; the manifest validator enforces
+/// the leaf contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedSubIssue {
     pub id: TaskId,
@@ -87,12 +144,21 @@ pub struct PlannedSubIssue {
     pub blocked_by: Vec<TaskId>,
     #[serde(default)]
     pub blocks: Vec<TaskId>,
+    /// Routing metadata; sub-issues are leaves so they must carry a repo.
+    #[serde(default)]
+    pub routing: TaskRoutingMetadata,
     /// Relative path to the task file within the tasks directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_file: Option<String>,
 }
 
 /// An issue represents a demoable vertical capability or deliverable unit.
+///
+/// A `PlannedIssue` is a leaf (top-level task) when it has no
+/// `sub_issues`; in that case `routing.repo` MUST be `Some`.
+///
+/// A `PlannedIssue` with at least one `sub_issue` is a parent/review
+/// node; `routing.repo` MUST be `None` for those tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedIssue {
     pub id: TaskId,
@@ -119,9 +185,23 @@ pub struct PlannedIssue {
     #[serde(default)]
     pub blocks: Vec<TaskId>,
     pub sub_issues: Vec<PlannedSubIssue>,
+    /// Routing metadata; see [`TaskRoutingMetadata`] for the contract.
+    #[serde(default)]
+    pub routing: TaskRoutingMetadata,
     /// Relative path to the task file within the tasks directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_file: Option<String>,
+}
+
+impl PlannedIssue {
+    /// Returns true when the issue is a leaf in the task graph.
+    ///
+    /// A leaf has no sub-issues, which means the parent task itself is
+    /// the work-unit that the agent executes; only leaves carry
+    /// `routing.repo` per LOC-25.
+    pub fn is_leaf(&self) -> bool {
+        self.sub_issues.is_empty()
+    }
 }
 
 /// A milestone represents a major delivery stage or checkpoint.

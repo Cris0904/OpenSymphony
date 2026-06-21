@@ -85,6 +85,11 @@ class Task:
     areas: list[str]
     parent: str | None
     body: str
+    # LOC-25: the project-set repo slug (exact inventory key) for leaf
+    # tasks, or None for parent/review tasks. The validator enforces the
+    # leaf-vs-parent contract; ``None`` here means the frontmatter did
+    # not carry a ``repo:`` field, which is only valid for parents.
+    repo: str | None = None
 
 
 @dataclass
@@ -97,6 +102,18 @@ class Package:
     manifest_tasks: list[ManifestTask]
     tasks: dict[str, Task]
     waves: list[list[str]]
+    # LOC-25: set of allowed repo slugs loaded from
+    # ``<repo_root>/.opensymphony/project-set.yaml``. ``None`` means the
+    # inventory was not loaded (e.g. the file is missing); in that case
+    # the validator cannot enforce inventory membership and the
+    # converter reports that as a separate validation error so callers
+    # know to onboard the project set.
+    repo_inventory: set[str] | None = None
+    # LOC-25: optional explicit override path the validator used to load
+    # the inventory. When ``None``, the validator fell back to the
+    # default location. Captured so dry-run/apply output can confirm
+    # which inventory source actually gated the wave.
+    repo_inventory_source: Path | None = None
 
 
 class ValidationError(Exception):
@@ -138,9 +155,12 @@ def main() -> int:
     args = parser.parse_args()
     repo_root = Path(args.repo_root or ".").resolve()
     manifest_path = resolve_path(repo_root, args.manifest or "docs/tasks/task-package.yaml")
+    project_set_path = (
+        Path(args.project_set).resolve() if getattr(args, "project_set", None) else None
+    )
 
     try:
-        package = load_package(repo_root, manifest_path)
+        package = load_package(repo_root, manifest_path, project_set_path=project_set_path)
         if args.command == "validate":
             print_validation_summary(package)
             return 0
@@ -149,12 +169,14 @@ def main() -> int:
             return 0
         if args.command == "apply":
             publish_path = resolve_publish_path(repo_root, package, args.publish)
+            desired_repo_by_task = build_desired_repo_by_task(package.tasks)
             apply_to_linear(
                 package=package,
                 project_slug=args.project_slug,
                 team_key=args.team_key,
                 publish_path=publish_path,
                 update_project_overview=not args.no_project_overview,
+                desired_repo_by_task=desired_repo_by_task,
             )
             return 0
     except (ValidationError, LinearError) as error:
@@ -167,6 +189,16 @@ def main() -> int:
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--manifest", default=None, help="Path to task-package.yaml.")
     parser.add_argument("--repo-root", default=None, help="Repository root.")
+    parser.add_argument(
+        "--project-set",
+        default=None,
+        help=(
+            "Path to project-set.yaml (defaults to "
+            "<repo-root>/.opensymphony/project-set.yaml). When set, the converter "
+            "validates every leaf task's `repo:` slug against this inventory "
+            "before any Linear write (LOC-25)."
+        ),
+    )
 
 
 def resolve_path(repo_root: Path, value: str) -> Path:
@@ -180,7 +212,11 @@ def resolve_publish_path(repo_root: Path, package: Package, value: str | None) -
     return repo_root / package.tasks_dir / "linear-publish.yaml"
 
 
-def load_package(repo_root: Path, manifest_path: Path) -> Package:
+def load_package(
+    repo_root: Path,
+    manifest_path: Path,
+    project_set_path: Path | None = None,
+) -> Package:
     errors: list[str] = []
     manifest = load_yaml_file(manifest_path, errors, "manifest")
     if not isinstance(manifest, dict):
@@ -203,6 +239,13 @@ def load_package(repo_root: Path, manifest_path: Path) -> Package:
     validate_manifest_references(manifest_tasks, tasks, milestones, errors)
     validate_task_graph(tasks, errors)
 
+    repo_inventory, inventory_source = load_project_set_inventory(
+        repo_root, project_set_path, errors
+    )
+
+    if not errors:
+        validate_repo_routing(tasks, repo_inventory, errors)
+
     if errors:
         raise ValidationError(render_errors("Task package validation failed", errors))
 
@@ -216,6 +259,8 @@ def load_package(repo_root: Path, manifest_path: Path) -> Package:
         manifest_tasks=manifest_tasks,
         tasks=tasks,
         waves=waves,
+        repo_inventory=repo_inventory,
+        repo_inventory_source=inventory_source,
     )
 
 
@@ -334,6 +379,7 @@ def load_task(
     blocks = frontmatter.get("blocks")
     areas = normalize_area_slugs(frontmatter.get("areas", []), manifest_task.id, errors)
     parent = frontmatter.get("parent")
+    repo = _parse_repo_slug(frontmatter.get("repo"), manifest_task.id, errors)
 
     if task_id != manifest_task.id:
         errors.append(
@@ -373,6 +419,7 @@ def load_task(
         areas=areas,
         parent=parent.strip() if isinstance(parent, str) else None,
         body=body,
+        repo=repo,
     )
 
 
@@ -470,12 +517,236 @@ def normalize_area_slugs(value: Any, task_id: str, errors: list[str]) -> list[st
         return []
     areas: list[str] = []
     for raw in value:
+        stripped = raw.strip()
+        # LOC-25 + LOC-22 + LOC-24: ``areas`` is reserved for the
+        # ``area:`` namespace only. ``repo:`` (and any other reserved
+        # non-area namespace) belongs to its own dedicated frontmatter
+        # field (``repo``) and must never appear here, otherwise the
+        # planning task would silently publish the wrong label.
+        if stripped.lower().startswith("repo:"):
+            errors.append(
+                f"task {task_id} areas entry {stripped!r} uses the reserved "
+                "non-area namespace 'repo:'; use the `repo:` frontmatter field instead"
+            )
+            continue
         area = area_slug(raw)
         if not area:
             errors.append(f"task {task_id} has an empty area value")
             continue
         areas.append(area)
     return sorted(set(areas))
+
+
+def _parse_repo_slug(value: Any, task_id: str, errors: list[str]) -> str | None:
+    """Parse the ``repo:`` frontmatter value into a normalised slug.
+
+    Returns:
+      * ``None`` when the frontmatter omits the field (or the value is
+        YAML ``null``). This is the parent/review shape: the validator
+        accepts a missing repo on parent tasks.
+      * ``""`` when the frontmatter explicitly wrote ``repo:`` with no
+        value (or only whitespace). The validator treats an empty
+        repo on a leaf as a missing-leaf-repo error so the planner
+        fixes the frontmatter before publish.
+      * The trimmed slug string otherwise. The slug is preserved
+        verbatim — the validator compares it character-for-character
+        against the project-set inventory, so no lowercasing or
+        slugification happens here.
+
+    Non-string values are rejected with an error so a planning wave
+    that accidentally writes ``repo: [foo, bar]`` cannot slip through.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        errors.append(
+            f"task {task_id} repo must be a string or null (got {type(value).__name__})"
+        )
+        return None
+    return value.strip()
+
+
+# LOC-25: default location for the global project-set inventory. Matches
+# the location documented in `docs/configuration.md` (`## Global Project Set`)
+# so the converter can validate ``repo:`` slugs without any extra wiring on
+# the developer side. Tests can override it via ``--project-set``.
+DEFAULT_PROJECT_SET_PATH = Path(".opensymphony/project-set.yaml")
+
+
+def load_project_set_inventory(
+    repo_root: Path,
+    override_path: Path | None,
+    errors: list[str],
+) -> tuple[set[str] | None, Path | None]:
+    """Load the project-set inventory of allowed repo slugs.
+
+    Returns a tuple of ``(inventory, source_path)``:
+
+    * ``inventory`` is the set of repo slugs declared under
+      ``project_set.projects[].repos[].slug``. ``None`` means the
+      inventory could not be loaded at all (the file was missing or
+      unreadable); in that case the caller surfaces a separate
+      validation error so operators know to onboard the project set.
+    * ``source_path`` is the absolute path the loader actually read so
+      dry-run output can prove which inventory gated the wave (and so
+      tests can prove the explicit override path was used instead of
+      the default).
+
+    The loader is intentionally permissive: missing files surface as
+    ``(None, None)`` rather than an exception so tests and dry-runs
+    can decide whether to fail-fast or warn. Hard YAML/IO failures
+    (when the file exists but is unreadable) append a validation
+    error so the converter can fail fast before any Linear write.
+    """
+
+    source = (
+        override_path.resolve()
+        if override_path is not None
+        else (repo_root / DEFAULT_PROJECT_SET_PATH).resolve()
+    )
+    if not source.is_file():
+        return None, source
+    try:
+        data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError) as error:
+        errors.append(f"project-set file {source} is unreadable: {error}")
+        return None, source
+    if not isinstance(data, dict):
+        errors.append(
+            f"project-set file {source} must be a YAML mapping; got {type(data).__name__}"
+        )
+        return None, source
+
+    slugs: set[str] = set()
+    try:
+        project_set = data.get("project_set") or {}
+        projects = project_set.get("projects") or []
+    except AttributeError:
+        projects = []
+    if not isinstance(projects, list):
+        errors.append(
+            f"project-set file {source} project_set.projects must be a list"
+        )
+        return None, source
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        repos = project.get("repos") or []
+        if not isinstance(repos, list):
+            errors.append(
+                f"project-set file {source} project {project.get('slug')!r} repos "
+                "must be a list"
+            )
+            return None, source
+        for repo in repos:
+            if not isinstance(repo, dict):
+                continue
+            slug = repo.get("slug")
+            if not isinstance(slug, str) or not slug.strip():
+                errors.append(
+                    f"project-set file {source} has a repo entry without a slug"
+                )
+                continue
+            slugs.add(slug.strip())
+    if not slugs:
+        errors.append(
+            f"project-set file {source} declared zero repos; planning repo routing "
+            "cannot be validated"
+        )
+        return None, source
+    return slugs, source
+
+
+def validate_repo_routing(
+    tasks: dict[str, Task],
+    inventory: set[str] | None,
+    errors: list[str],
+) -> None:
+    """Enforce the LOC-25 leaf-vs-parent repo routing contract.
+
+    A task whose id appears in any other task's ``parent`` field is a
+    parent/review node and MUST NOT carry a ``repo:`` value. Every other
+    task is a leaf and MUST carry exactly one non-empty ``repo:`` slug
+    that exists in the project-set inventory. Slugs are compared
+    character-for-character; no lowercasing or slugification happens
+    here, so an entry like ``OpenSymphony-Config`` is preserved verbatim.
+
+    The validator distinguishes three error classes so the planning
+    operator can fix the right field:
+
+    * ``parent-with-repo`` — a parent/review task carries a slug.
+    * ``missing-leaf-repo`` — a leaf task did not declare a slug.
+    * ``out-of-inventory-repo`` — a leaf task declared a slug that the
+      project set does not know about.
+    """
+
+    parent_ids: set[str] = {
+        task.parent
+        for task in tasks.values()
+        if isinstance(task.parent, str) and task.parent.strip()
+    }
+    for task in sorted(tasks.values(), key=lambda t: t.id):
+        is_parent = task.id in parent_ids
+        declared = task.repo
+        if is_parent:
+            if declared is not None and declared.strip():
+                errors.append(
+                    f"task {task.id} is a parent/review task and must not carry "
+                    f"`repo: {declared!r}`; the routing lives on the leaves"
+                )
+            continue
+        # Leaf shape: a non-empty slug is required.
+        if declared is None or not declared.strip():
+            errors.append(
+                f"task {task.id} is a leaf and must declare exactly one non-empty "
+                "`repo: <slug>` frontmatter field that matches a project-set "
+                "inventory key"
+            )
+            continue
+        if inventory is not None and declared not in inventory:
+            known = ", ".join(sorted(inventory)) if inventory else "<empty>"
+            errors.append(
+                f"task {task.id} declares `repo: {declared!r}` but the project-set "
+                f"inventory does not contain that slug; known slugs: {known}"
+            )
+
+
+def build_desired_repo_by_task(
+    tasks: dict[str, Task],
+) -> dict[str, DesiredRepo]:
+    """Project per-task ``DesiredRepo`` state from parsed ``Task.repo``.
+
+    Parents (and any other task with no repo) get ``DesiredRepo.cleared()``
+    so the additive merge strips any stale ``repo:*`` label rather than
+    preserving it. Leaves with a non-empty slug get
+    ``DesiredRepo.managed(slug)`` so the merge ensures exactly one
+    ``repo:<slug>`` label survives.
+
+    The map is keyed by task id and is consumed by ``apply_to_linear``
+    via the ``desired_repo_by_task`` parameter.
+    """
+
+    parent_ids: set[str] = {
+        task.parent
+        for task in tasks.values()
+        if isinstance(task.parent, str) and task.parent.strip()
+    }
+    desired: dict[str, DesiredRepo] = {}
+    for task in tasks.values():
+        if task.id in parent_ids:
+            desired[task.id] = DesiredRepo.cleared()
+            continue
+        slug = (task.repo or "").strip()
+        if slug:
+            desired[task.id] = DesiredRepo.managed(slug)
+        else:
+            # Leaf without a slug should have been caught by
+            # ``validate_repo_routing`` already; the publish path
+            # treats this as a defensive preserve so a stale
+            # ``repo:*`` label is not wiped when the validator was
+            # bypassed.
+            desired[task.id] = DesiredRepo.preserved()
+    return desired
 
 
 def area_slug(value: str) -> str:
@@ -541,7 +812,37 @@ def print_validation_summary(package: Package) -> None:
     print(f"milestones: {len(package.milestones)}")
     print(f"tasks: {len(package.tasks)}")
     print(f"waves: {len(package.waves)}")
+    print_repo_routing_summary(package)
     print("validation: ok")
+
+
+def print_repo_routing_summary(package: Package) -> None:
+    """Surface the project-set inventory used to gate repo routing.
+
+    The summary deliberately shows the absolute source path so operators
+    (and tests) can confirm which inventory file was loaded — the
+    explicit ``--project-set`` override path is the canonical answer, the
+    default location only applies when no override was passed.
+    """
+
+    source = package.repo_inventory_source
+    inventory = package.repo_inventory
+    if source is None and inventory is None:
+        print("repoInventory: <not loaded>")
+        return
+    if source is not None:
+        print(f"repoInventory: {source}")
+    if inventory is not None:
+        print(f"repoInventorySlugs: {len(inventory)}")
+    leaves = sum(1 for task in package.tasks.values() if not _is_parent(task, package.tasks))
+    print(f"repoRouting: leaves={leaves} parents={len(package.tasks) - leaves}")
+
+
+def _is_parent(task: Task, tasks: dict[str, Task]) -> bool:
+    return any(
+        isinstance(other.parent, str) and other.parent.strip() == task.id
+        for other in tasks.values()
+    )
 
 
 def print_dry_run(package: Package) -> None:
@@ -551,6 +852,26 @@ def print_dry_run(package: Package) -> None:
     for milestone in package.milestones:
         count = sum(1 for task in package.tasks.values() if task.milestone == milestone)
         print(f"- {milestone} ({count} task(s))")
+    print()
+    print("Repo routing (LOC-25):")
+    parent_ids = {
+        task.parent
+        for task in package.tasks.values()
+        if isinstance(task.parent, str) and task.parent.strip()
+    }
+    for task in sorted(package.tasks.values(), key=lambda t: t.id):
+        kind = "parent" if task.id in parent_ids else "leaf"
+        slug = task.repo if task.repo else "-"
+        print(f"- {kind:6s} {task.id} repo={slug}")
+    print()
+    print("Repo labels to publish (managed):")
+    managed_slugs = sorted({
+        task.repo
+        for task in package.tasks.values()
+        if task.repo and task.id not in parent_ids
+    })
+    for slug in managed_slugs:
+        print(f"- repo:{slug}")
     print()
     print("Creation waves:")
     for index, wave in enumerate(package.waves, start=1):
@@ -725,6 +1046,17 @@ def ensure_issues(
     publish_tasks = publish.get("tasks", {}) if isinstance(publish.get("tasks"), dict) else {}
     issue_map: dict[str, dict[str, Any]] = {}
     area_label_ids = ensure_area_labels(client, package, team)
+    # LOC-25: lazily create any ``repo:<slug>`` labels referenced by leaf
+    # tasks so the merge below can resolve their ids when ``_lookup_repo_label_id``
+    # misses on the existing issue. The set is the union of every
+    # managed-slug declared by leaf tasks in the package, no other path
+    # touches this list.
+    repo_label_ids = ensure_repo_labels(
+        client,
+        package,
+        team,
+        desired_repo_by_task or {},
+    )
     desired_repo_by_task = desired_repo_by_task or {}
 
     for wave in package.waves:
@@ -765,6 +1097,7 @@ def ensure_issues(
                 task=task,
                 area_label_ids=area_label_ids,
                 desired_repo=desired_repo_by_task.get(task_id),
+                repo_label_ids=repo_label_ids,
             )
             if label_ids is not None:
                 input_data["labelIds"] = label_ids
@@ -813,6 +1146,67 @@ def ensure_area_labels(client: LinearClient, package: Package, team: dict[str, A
     return label_ids
 
 
+def repo_label_name(slug: str) -> str:
+    """Render the canonical ``repo:<slug>`` label name.
+
+    Slugs are preserved verbatim — no lowercasing or slugification — so
+    the on-disk inventory matches the on-Linear label exactly.
+    """
+
+    return f"{REPO_PREFIX}{slug}"
+
+
+def ensure_repo_labels(
+    client: LinearClient,
+    package: Package,
+    team: dict[str, Any],
+    desired_repo_by_task: dict[str, DesiredRepo],
+) -> dict[str, str]:
+    """Lazily ensure every managed ``repo:<slug>`` label exists.
+
+    LOC-25 keeps the project set's repo slugs as the source of truth for
+    the linear label set. The wave is only allowed to publish managed
+    slugs — every other ``DesiredRepo.kind`` (``cleared`` / ``preserved``)
+    is intentionally ignored here because clearing or preserving does
+    not introduce a new label, only removes or keeps an existing one.
+
+    Returns a slug -> label_id cache that ``merged_label_ids`` uses as a
+    fallback when ``_lookup_repo_label_id`` cannot find an existing
+    match on the issue.
+    """
+
+    slugs = sorted({
+        desired.slug
+        for desired in desired_repo_by_task.values()
+        if desired.kind == "managed" and desired.slug
+    })
+    label_ids: dict[str, str] = {}
+    for slug in slugs:
+        name = repo_label_name(slug)
+        existing = find_issue_label(client, name, team["id"])
+        if existing:
+            label_ids[slug] = existing["id"]
+            continue
+        data = client.call(
+            "issue_label_create.graphql",
+            {"input": {"name": name, "teamId": team["id"]}},
+            allow_errors=True,
+        )
+        if data.get("errors"):
+            existing = find_issue_label(client, name, team["id"])
+            if existing:
+                label_ids[slug] = existing["id"]
+                continue
+            raise LinearError(
+                f"failed to create repo label {name}: "
+                f"{json.dumps(data['errors'], indent=2)}"
+            )
+        label = data["data"]["issueLabelCreate"]["issueLabel"]
+        label_ids[slug] = label["id"]
+        print(f"created repo label: {name}")
+    return label_ids
+
+
 def find_issue_label(client: LinearClient, name: str, team_id: str) -> dict[str, Any] | None:
     data = client.call(
         "issue_label_by_name.graphql",
@@ -845,12 +1239,21 @@ def merged_label_ids(
     task: Task,
     area_label_ids: dict[str, str],
     desired_repo: DesiredRepo | None,
+    repo_label_ids: dict[str, str] | None = None,
 ) -> list[str] | None:
     """Compute the merged ``labelIds`` payload for a single task.
 
     Returns ``None`` when the task would not have any labels (so the caller
     can simply omit ``labelIds`` from the GraphQL input - matching the
     pre-LOC-22 behaviour for legacy tasks with no frontmatter ``areas``).
+
+    ``repo_label_ids`` is the lazy label-id cache ``ensure_repo_labels``
+    built before the wave started; it carries the ids for every managed
+    ``repo:<slug>`` label the wave wants, regardless of whether the issue
+    already carried the label or not. The merge keeps the existing-id
+    path as a fast-path so legacy tasks that already carry the label do
+    not pay a redundant lookup, then falls back to the cache for the
+    newly-created label id.
     """
 
     existing_label_entries = _collect_existing_labels(existing)
@@ -870,7 +1273,13 @@ def merged_label_ids(
 
     repo_id_by_slug: dict[str, str] = {}
     if desired_repo is not None and desired_repo.kind == "managed" and desired_repo.slug:
+        # LOC-25: prefer the existing-issue id, then fall back to the
+        # lazy cache. The cache wins for new leaves; the existing id wins
+        # when re-publishing an issue that already carries the slug (so
+        # Linear keeps the same label row instead of creating duplicates).
         label_id = _lookup_repo_label_id(slug=desired_repo.slug, existing=existing)
+        if label_id is None and repo_label_ids:
+            label_id = repo_label_ids.get(desired_repo.slug)
         if label_id:
             repo_id_by_slug[desired_repo.slug] = label_id
 

@@ -127,6 +127,7 @@ blocks: []
 areas:
   - gateway
 parent: null
+repo: opensymphony
 ---
 ```
 
@@ -141,6 +142,14 @@ Field rules:
   `memory`, `openhands-runtime`, or `gateway`. The converter publishes them as
   canonical Linear labels named `area:<slug>`.
 - `parent` is `null` for top-level issues or a task ID for a Linear sub-issue.
+- `repo` is **required on leaf tasks** (top-level issues without `parent`
+  and every sub-issue) and **forbidden on parent/review tasks** (top-level
+  issues with sub-issues). The value MUST be the **exact** project-set
+  inventory repo slug / `RepoRef.key` — no lowercasing, no slugification,
+  no whitespace coercion beyond trimming. The converter publishes it as a
+  canonical Linear label named `repo:<slug>`. See the *Reserved Linear
+  label namespaces* section below for the dual-source-of-truth contract
+  with `opensymphony-planning`.
 
 ### Reserved Linear label namespaces
 
@@ -157,13 +166,11 @@ The two namespaces are deliberately separate:
 
 - `areas` frontmatter owns only `area:<slug>` labels. A planning task MUST NOT
   place a `repo:<slug>` entry (or any other reserved non-area namespace) in
-  its `areas` list. The converter MUST reject `areas` values that use a
-  reserved non-area namespace such as `repo:`; until that validation lands
-  (see [LOC-22](https://linear.app/localgputokenscrazy/issue/LOC-22/converter-additive-label-update)
-  and [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate)),
-  `area_slug()` still silently normalizes a bare `repo:foo` entry to the
-  area slug `repo-foo`, so keep `areas` strictly area-shaped at planning
-  time.
+  its `areas` list. The converter's `normalize_area_slugs` helper rejects
+  `areas` values that use a reserved non-area namespace such as `repo:`
+  (see [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate));
+  keep `areas` strictly area-shaped at planning time so the validation
+  never has to fire on real waves.
 - `repo:<slug>` is published from the task's `repo` frontmatter (see
   `convert-tasks-to-linear/SKILL.md`) and uses the **exact** project-set repo
   slug / `RepoRef.key`. It is not lowercased, slugified, or otherwise coerced.
