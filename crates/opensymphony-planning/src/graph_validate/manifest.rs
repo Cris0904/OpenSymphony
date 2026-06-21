@@ -222,6 +222,22 @@ impl ManifestValidator {
         // through `ManifestValidator::validate_against_repo_root` so the
         // Rust validator can emit `unknown-repo-slug` alongside
         // `parent_with_repo` / `missing_leaf_repo`.
+        //
+        //   Status:    optional enhancement, NOT a hard requirement for
+        //              Phase 1 acceptance (LOC-25 AC #4 keeps inventory
+        //              validation in the Python converter).
+        //   Trigger:   a future "single binary validator" wave (see
+        //              docs/tasks/osym-621 follow-ups) that wants the
+        //              Rust side to fail-fast on out-of-inventory slugs
+        //              before the converter even runs.
+        //   Prereq:    `AvailableRepoInventory` is already constructed in
+        //              `generator/session.rs`; the work is plumbing that
+        //              context into `validate_against_repo_root` and
+        //              adding a new `unknown_repo_slug` finding.
+        //   Estimate:  ~1-2 days, mostly wiring + 1 new finding variant
+        //              + tests.
+        //   Out of scope for LOC-25: keep this comment in sync with the
+        //              Python converter's authoritative inventory check.
         let parent_ids: BTreeSet<&str> = entries
             .iter()
             .filter_map(|(_, fm)| fm.parent.as_deref())

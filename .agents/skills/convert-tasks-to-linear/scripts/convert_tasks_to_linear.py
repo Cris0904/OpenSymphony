@@ -1291,6 +1291,17 @@ def _find_existing_repo_label_case_insensitive(
 
 
 def find_issue_label(client: LinearClient, name: str, team_id: str) -> dict[str, Any] | None:
+    """Look up an existing issue label by *exact* name on the given team.
+
+    This is intentionally case-sensitive: it is used to dedupe *area*
+    labels (e.g. ``area:planning``), where exact case is the contract —
+    ``area:Planning`` and ``area:planning`` are different labels by spec
+    (LOC-24). Repo labels, by contrast, may have legacy case-variants
+    on Linear (``repo:OpenSymphony`` vs the inventory key
+    ``repo:opensymphony``); for those, use
+    ``_find_existing_repo_label_case_insensitive`` so a legacy label is
+    reused instead of being shadowed by a fresh exact-case emission.
+    """
     data = client.call(
         "issue_label_by_name.graphql",
         {"name": name, "teamId": team_id, "first": 10},
