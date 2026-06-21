@@ -626,6 +626,50 @@ class EnsureIssuesLabelTests(unittest.TestCase):
         self.assertIn("label-area-existing", sent_label_ids)
         self.assertIn("label-unmanaged", sent_label_ids)
 
+    def test_repo_managed_missing_label_raises(self) -> None:
+        """A repo-aware managed slug that has no matching label raises clearly.
+
+        LOC-25 callers that forget to create the label first must surface a
+        concrete ``ValueError`` from the merge helper, not a silent wipe.
+        ``_lookup_repo_label_id`` returns ``None`` when the issue does not
+        already carry that ``repo:<slug>``, so ``repo_id_by_slug`` is empty
+        and ``merge_label_ids`` raises before ``issue_update`` runs.
+        """
+
+        task = _make_task(task_id="T1", title="Missing repo", areas=["planning"])
+        package = _make_package(tasks={"T1": task})
+        existing = _make_existing_issue(
+            issue_id="issue-7",
+            identifier="TEST-8",
+            labels=[{"id": "label-area", "name": "area:planning"}],
+        )
+        project = _make_project(issues=[existing])
+
+        fake = self._make_fake_client(project)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package.repo_root = Path(tmp)
+            with self.assertRaises(ValueError) as ctx:
+                ctl.ensure_issues(
+                    client=fake.real_client,
+                    package=package,
+                    project=project,
+                    team=_make_team(),
+                    milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                    publish={},
+                    desired_repo_by_task={
+                        "T1": DesiredRepo.managed("does-not-exist")
+                    },
+                )
+        self.assertIn("does-not-exist", str(ctx.exception))
+        # The converter never reached ``issue_update`` for this task.
+        update_ids = [
+            variables["id"]
+            for name, variables in fake.calls
+            if name == "issue_update.graphql"
+        ]
+        self.assertNotIn("issue-7", update_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

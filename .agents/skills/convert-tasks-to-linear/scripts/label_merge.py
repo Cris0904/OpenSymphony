@@ -140,7 +140,8 @@ def merge_label_ids(
 
     if desired_repo is not None:
         if desired_repo.kind == "managed":
-            assert desired_repo.slug, "managed DesiredRepo requires a slug"
+            if not desired_repo.slug:
+                raise ValueError("managed DesiredRepo requires a slug")
             label_id = repo_lookup.get(desired_repo.slug)
             if not label_id:
                 raise ValueError(

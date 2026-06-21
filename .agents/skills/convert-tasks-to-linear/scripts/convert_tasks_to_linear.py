@@ -870,7 +870,7 @@ def merged_label_ids(
 
     repo_id_by_slug: dict[str, str] = {}
     if desired_repo is not None and desired_repo.kind == "managed" and desired_repo.slug:
-        label_id = _lookup_repo_label_id(client=None, slug=desired_repo.slug, existing=existing)
+        label_id = _lookup_repo_label_id(slug=desired_repo.slug, existing=existing)
         if label_id:
             repo_id_by_slug[desired_repo.slug] = label_id
 
@@ -921,7 +921,6 @@ def _collect_existing_labels(issue: dict[str, Any] | None) -> list[dict[str, Any
 
 def _lookup_repo_label_id(
     *,
-    client: LinearClient | None,
     slug: str,
     existing: dict[str, Any] | None,
 ) -> str | None:
