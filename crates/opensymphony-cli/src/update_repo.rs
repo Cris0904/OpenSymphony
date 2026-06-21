@@ -12,13 +12,33 @@ use thiserror::Error;
 use tokio::process::Command;
 
 use super::memory_init_summary::memory_init_change_lists;
+use super::project_set_migration::{MigrationError, MigrationOutcome, run_migration};
 use crate::opensymphony_cli::init_repo::{self, InitCommandError};
 use crate::opensymphony_memory::{MemoryInitApplyReport, ensure_memory_initialized};
 
 const DEFAULT_CRATE_METADATA_URL: &str = "https://crates.io/api/v1/crates/opensymphony";
 
 #[derive(Debug, Args, Clone)]
-pub struct UpdateArgs {}
+pub struct UpdateArgs {
+    /// Run only the existing-repo project-set migration step and exit.
+    ///
+    /// Performs the migration (creates/updates `.opensymphony/project-set.yaml`
+    /// and rewrites `WORKFLOW.md`) and then exits without touching anything
+    /// else: it skips the OpenSymphony self-update, the skill refresh, and
+    /// the project memory init steps. Use this to recover from a partially
+    /// applied migration without re-running the rest of the `update` flow
+    /// (LOC-20).
+    #[arg(long)]
+    pub migrate_only: bool,
+    /// Skip the existing-repo project-set migration step entirely.
+    ///
+    /// `opensymphony update` will then run the self-update / skill refresh /
+    /// memory init path without touching `.opensymphony/project-set.yaml`
+    /// or `WORKFLOW.md`. Use when the migration has already been applied
+    /// (LOC-20).
+    #[arg(long)]
+    pub skip_migration: bool,
+}
 
 #[derive(Debug, Error)]
 enum UpdateCommandError {
@@ -72,6 +92,16 @@ enum UpdateCommandError {
         #[source]
         source: io::Error,
     },
+    /// Existing-repo project-set migration failed (LOC-20). Surfaced as a
+    /// fatal error so operators get a clear, actionable message before any
+    /// other `update` step runs against a partially-migrated repo.
+    #[error("existing-repo project-set migration failed: {0}")]
+    Migration(#[from] MigrationError),
+    /// `--migrate-only` and `--skip-migration` were both passed. These
+    /// flags are mutually exclusive: one requests the migration step
+    /// alone, the other suppresses it (LOC-20).
+    #[error("--migrate-only and --skip-migration cannot be used together")]
+    ConflictingFlags,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,10 +170,38 @@ pub async fn run_command(args: UpdateArgs) -> ExitCode {
 }
 
 async fn run_update(args: UpdateArgs) -> Result<(), UpdateCommandError> {
-    let _ = args;
-
     let current_dir = env::current_dir().map_err(UpdateCommandError::CurrentDir)?;
     println!("Updating OpenSymphony from {}", current_dir.display());
+
+    if args.migrate_only && args.skip_migration {
+        // `--migrate-only` requests the migration step alone;
+        // `--skip-migration` suppresses it. Silently ignoring either
+        // would mask an operator mistake, so we surface the conflict
+        // explicitly (LOC-20).
+        return Err(UpdateCommandError::ConflictingFlags);
+    }
+
+    let target_repo = detect_target_repo_markers(&current_dir);
+
+    if args.migrate_only {
+        if target_repo.looks_like_target_repo() {
+            run_existing_repo_migration(&current_dir)?;
+        } else {
+            println!(
+                "`--migrate-only` requested but this directory is not an OpenSymphony target repo; nothing to migrate."
+            );
+        }
+        println!("OpenSymphony update complete.");
+        return Ok(());
+    }
+
+    // Run the existing-repo project-set migration BEFORE self-update / skill
+    // refresh so local migration can succeed even when the network self-update
+    // path is unavailable. The migration is atomic; failures abort the entire
+    // `opensymphony update` flow (LOC-20).
+    if target_repo.looks_like_target_repo() && !args.skip_migration {
+        run_existing_repo_migration(&current_dir)?;
+    }
 
     let client = Client::builder()
         .user_agent(concat!("opensymphony-cli/", env!("CARGO_PKG_VERSION")))
@@ -154,7 +212,6 @@ async fn run_update(args: UpdateArgs) -> Result<(), UpdateCommandError> {
     let update_plan = plan_self_update(&client).await?;
     run_self_update(&update_plan).await?;
 
-    let target_repo = detect_target_repo_markers(&current_dir);
     if !target_repo.looks_like_target_repo() {
         let missing = target_repo.missing_markers();
         println!(
@@ -353,6 +410,30 @@ fn print_memory_init_summary(target_repo: &Path, report: &MemoryInitApplyReport)
     print_paths("Created", &created);
     print_paths("Updated", &updated);
     println!("Unchanged: {} file(s)", unchanged.len());
+}
+
+/// Runs the existing-repo project-set migration against `target_repo` and
+/// prints the operator-facing summary (LOC-20).
+///
+/// The migration module is atomic, so any failure (literal token, missing
+/// remote, conflict) leaves the on-disk repo untouched and is returned as
+/// an `UpdateCommandError::Migration` so the `opensymphony update` command
+/// aborts with a clear, actionable message. The ticket's acceptance
+/// criteria require the migration to fail clearly on every unsafe input
+/// rather than silently writing placeholders or partial state.
+fn run_existing_repo_migration(target_repo: &Path) -> Result<(), UpdateCommandError> {
+    println!("Detected an OpenSymphony target repo; running existing-repo project-set migration.");
+    let outcome = run_migration(target_repo)?;
+    println!("{}", render_migration_outcome(&outcome, target_repo));
+    Ok(())
+}
+
+fn render_migration_outcome(outcome: &MigrationOutcome, target_repo: &Path) -> String {
+    // Centralized wrapper that re-exports the migration summary in the
+    // exact shape we want for `opensymphony update` operators (the
+    // migration module keeps the underlying renderer stable for tests).
+    let workflow_path = target_repo.join("WORKFLOW.md");
+    super::project_set_migration::render_summary(outcome, &workflow_path)
 }
 
 fn join_for_display(items: &[&str]) -> String {

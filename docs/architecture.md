@@ -197,6 +197,23 @@ Notable removals:
 - the old bridge CLI command
 - provider-specific AI review secret naming
 
+Existing-repo project-set migration:
+
+- legacy single-repo `WORKFLOW.md` files that carry project-set-owned global
+  fields (`tracker.*`, `polling.interval_ms`, `agent.max_concurrent_agents`)
+  are rewritten in place by `opensymphony update`. The migration writes
+  `.opensymphony/project-set.yaml` with the moved linear scope, polling,
+  total concurrency, and repo inventory entry; preserves repo-local workflow
+  fields and the prompt body byte-identically; and is idempotent on repeat
+  invocations. The migration runs before the OpenSymphony self-update /
+  skill refresh / memory init steps so a broken `cargo install` cannot
+  block the local migration. Operators can opt in to migration-only via
+  `opensymphony update --migrate-only`, opt out via
+  `opensymphony update --skip-migration`, or fail the command when the
+  legacy `tracker.api_key` is a literal token, the git remote is missing
+  or ambiguous, or the existing `.opensymphony/project-set.yaml` already
+  conflicts with the migrated value.
+
 <!-- BEGIN OPENSYMPHONY MANAGED MEMORY SYNC -->
 
 ## Current model

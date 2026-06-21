@@ -112,6 +112,15 @@ pub struct ProjectSetUpsertPlan {
     /// `linear.terminal_states` value used when the file is created from
     /// scratch. Defaults to [`DEFAULT_TERMINAL_STATES`] when omitted.
     pub linear_terminal_states: Option<Vec<String>>,
+    /// `linear.endpoint` value used when the file is created from scratch.
+    ///
+    /// `None` (the default) lets the resolver fall back to its built-in
+    /// endpoint. The migration path uses this field to forward a legacy
+    /// `tracker.endpoint` value carried over from a pre-project-set
+    /// `WORKFLOW.md` (LOC-20).
+    #[allow(dead_code)]
+    // Reserved for callers that need to override the default endpoint (LOC-20).
+    pub linear_endpoint: Option<String>,
 }
 
 /// Outcome of an upsert. Useful for tests and operator-facing summaries.
@@ -357,7 +366,7 @@ fn build_fresh_front_matter(
         slug: Some(project_set_slug.clone()),
         name: None,
         linear: ProjectSetLinearFrontMatter {
-            endpoint: None,
+            endpoint: plan.linear_endpoint.clone(),
             project_slug: Some(linear_project_slug),
             api_key_env: Some(api_key_env),
             active_states: Some(active_states),

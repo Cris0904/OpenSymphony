@@ -54,6 +54,41 @@ when it actually needs to. If the current directory already looks like an
 OpenSymphony target repo because it has both `WORKFLOW.md` and `config.yaml`,
 the command then refreshes changed or new files under `.agents/skills/`.
 
+### Migrating a legacy single-repo config (LOC-20)
+
+Repositories bootstrapped before the strict project-set runtime boundary carry
+project-set-owned global fields (`tracker.*`, `polling.interval_ms`,
+`agent.max_concurrent_agents`) directly in `WORKFLOW.md` and do not have a
+`.opensymphony/project-set.yaml`. `opensymphony update` detects that legacy
+shape and, on every invocation inside such a target repo, performs an atomic
+migration:
+
+- generates or upserts `.opensymphony/project-set.yaml` with all required
+  `project_set.*` fields (slug, Linear scope, polling, total concurrency, and
+  one repo inventory entry);
+- rewrites `WORKFLOW.md` to strip the migrated global fields, preserving the
+  repo-local workspace, hooks, agent settings, OpenHands settings, and the
+  byte-identical prompt body;
+- preserves `config.yaml` and the `.gitignore` runtime policy, keeping
+  `.opensymphony/project-set.yaml` versioned.
+
+The migration is atomic: any unsafe auth (`tracker.api_key` that is neither
+omitted nor an env-var reference), missing or ambiguous git remote, or
+existing project-set conflict aborts the migration before any file is written.
+Idempotency is guaranteed — re-running `opensymphony update` produces no
+duplicate repo inventory entries and no churn in already-migrated files.
+
+Two flags control the migration step inside `opensymphony update`:
+
+- `--migrate-only` runs the migration step alone and exits. It skips the
+  OpenSymphony self-update, the skill refresh, and the project memory init
+  steps. Use this to recover from a partially applied migration without
+  re-running the rest of the update flow.
+- `--skip-migration` opts the target repo out of the migration step entirely.
+  The rest of `update` (self-update check, skill refresh, memory init) still
+  runs. Passing `--migrate-only` and `--skip-migration` together is a hard
+  error.
+
 The template repository is still the upstream source of those starter assets,
 but it is an implementation detail of `opensymphony init`, not a required
 manual setup step:

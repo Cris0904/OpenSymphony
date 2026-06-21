@@ -98,9 +98,40 @@ maintenance path:
 
 - checks the latest published `opensymphony` version and skips
   `cargo install opensymphony` when the running CLI is already current
+- for legacy single-repo configs (no `.opensymphony/project-set.yaml`, or
+  `WORKFLOW.md` still carrying project-set-owned global fields like
+  `tracker.*`, `polling.interval_ms`, or `agent.max_concurrent_agents`),
+  plans and applies the existing-repo project-set migration before any
+  other step. The migration builds an atomic plan (linear scope, polling,
+  total concurrency, repo inventory entry), writes
+  `.opensymphony/project-set.yaml`, and rewrites `WORKFLOW.md` to remove
+  the moved global fields while preserving the prompt body and every
+  repo-local setting. Literal Linear tokens, missing or ambiguous remotes,
+  and conflicting existing project-set entries fail before any file is
+  written. The migration runs before the self-update / skill refresh / memory
+  init steps so a network self-update failure cannot block local migration.
 - refreshes changed or new template-managed files under `.agents/skills/`
-- leaves `WORKFLOW.md`, `AGENTS.md`, `.github/*`, and repo-local extra skills
-  alone
+- leaves `WORKFLOW.md` (when the repo is already on the strict
+  project-set boundary), `AGENTS.md`, `.github/*`, and repo-local extra
+  skills alone
+
+Operator-facing flags for the migration step:
+
+- `opensymphony update` (default) — runs the migration first, then the
+  self-update / skill refresh / memory init path. Re-runs are no-ops once
+  the repo is on the strict project-set boundary.
+- `opensymphony update --migrate-only` — runs only the existing-repo
+  project-set migration and exits. Skips the OpenSymphony self-update,
+  template skill refresh, and project memory init. Useful for recovering
+  from a partially applied migration without re-running the rest of the
+  update flow.
+- `opensymphony update --skip-migration` — runs the self-update / skill
+  refresh / memory init path without touching `.opensymphony/project-set.yaml`
+  or `WORKFLOW.md`. Use this when the migration has already been applied
+  for a different target repo inside a shared checkout, or when the
+  operator wants to opt out of the one-time migration step.
+- `--migrate-only` and `--skip-migration` are mutually exclusive; the CLI
+  fails with a clear error if both are passed.
 
 Normal user installs use bundled DuckDB. This keeps `cargo install
 opensymphony` and `opensymphony update` turnkey even when the memory database is
@@ -366,6 +397,16 @@ opensymphony doctor --config ./config.yaml --rehydrate
 If an older target repo still contains `openhands.mcp`, remove that block.
 OpenSymphony 1.0.0 expects Linear access through `LINEAR_API_KEY` and the
 repo-local GraphQL helper assets copied by `opensymphony init`.
+
+Already-bootstrapped single-repo target repos must run the existing-repo
+project-set migration once before the strict project-set runtime boundary
+is enforced. Run `opensymphony update` from the target repo root to perform
+the migration in place. The migration writes
+`.opensymphony/project-set.yaml`, removes the moved project-set-owned global
+fields from `WORKFLOW.md`, and is idempotent on subsequent runs. Use
+`opensymphony update --migrate-only` to recover from a partial migration,
+or `opensymphony update --skip-migration` to bypass the migration step in
+shared checkouts where the target repo has already been migrated.
 
 <!-- BEGIN OPENSYMPHONY MANAGED MEMORY SYNC -->
 
