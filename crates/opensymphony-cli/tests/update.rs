@@ -733,7 +733,7 @@ async fn update_migration_runs_even_when_cargo_self_update_fails() {
         fs::set_permissions(&cargo_path, permissions).expect("fake cargo chmod");
     }
 
-    Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
         .arg("update")
         .current_dir(repo.path())
         .env("PATH", path_only(fake_bin_dir.as_path()))
@@ -760,5 +760,11 @@ async fn update_migration_runs_even_when_cargo_self_update_fails() {
     assert!(
         !workflow_after.contains("kind: linear"),
         "stale tracker fields must be removed even when self-update fails"
+    );
+    assert!(
+        !output.status.success(),
+        "overall command should fail because cargo install exits non-zero: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
