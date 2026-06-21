@@ -1639,6 +1639,11 @@ async fn call_memory_tool(config: &MemoryConfig, params: Value) -> Result<Value,
                     "state": issue.state,
                     "milestone": issue.milestone,
                     "areas": issue.areas,
+                    "repository": issue.repository.as_ref().map(|repo| json!({
+                        "key": repo.key,
+                        "url": repo.url,
+                        "defaultBranch": repo.default_branch,
+                    })),
                     "docsSyncStatus": issue.docs_sync_status,
                     "warningCount": issue.warning_count,
                     "capsulePath": path_for_json(config, &issue.capsule_path)
@@ -2160,6 +2165,14 @@ fn env_scope_value(name: &str) -> Option<String> {
 }
 
 fn scope_filter_from_mcp(arguments: &Value, include_issue: bool) -> MemoryScopeFilter {
+    // LOC-26: the worker handoff may send the resolved `RepoRef.key` either
+    // as the dedicated `executionRepoKey` field (preferred) or as the
+    // legacy `repo` field (transitional fallback for the migration window).
+    // Prefer `executionRepoKey` so a key-bearing request never silently
+    // downgrades to path-prefix matching when `repo` carries a non-key
+    // value (e.g. a run-level target repo path).
+    let repo = optional_string_arg(arguments, "executionRepoKey")
+        .or_else(|| optional_string_arg(arguments, "repo"));
     MemoryScopeFilter {
         project_set: optional_string_arg(arguments, "projectSet"),
         project: optional_string_arg(arguments, "project"),
@@ -2167,7 +2180,7 @@ fn scope_filter_from_mcp(arguments: &Value, include_issue: bool) -> MemoryScopeF
         issue: include_issue
             .then(|| optional_string_arg(arguments, "issue"))
             .flatten(),
-        repo: optional_string_arg(arguments, "repo"),
+        repo,
         area: optional_string_arg(arguments, "area"),
         all_accessible: bool_arg(arguments, "allAccessible")
             || bool_arg(arguments, "all_accessible"),
@@ -3288,7 +3301,8 @@ mod tests {
         MemoryServerAuth, authorize_memory_request, context_source_from_mcp,
         memory_server_health_payload, memory_tool_descriptors, origin_is_localhost,
         parse_remote_memory_response, remote_memory_tool_token, replace_or_append_managed_section,
-        required_access_for_request, resolve_code_intel_repo, trim_auto_memory_status_log,
+        required_access_for_request, resolve_code_intel_repo, scope_filter_from_mcp,
+        trim_auto_memory_status_log,
     };
     use crate::opensymphony_memory::{MemoryConfig, MemoryError};
     use axum::http::{HeaderMap, HeaderValue, header};
@@ -3492,6 +3506,41 @@ mod tests {
         assert_eq!(source.issues[0].labels, vec!["area:memory"]);
         assert_eq!(source.issues[0].children[0].identifier, "COE-101");
         assert_eq!(source.issues[0].blocked_by[0].identifier, "COE-100");
+    }
+
+    // LOC-26: the MCP server must consume the resolved `RepoRef.key` from the
+    // dedicated `executionRepoKey` field, not just the legacy `repo` field.
+    // The worker handoff sends both; when both are present the key wins so
+    // a key-bearing request never silently downgrades to path-prefix
+    // matching. When only `repo` is present (the transitional migration
+    // window) the server must still resolve a usable repo scope.
+    #[test]
+    fn scope_filter_from_mcp_prefers_execution_repo_key_over_repo() {
+        let scope = scope_filter_from_mcp(
+            &json!({
+                "executionRepoKey": "open-symphony/example-repo",
+                "repo": "/tmp/legacy-run-level-path",
+            }),
+            false,
+        );
+        assert_eq!(scope.repo.as_deref(), Some("open-symphony/example-repo"));
+    }
+
+    #[test]
+    fn scope_filter_from_mcp_falls_back_to_repo_when_key_missing() {
+        let scope = scope_filter_from_mcp(
+            &json!({
+                "repo": "/tmp/legacy-run-level-path",
+            }),
+            false,
+        );
+        assert_eq!(scope.repo.as_deref(), Some("/tmp/legacy-run-level-path"));
+    }
+
+    #[test]
+    fn scope_filter_from_mcp_skips_repo_when_no_scope_fields_present() {
+        let scope = scope_filter_from_mcp(&json!({}), false);
+        assert!(scope.repo.is_none());
     }
 
     #[test]
