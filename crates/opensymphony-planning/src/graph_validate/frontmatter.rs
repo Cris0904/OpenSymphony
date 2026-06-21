@@ -27,6 +27,14 @@ use crate::opensymphony_planning::generator::domain::TaskId;
 /// and `blocks` fields are camelCase to match the rest of the project;
 /// the manifest validator accepts both spellings by listing the legacy
 /// snake_case alias under `#[serde(alias)]`.
+///
+/// LOC-25 adds the `repo` field: a single, exact project-set repo
+/// slug. It is required on leaves (top-level issues without
+/// sub-issues and every sub-issue) and forbidden on parent/review
+/// nodes (top-level issues with sub-issues). The validator must not
+/// lowercase, slugify, or otherwise coerce the value; the string is
+/// preserved verbatim so the manifest validator can compare it
+/// character-for-character against the project-set inventory.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TaskFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,6 +55,17 @@ pub struct TaskFrontmatter {
     pub parent: Option<String>,
     #[serde(default)]
     pub areas: Vec<String>,
+    /// Repository slug (LOC-25). `Some(slug)` on leaves, `None` on
+    /// parent/review nodes. The slug is preserved exactly as written;
+    /// the manifest validator trims surrounding whitespace but does
+    /// not lowercase or slugify.
+    ///
+    /// A list value (e.g. `repo: [foo, bar]`) is rejected by serde
+    /// itself with a type error; that surfaces in the manifest
+    /// validator's `invalid_task_files` list so the planner can fix
+    /// the frontmatter before publish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Any additional fields the task file carries. Preserved so the
     /// validator can re-emit the original block after normalisation.
     #[serde(flatten)]
@@ -224,6 +243,42 @@ mod tests {
         fs::write(&malformed, "---\nid: [unclosed\n---\n# body\n").expect("write");
         let err =
             read_task_frontmatter_or_default(&malformed).expect_err("yaml error must propagate");
+        assert!(matches!(err, TaskFrontmatterError::Yaml { .. }));
+    }
+
+    /// LOC-25: the parser preserves the exact repo slug (no
+    /// lowercasing, no slugification). Mixed-case and hyphenated slugs
+    /// must round-trip character-for-character so the validator can
+    /// compare against the project-set inventory key.
+    #[test]
+    fn parses_repo_slug_preserving_exact_case() {
+        let text = "---\nid: OSYM-621\ntitle: T\nrepo: OpenSymphony-Config\n---\n# body\n";
+        let parsed = parse_task_text(text, "test.md").expect("parse should succeed");
+        assert_eq!(
+            parsed.frontmatter.repo.as_deref(),
+            Some("OpenSymphony-Config")
+        );
+    }
+
+    /// LOC-25: a parent/review task with no `repo:` is the expected
+    /// shape. The parser surfaces `repo == None` so the manifest
+    /// validator can distinguish "intentionally parent" from
+    /// "forgot to set repo on a leaf".
+    #[test]
+    fn parses_absent_repo_for_parent_shape() {
+        let text = "---\nid: PARENT-1\ntitle: P\n---\n# body\n";
+        let parsed = parse_task_text(text, "test.md").expect("parse should succeed");
+        assert!(parsed.frontmatter.repo.is_none());
+    }
+
+    /// LOC-25: a list value for `repo:` is a hard error. The parser
+    /// must reject it so a planning wave that accidentally writes
+    /// `repo: [foo, bar]` cannot slip through into the manifest.
+    #[test]
+    fn repo_must_be_scalar_not_list() {
+        let text = "---\nid: BAD-1\ntitle: B\nrepo:\n  - foo\n  - bar\n---\n# body\n";
+        let err =
+            parse_task_text(text, "test.md").expect_err("list repo must be rejected by the parser");
         assert!(matches!(err, TaskFrontmatterError::Yaml { .. }));
     }
 }

@@ -231,6 +231,7 @@ fn parallelizable_waves_deterministic(artifacts: &PlanArtifacts) -> Vec<Vec<Task
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opensymphony_planning::generator::domain::TaskRoutingMetadata;
 
     use crate::opensymphony_planning::generator::domain::{
         AcceptanceCriterion, ManifestTask, PlannedIssue, PlannedMilestone, PlannedSubIssue,
@@ -287,6 +288,7 @@ mod tests {
             blocks: blocks.iter().map(|s| TaskId::new(*s)).collect(),
             sub_issues: vec![],
             task_file: Some(format!("docs/tasks/{}.md", id)),
+            routing: TaskRoutingMetadata::default(),
         }
     }
 
@@ -311,6 +313,7 @@ mod tests {
             blocked_by: blocked_by.iter().map(|s| TaskId::new(*s)).collect(),
             blocks: vec![],
             task_file: Some(format!("docs/tasks/{}.md", id)),
+            routing: TaskRoutingMetadata::default(),
         }
     }
 
@@ -366,6 +369,7 @@ mod tests {
     fn builder_emits_parent_of_edges_for_sub_issues() {
         let parent_issue = PlannedIssue {
             sub_issues: vec![sub_issue("OSYM-734.SUB", vec![])],
+            routing: TaskRoutingMetadata::default(),
             ..issue("OSYM-734", vec![], vec![])
         };
         let artifacts = artifacts_for(vec![parent_issue]);

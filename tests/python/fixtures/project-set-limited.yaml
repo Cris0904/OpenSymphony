@@ -1,0 +1,12 @@
+schema_version: 1
+
+project_set:
+  slug: limited-fixture
+  name: LOC-25 Limited Fixture (Single Repo)
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:example/opensymphony.git
+          default_branch: main

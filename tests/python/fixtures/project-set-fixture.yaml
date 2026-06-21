@@ -1,0 +1,15 @@
+schema_version: 1
+
+project_set:
+  slug: test-fixture
+  name: LOC-25 Test Fixture
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:example/opensymphony.git
+          default_branch: main
+        - slug: OpenSymphony-Config
+          url: git@github.com:example/opensymphony-config.git
+          default_branch: main

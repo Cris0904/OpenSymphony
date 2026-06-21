@@ -73,6 +73,30 @@ class FakeClient:
                 }
             return {"data": {"issueLabels": {"nodes": []}}}
 
+        if query_name == "issue_label_by_name_case_insensitive.graphql":
+            name = variables["name"]
+            name_lower = name.lower()
+            # Find any pre-registered label whose name matches the
+            # inventory slug case-insensitively but is NOT identical to
+            # the requested name (the exact-case match is the primary
+            # path, handled by issue_label_by_name.graphql above).
+            for existing_name, existing_id in self.label_names_to_ids.items():
+                if (
+                    isinstance(existing_name, str)
+                    and existing_name.lower() == name_lower
+                    and existing_name != name
+                ):
+                    return {
+                        "data": {
+                            "issueLabels": {
+                                "nodes": [
+                                    {"id": existing_id, "name": existing_name}
+                                ]
+                            }
+                        }
+                    }
+            return {"data": {"issueLabels": {"nodes": []}}}
+
         if query_name == "issue_label_create.graphql":
             name = variables["input"]["name"]
             label_id = f"label-{name.replace(':', '-')}"
@@ -626,14 +650,15 @@ class EnsureIssuesLabelTests(unittest.TestCase):
         self.assertIn("label-area-existing", sent_label_ids)
         self.assertIn("label-unmanaged", sent_label_ids)
 
-    def test_repo_managed_missing_label_raises(self) -> None:
-        """A repo-aware managed slug that has no matching label raises clearly.
+    def test_repo_managed_missing_label_is_created_lazily(self) -> None:
+        """LOC-25: managed ``repo:<slug>`` labels are created on demand.
 
-        LOC-25 callers that forget to create the label first must surface a
-        concrete ``ValueError`` from the merge helper, not a silent wipe.
-        ``_lookup_repo_label_id`` returns ``None`` when the issue does not
-        already carry that ``repo:<slug>``, so ``repo_id_by_slug`` is empty
-        and ``merge_label_ids`` raises before ``issue_update`` runs.
+        ``ensure_repo_labels`` lazily creates the ``repo:<slug>`` label
+        before any issue gets updated, so a leaf whose slug does not
+        already exist on the team still ends up with exactly one
+        ``repo:<slug>`` label after publish. The merge helper no longer
+        raises a ``ValueError`` for that case because the cache now
+        carries the newly created id.
         """
 
         task = _make_task(task_id="T1", title="Missing repo", areas=["planning"])
@@ -649,26 +674,162 @@ class EnsureIssuesLabelTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             package.repo_root = Path(tmp)
-            with self.assertRaises(ValueError) as ctx:
-                ctl.ensure_issues(
-                    client=fake.real_client,
-                    package=package,
-                    project=project,
-                    team=_make_team(),
-                    milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
-                    publish={},
-                    desired_repo_by_task={
-                        "T1": DesiredRepo.managed("does-not-exist")
-                    },
-                )
-        self.assertIn("does-not-exist", str(ctx.exception))
-        # The converter never reached ``issue_update`` for this task.
-        update_ids = [
-            variables["id"]
+            ctl.ensure_issues(
+                client=fake.real_client,
+                package=package,
+                project=project,
+                team=_make_team(),
+                milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                publish={},
+                desired_repo_by_task={
+                    "T1": DesiredRepo.managed("does-not-exist")
+                },
+            )
+
+        # The lazy creator fired before any issue update.
+        create_names = [
+            variables["input"]["name"]
             for name, variables in fake.calls
-            if name == "issue_update.graphql"
+            if name == "issue_label_create.graphql"
         ]
-        self.assertNotIn("issue-7", update_ids)
+        self.assertIn("repo:does-not-exist", create_names)
+
+        # The final ``issue_update`` payload carried the newly-created
+        # repo label id (the label id is mocked as ``label-repo:does-not-exist``).
+        sent_label_ids = fake.last_update()["input"]["labelIds"]
+        self.assertIn("label-repo-does-not-exist", sent_label_ids)
+        self.assertIn("label-area", sent_label_ids)
+
+    def test_repo_label_case_insensitive_fallback_reuses_legacy_label(self) -> None:
+        """PR #15 review: a case-variant existing label is reused, not duplicated.
+
+        If a legacy tool or manual operator already created
+        ``repo:OpenSymphony`` on the team, ``ensure_repo_labels`` should
+        reuse that label id rather than creating a duplicate
+        ``repo:opensymphony``. The inventory slug stays lowercase; the
+        legacy label name is the one we re-use, so the contract that
+        *new* labels are emitted with the exact inventory key is
+        preserved.
+        """
+
+        task = _make_task(
+            task_id="T1", title="Case-insensitive repo", areas=["planning"]
+        )
+        package = _make_package(tasks={"T1": task})
+        existing = _make_existing_issue(
+            issue_id="issue-7",
+            identifier="TEST-8",
+            labels=[
+                {"id": "label-area", "name": "area:planning"},
+                # Legacy case-variant label on the team.
+                {
+                    "id": "label-legacy-OpenSymphony",
+                    "name": "repo:OpenSymphony",
+                },
+            ],
+        )
+        project = _make_project(issues=[existing])
+
+        fake = self._make_fake_client(project)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package.repo_root = Path(tmp)
+            ctl.ensure_issues(
+                client=fake.real_client,
+                package=package,
+                project=project,
+                team=_make_team(),
+                milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                publish={},
+                desired_repo_by_task={
+                    "T1": DesiredRepo.managed("opensymphony")
+                },
+            )
+
+        # The exact-case lookup was tried first.
+        exact_lookups = [
+            variables["name"]
+            for name, variables in fake.calls
+            if name == "issue_label_by_name.graphql"
+        ]
+        self.assertIn("repo:opensymphony", exact_lookups)
+
+        # The case-insensitive fallback then found the legacy label and
+        # reused its id; no new ``issueLabelCreate`` for repo fired.
+        case_insensitive_lookups = [
+            variables["name"]
+            for name, variables in fake.calls
+            if name == "issue_label_by_name_case_insensitive.graphql"
+        ]
+        self.assertIn("repo:opensymphony", case_insensitive_lookups)
+
+        repo_creates = [
+            variables["input"]["name"]
+            for name, variables in fake.calls
+            if name == "issue_label_create.graphql"
+            and variables["input"]["name"].startswith("repo:")
+        ]
+        self.assertEqual(
+            repo_creates,
+            [],
+            msg=(
+                "expected no repo label to be created when a case-variant "
+                f"label already exists; got {repo_creates!r}"
+            ),
+        )
+
+        # The final ``issue_update`` payload reused the legacy label id.
+        sent_label_ids = fake.last_update()["input"]["labelIds"]
+        self.assertIn("label-legacy-OpenSymphony", sent_label_ids)
+        self.assertIn("label-area", sent_label_ids)
+
+    def test_repo_label_exact_case_still_creates_when_no_legacy(self) -> None:
+        """PR #15 review: exact-case primary path is unchanged.
+
+        The case-insensitive fallback is opt-in by absence: when no
+        legacy label exists, ``ensure_repo_labels`` still creates the
+        exact-case ``repo:<slug>`` label from the inventory key.
+        """
+
+        task = _make_task(
+            task_id="T1", title="No legacy label", areas=["planning"]
+        )
+        package = _make_package(tasks={"T1": task})
+        existing = _make_existing_issue(
+            issue_id="issue-7",
+            identifier="TEST-8",
+            labels=[{"id": "label-area", "name": "area:planning"}],
+        )
+        project = _make_project(issues=[existing])
+
+        fake = self._make_fake_client(project)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package.repo_root = Path(tmp)
+            ctl.ensure_issues(
+                client=fake.real_client,
+                package=package,
+                project=project,
+                team=_make_team(),
+                milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                publish={},
+                desired_repo_by_task={
+                    "T1": DesiredRepo.managed("opensymphony")
+                },
+            )
+
+        # Both lookups fired (exact-case first, fallback second), and the
+        # primary ``issueLabelCreate`` carried the exact inventory case.
+        repo_creates = [
+            variables["input"]["name"]
+            for name, variables in fake.calls
+            if name == "issue_label_create.graphql"
+            and variables["input"]["name"].startswith("repo:")
+        ]
+        self.assertEqual(repo_creates, ["repo:opensymphony"])
+
+        sent_label_ids = fake.last_update()["input"]["labelIds"]
+        self.assertIn("label-repo-opensymphony", sent_label_ids)
 
 
 if __name__ == "__main__":

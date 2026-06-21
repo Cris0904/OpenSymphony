@@ -117,6 +117,14 @@ pub struct UnderspecifiedSubIssue {
 /// `issue`/`issueId`/`url` fields are populated by the downstream publish
 /// step. Planning-stage output leaves them as `None` so callers can detect
 /// which entries still need to be published.
+///
+/// `repo` carries the LOC-25 leaf-slug routing value preserved verbatim
+/// from the task frontmatter (or `None` for parent/review nodes). The
+/// publish step uses it to construct the additive `repo:<slug>` label
+/// merge alongside the converter; consumers that already keep the
+/// `TaskRouting` projection on `PlannedIssue` can rely on this field
+/// as the canonical source so the receipt survives a re-export through
+/// the publish step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinearPublishEntity {
@@ -131,6 +139,12 @@ pub struct LinearPublishEntity {
     /// Stored as opaque markers; the publish stage does not interpret them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub review_comments: Vec<String>,
+    /// LOC-25 leaf repo slug (exact, inventory-validated). `None` for
+    /// parent/review tasks. `serde(skip_serializing_if = "Option::is_none")`
+    /// keeps the legacy receipt shape (no `repo:` key on parent
+    /// entities) diff-clean for tasks that have not onboarded LOC-25.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     pub issue: Option<String>,
     pub issue_id: Option<String>,
     pub url: Option<String>,

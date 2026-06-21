@@ -26,7 +26,7 @@ pub mod manifest;
 
 pub use checks::{PlanQualityChecker, build_blocker_inverse, creation_order_waves};
 pub use domain::{
-    DependencyGraph, GraphEdge, GraphEdgeReason, GraphNode, GraphNodeKind,
+    DependencyGraph, GraphEdge, GraphEdgeReason, GraphNode, GraphNodeKind, InvalidRepoRouting,
     ManifestValidationResult, MissingTaskFile, PlanCheckCategory, PlanCheckFinding,
     PlanCheckSeverity, PlanValidationReport, SelfBlock, UnknownDependency, UnknownMilestone,
 };

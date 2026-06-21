@@ -4,6 +4,8 @@
 //! codebase analysis, and Linear graph context into a single context
 //! that the generator uses to produce structured artifacts.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::super::codebase::CodebaseAnalysis;
@@ -40,6 +42,17 @@ pub struct PlanningSession {
     pub linear_graph_analysis: Option<LinearGraphAnalysis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub research: Option<ResearchArtifactStore>,
+    /// Lightweight available-repo inventory (LOC-25). Maps the exact
+    /// `project_set.projects[].repos[].slug` key to a clone-source URL
+    /// (kept as metadata only; the resolver does not consume it).
+    ///
+    /// When this map contains exactly one entry and a leaf task's
+    /// `routing.repo` is unset, the generator may auto-fill the obvious
+    /// one-repo slug. When the map has zero or multiple entries, the
+    /// generator leaves the routing decision to the planning skill / LLM
+    /// and the manifest validator.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub available_repos: BTreeMap<String, String>,
     /// Directory where task files should be generated (e.g., "docs/tasks").
     pub tasks_dir: String,
 }
@@ -52,6 +65,7 @@ impl PlanningSession {
             codebase_analysis: None,
             linear_graph_analysis: None,
             research: None,
+            available_repos: BTreeMap::new(),
             tasks_dir: tasks_dir.into(),
         }
     }
@@ -74,11 +88,47 @@ impl PlanningSession {
         self
     }
 
+    /// Sets the available-repo inventory for this session.
+    ///
+    /// The map keys MUST be the exact project-set repo slugs (no
+    /// lowercasing or slugification). The values are clone-source URLs
+    /// kept as metadata for diagnostics; the resolver does not consume
+    /// them.
+    pub fn with_available_repos(
+        mut self,
+        repos: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.available_repos = repos.into_iter().collect();
+        self
+    }
+
     /// Returns true if all optional analyses have been provided.
+    ///
+    /// Note: `available_repos` is intentionally not part of the
+    /// "complete" gate. A planning session may legitimately run without
+    /// a known inventory (e.g. when the project-set has not been
+    /// onboarded yet); the manifest validator then operates in a
+    /// "shape only" mode that rejects parent-with-repo and missing
+    /// leaf repo but skips the inventory-membership check.
     pub fn is_complete(&self) -> bool {
         self.codebase_analysis.is_some()
             && self.linear_graph_analysis.is_some()
             && self.research.is_some()
+    }
+
+    /// Returns the unique slug of the only available repo when the
+    /// inventory contains exactly one entry, or `None` otherwise.
+    ///
+    /// This is the "obvious one-repo case" the LOC-25 description calls
+    /// out: when the project set has a single repo, the generator can
+    /// auto-fill `routing.repo` for every leaf task without forcing the
+    /// planner to repeat itself.
+    pub fn single_repo_slug(&self) -> Option<&str> {
+        if self.available_repos.len() == 1 {
+            self.available_repos.keys().next().map(String::as_str)
+        } else {
+            None
+        }
     }
 
     /// Returns a summary of available context for debugging/logging.
@@ -111,6 +161,10 @@ impl PlanningSession {
         summary.push_str(&format!(
             "Research artifacts: {}\n",
             self.research.as_ref().map(|r| r.len()).unwrap_or(0)
+        ));
+        summary.push_str(&format!(
+            "Available repos: {} slug(s)\n",
+            self.available_repos.len()
         ));
         summary
     }

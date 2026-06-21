@@ -11,6 +11,8 @@
 //! - creation-order cycles (Kahn-style topological check)
 //! - self-blocks (a task declaring itself in `blockedBy`)
 //! - duplicate task IDs in the manifest
+//! - LOC-25: invalid repo routing (parent-with-repo, missing leaf
+//!   repo, unknown slug, etc.).
 //!
 //! Findings are surfaced as separate vector fields so the planning-session
 //! API can render each class in its own section. The result supports
@@ -25,8 +27,8 @@ use serde::Deserialize;
 use crate::opensymphony_planning::generator::domain::TaskId;
 
 use super::domain::{
-    InvalidTaskFile, ManifestValidationResult, MissingTaskFile, SelfBlock, UnknownDependency,
-    UnknownMilestone,
+    InvalidRepoRouting, InvalidTaskFile, ManifestValidationResult, MissingTaskFile, SelfBlock,
+    UnknownDependency, UnknownMilestone,
 };
 use super::frontmatter::{TaskFrontmatter, TaskFrontmatterError, parse_task_file};
 
@@ -122,6 +124,7 @@ impl ManifestValidator {
             creation_order_cycles: Vec::new(),
             self_blocks: Vec::new(),
             duplicate_task_ids: Vec::new(),
+            invalid_repo_routing: Vec::new(),
         };
 
         let mut seen_ids: BTreeSet<TaskId> = BTreeSet::new();
@@ -193,6 +196,87 @@ impl ManifestValidator {
         }
 
         result.creation_order_cycles = creation_order_cycles(&adjacency, &id_set);
+
+        // LOC-25 — leaf-vs-parent repo routing. A task referenced by
+        // another task's `parent` field is a parent/review node; every
+        // other task is a leaf. Leaves must carry exactly one `repo`
+        // slug, parents must not carry `repo`. Validation runs against
+        // the parsed frontmatter so empty-string slugs and missing
+        // frontmatter are surfaced before the converter ever talks to
+        // Linear.
+        //
+        // Phase 1 scope (LOC-25): the Rust `ManifestValidator` performs
+        // shape-only validation here — it surfaces parent-with-repo and
+        // missing-leaf-repo findings but does NOT check inventory
+        // membership. Inventory-membership (out-of-inventory-repo) is
+        // enforced by the Python `convert-tasks-to-linear` converter
+        // against `<repo_root>/.opensymphony/project-set.yaml` because
+        // the converter is the publish-time gate (D11). The
+        // `AvailableRepoInventory` context in `generator/session.rs`
+        // already exists so a future Phase 2 can add the inventory-
+        // membership check here as well; until then the
+        // `unknown-repo-slug` code reserved on `InvalidRepoRouting` is
+        // emitted exclusively by the Python validator.
+        //
+        // TODO LOC-25 Phase 2: thread the `AvailableRepoInventory`
+        // through `ManifestValidator::validate_against_repo_root` so the
+        // Rust validator can emit `unknown-repo-slug` alongside
+        // `parent_with_repo` / `missing_leaf_repo`.
+        //
+        //   Status:    optional enhancement, NOT a hard requirement for
+        //              Phase 1 acceptance (LOC-25 AC #4 keeps inventory
+        //              validation in the Python converter).
+        //   Trigger:   a future "single binary validator" wave (see
+        //              docs/tasks/osym-621 follow-ups) that wants the
+        //              Rust side to fail-fast on out-of-inventory slugs
+        //              before the converter even runs.
+        //   Prereq:    `AvailableRepoInventory` is already constructed in
+        //              `generator/session.rs`; the work is plumbing that
+        //              context into `validate_against_repo_root` and
+        //              adding a new `unknown_repo_slug` finding.
+        //   Estimate:  ~1-2 days, mostly wiring + 1 new finding variant
+        //              + tests.
+        //   Out of scope for LOC-25: keep this comment in sync with the
+        //              Python converter's authoritative inventory check.
+        let parent_ids: BTreeSet<&str> = entries
+            .iter()
+            .filter_map(|(_, fm)| fm.parent.as_deref())
+            .collect();
+        for (task_id, frontmatter) in &entries {
+            let is_parent = parent_ids.contains(task_id.0.as_str());
+            let slug = frontmatter.repo.as_deref().map(str::trim).unwrap_or("");
+            if is_parent {
+                if let Some(declared) = frontmatter.repo.clone() {
+                    result.invalid_repo_routing.push(InvalidRepoRouting {
+                        task_id: task_id.clone(),
+                        code: "parent_with_repo".to_string(),
+                        declared_repo: declared,
+                        hint: Some(
+                            "parent/review tasks must not carry a `repo:` value; \
+                                the routing lives on the leaves"
+                                .to_string(),
+                        ),
+                    });
+                }
+            } else if !is_parent && (frontmatter.repo.is_none() || slug.is_empty()) {
+                result.invalid_repo_routing.push(InvalidRepoRouting {
+                    task_id: task_id.clone(),
+                    code: "missing_leaf_repo".to_string(),
+                    declared_repo: frontmatter
+                        .repo
+                        .as_deref()
+                        .map(str::trim)
+                        .unwrap_or("")
+                        .to_string(),
+                    hint: Some(
+                        "leaf tasks must carry exactly one non-empty `repo:` slug \
+                            that matches a project-set inventory key"
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+
         // Stable order keeps the artefact diff-friendly for tests.
         result
             .missing_task_files
@@ -207,6 +291,9 @@ impl ManifestValidator {
             .unknown_dependencies
             .sort_by(|a, b| a.from_task_id.cmp(&b.from_task_id));
         result.self_blocks.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        result
+            .invalid_repo_routing
+            .sort_by(|a, b| a.task_id.cmp(&b.task_id));
         result
     }
 }
@@ -320,7 +407,7 @@ mod tests {
 
     fn task_file_text(id: &str, milestone: &str, blocked_by: &[&str], blocks: &[&str]) -> String {
         let mut s = format!(
-            "---\nid: {}\ntitle: \"{}\"\nmilestone: \"{}\"\nblockedBy: [",
+            "---\nid: {}\ntitle: \"{}\"\nmilestone: \"{}\"\nrepo: opensymphony\nblockedBy: [",
             id, id, milestone
         );
         s.push_str(
@@ -553,6 +640,74 @@ mod tests {
         // duplicate id check fires (see COE-416 review).
         assert!(result.error_count() >= 1);
         assert!(!result.is_ok());
+    }
+
+    /// LOC-25: a parent/review task carrying `repo:` is a hard
+    /// validation error. The manifest validator must surface it
+    /// before the converter ever talks to Linear.
+    #[test]
+    fn parent_with_repo_is_reported() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text =
+            manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md"), ("TASK-B", "docs/tasks/b.md")]);
+        let a_body = "---\nid: TASK-A\ntitle: \"A\"\nmilestone: \"M1\"\n\
+                      repo: opensymphony\nblockedBy: []\nblocks: []\n---\n# A\n";
+        // Sub-issue leaves carry the leaf repo so the only routing
+        // finding is the parent's illegal slug.
+        let b_body = "---\nid: TASK-B\ntitle: \"B\"\nmilestone: \"M1\"\n\
+                      parent: TASK-A\nrepo: opensymphony\nblockedBy: []\nblocks: []\n---\n# B\n";
+        let files = vec![
+            ("docs/tasks/a.md".to_string(), a_body.to_string()),
+            ("docs/tasks/b.md".to_string(), b_body.to_string()),
+        ];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(!result.is_ok());
+        assert_eq!(
+            result.invalid_repo_routing.len(),
+            1,
+            "exactly one routing finding expected (parent-with-repo): {:?}",
+            result.invalid_repo_routing
+        );
+        let finding = &result.invalid_repo_routing[0];
+        assert_eq!(finding.task_id, TaskId::new("TASK-A"));
+        assert_eq!(finding.code, "parent_with_repo");
+    }
+
+    /// LOC-25: a leaf task that omits `repo:` is reported as a
+    /// `missing_leaf_repo` finding so the planning stage fixes the
+    /// frontmatter before publish.
+    #[test]
+    fn missing_leaf_repo_is_reported() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md")]);
+        let body = "---\nid: TASK-A\ntitle: \"A\"\nmilestone: \"M1\"\n\
+                    blockedBy: []\nblocks: []\n---\n# A\n";
+        let files = vec![("docs/tasks/a.md".to_string(), body.to_string())];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(!result.is_ok());
+        assert_eq!(result.invalid_repo_routing.len(), 1);
+        let finding = &result.invalid_repo_routing[0];
+        assert_eq!(finding.task_id, TaskId::new("TASK-A"));
+        assert_eq!(finding.code, "missing_leaf_repo");
+    }
+
+    /// LOC-25: an empty repo value (whitespace only) is treated the same
+    /// as a missing repo — the planning stage must surface the leaf
+    /// before publish so the frontmatter gets a real slug.
+    #[test]
+    fn empty_repo_value_is_treated_as_missing_leaf_repo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md")]);
+        let body = "---\nid: TASK-A\ntitle: \"A\"\nmilestone: \"M1\"\n\
+                    repo: \"   \"\nblockedBy: []\nblocks: []\n---\n# A\n";
+        let files = vec![("docs/tasks/a.md".to_string(), body.to_string())];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(!result.is_ok());
+        assert_eq!(result.invalid_repo_routing.len(), 1);
+        assert_eq!(result.invalid_repo_routing[0].code, "missing_leaf_repo");
     }
 
     #[test]
