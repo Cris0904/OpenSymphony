@@ -31,7 +31,7 @@ pub use model::{
 
 pub const CRATE_NAME: &str = "opensymphony-workflow";
 
-pub use loader::split_front_matter;
+pub use loader::{FrontMatterSplit, split_front_matter};
 
 impl WorkflowDefinition {
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, WorkflowLoadError> {

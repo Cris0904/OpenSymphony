@@ -1666,12 +1666,11 @@ fn strip_project_set_owned_fields(template: &str) -> String {
     // separator"`) is correctly preserved instead of being mistaken for
     // the closing delimiter (LOC-19 AI review feedback on the divergent
     // `split_front_matter` parser).
-    let (front_matter_yaml, body) = match crate::opensymphony_workflow::split_front_matter(template)
-    {
+    let split = match crate::opensymphony_workflow::split_front_matter(template) {
         Some(split) => split,
         None => return template.to_string(),
     };
-    let Ok(mut value) = serde_yaml::from_str::<serde_yaml::Value>(front_matter_yaml) else {
+    let Ok(mut value) = serde_yaml::from_str::<serde_yaml::Value>(split.front_matter) else {
         return template.to_string();
     };
     let Some(mapping) = value.as_mapping_mut() else {
@@ -1723,29 +1722,19 @@ fn strip_project_set_owned_fields(template: &str) -> String {
         Ok(serialized) => serialized,
         Err(_) => return template.to_string(),
     };
-    // The canonical `split_front_matter` returns:
-    //   * `front_matter_yaml` = source slice between the opening `---`
-    //     marker line and the closing `---` marker line
-    //   * `body` = source slice after the closing `---` marker line
-    //
-    // To rebuild the file we splice in the original opening marker line
-    // (`head`) and the original closing marker line (the 4 bytes
-    // immediately before `body`) so the rebuilt document keeps its
-    // exact framing byte-for-byte (LOC-19). The offsets come straight
-    // from the slices' pointers; we never have to re-match against `---`
-    // appearing inside YAML scalars.
-    let template_base = template.as_ptr().addr();
-    let head_end = front_matter_yaml
-        .as_ptr()
-        .addr()
-        .saturating_sub(template_base);
-    let head = &template[..head_end.min(template.len())];
-    let body_start = body.as_ptr().addr().saturating_sub(template_base);
-    // `body_start - 4` lands at the start of the closing `---\n` line so
-    // we keep it verbatim in the output.
-    let body_close_start = body_start.saturating_sub(4).min(template.len());
-    let body = &template[body_close_start..];
-    format!("{head}{serialized_front_matter}{body}")
+    // The canonical `split_front_matter` returns a [`FrontMatterSplit`]
+    // that already exposes the verbatim opening marker line (`head`),
+    // the YAML slice, the verbatim closing marker line (`trailer`), and
+    // the trailing body. We splice the serialized front matter back in
+    // between `head` and `trailer`, then re-attach `body` — so the
+    // rebuilt document keeps its exact framing byte-for-byte (LOC-19).
+    // The slices are taken straight from the [`FrontMatterSplit`]
+    // output, so we never have to do pointer arithmetic or re-match
+    // against `---` appearing inside YAML scalars.
+    let head = split.head;
+    let trailer = split.trailer;
+    let body = split.body;
+    format!("{head}{serialized_front_matter}{trailer}{body}")
 }
 
 fn comparable_text(value: &str) -> String {
