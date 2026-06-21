@@ -152,6 +152,27 @@ openhands:
         model: ${LLM_MODEL}
 ```
 
+## Timeout Environment Variables
+
+A handful of CLI helpers shell out to long-running commands. Each one is
+bounded by a process-local environment variable so air-gapped CI, slow
+proxies, and unresponsive remotes cannot hang the CLI indefinitely.
+
+| Variable | Default | Scope | Notes |
+| --- | --- | --- | --- |
+| `OPENHANDS_GIT_REMOTE_SHOW_TIMEOUT_MS` | `5000` | `opensymphony init` / `update` default-branch detection (LOC-27) | Bounded timeout for the `git remote show <remote>` probe used by `detect_git_default_branch`. When the timeout elapses the helper kills the child, emits a `tracing::warn!`, and falls through to a `default_branch`-less entry in the project-set inventory. Accepts any positive integer in milliseconds. `0`, negative numbers, and unparseable strings fall back to the default. |
+| `OPENSYMPHONY_TEMPLATE_FETCH_TIMEOUT_MS` | `30000` | `opensymphony init` template asset fetch | Bounded timeout for the per-asset fetch used to materialize the OpenSymphony template. Accepts any positive integer in milliseconds. |
+
+The default-branch timeout is intentionally short (5s) because
+`git remote show <remote>` makes a synchronous network round-trip to the
+remote server, and the only useful response the CLI needs is the
+`HEAD branch:` line. If your remote is slow but reachable, raise the
+timeout for a single run:
+
+```bash
+OPENHANDS_GIT_REMOTE_SHOW_TIMEOUT_MS=15000 opensymphony init
+```
+
 ## Conversation Condensation
 
 Optional conversation condensation is enabled by default per workflow to reduce
