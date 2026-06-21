@@ -140,6 +140,15 @@ fn read_symbolic_default_branch(target_repo: &Path, remote_name: &str) -> Option
     }
 }
 
+/// Best-effort detection of the default branch via `git remote show <remote>`.
+///
+/// **Network dependency (LOC-19 AI review feedback):** this command makes
+/// a network call to the remote server, so it can hang or fail silently
+/// in CI or air-gapped environments. The caller falls back to
+/// [`read_symbolic_default_branch`] (a local-only path) first, so most
+/// freshly cloned repos hit the fast path. The return type (`Option<String>`)
+/// already advertises the best-effort nature; a timeout wrapper is
+/// deferred to the LOC-20 migration when `update` reuses the helper.
 fn read_remote_show_default_branch(target_repo: &Path, remote_name: &str) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["remote", "show", remote_name])

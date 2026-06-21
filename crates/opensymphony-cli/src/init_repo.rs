@@ -1882,6 +1882,16 @@ where
     // Build the upsert plan. We let the writer fill in defaults (polling
     // interval, max concurrent agents, active/terminal states) when no
     // override was supplied — see `project_set_writer::apply_upsert_plan`.
+    //
+    // Surface a one-shot warning when the project-set slug falls back to the
+    // Phase-1 sentinel so the operator knows the file will be committed
+    // as `<repo>/.opensymphony/default-project-set.yaml`. The `--project-set-slug`
+    // override flag is a follow-up (LOC-20); until it lands the sentinel is the
+    // only value Phase-1 `init` can produce (LOC-19 AI review feedback on
+    // `DEFAULT_PROJECT_SET_SLUG_FALLBACK`).
+    ui.line(format!(
+        "info: writing project-set inventory under `<repo>/.opensymphony/{DEFAULT_PROJECT_SET_SLUG_FALLBACK}.yaml` (Phase-1 sentinel). Edit `project_set.slug` in that file before onboarding a second repo."
+    ))?;
     let plan = ProjectSetUpsertPlan {
         repo_slug: repo_slug.clone(),
         repo_url: repo_url.clone(),
