@@ -1792,8 +1792,11 @@ fn check_linear(
         // `expect` to make the invariant explicit rather than fall through
         // to a `LINEAR_API_KEY` default that is unreachable.
         let api_key_env = project_set
-            .map(|ps| ps.config.linear.api_key_env.clone())
-            .expect("active_mode == ProjectSet implies project_set is Some");
+            .expect("active_mode == ProjectSet implies project_set is Some")
+            .config
+            .linear
+            .api_key_env
+            .clone();
         match env::var(&api_key_env) {
             Ok(value) if !value.trim().is_empty() => CheckResult::pass(
                 "linear",
