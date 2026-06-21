@@ -28,9 +28,9 @@ use super::{
         OpenHandsTransportConfig, OpenHandsWebSocketConfig, OpenHandsWebSocketFrontMatter,
         PROJECT_SET_SCHEMA_VERSION, PollingConfig, PollingFrontMatter, ProjectSetAgentConfig,
         ProjectSetConfig, ProjectSetFrontMatter, ProjectSetLinearConfig, ProjectSetPollingConfig,
-        ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry, ResolvedWorkflow, TrackerConfig,
-        TrackerFrontMatter, TrackerKind, WorkflowConfig, WorkflowDefinition, WorkflowExtensions,
-        WorkspaceConfig, WorkspaceFrontMatter,
+        ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry, ResolvedWorkflow,
+        StaleMovedProjectSetFields, TrackerConfig, TrackerFrontMatter, TrackerKind, WorkflowConfig,
+        WorkflowDefinition, WorkflowExtensions, WorkspaceConfig, WorkspaceFrontMatter,
     },
 };
 
@@ -52,6 +52,155 @@ pub(crate) fn resolve_workflow<E: Environment>(
         },
         prompt_template: workflow.prompt_template.clone(),
     })
+}
+
+/// Detects `WORKFLOW.md` fields that have moved into `.opensymphony/project-set.yaml`
+/// (LOC-18). Returns the field paths that are still present on the workflow
+/// front matter; absent fields are silently ignored.
+///
+/// Each returned tuple is `(field, destination)` where `field` is the dotted
+/// path inside the `WORKFLOW.md` front matter and `destination` is the
+/// project-set path (or env key) that owns the value in project-set mode.
+pub(crate) fn detect_stale_project_set_fields(
+    front_matter: &super::model::WorkflowFrontMatter,
+) -> Vec<(String, String)> {
+    use super::model::STALE_MOVED_FIELDS;
+
+    let mut stale = Vec::new();
+
+    for entry in STALE_MOVED_FIELDS {
+        // `has_stale_field` returns `None` for unrecognized paths so a new
+        // `STALE_MOVED_FIELDS` entry without a matching arm is impossible to
+        // add silently — the loop refuses to claim the field is absent.
+        match front_matter.has_stale_field(entry.field) {
+            Some(true) => stale.push((entry.field.to_owned(), entry.destination.to_owned())),
+            Some(false) => {}
+            None => panic!(
+                "STALE_MOVED_FIELDS entry `{}` has no presence check in WorkflowFrontMatter::has_stale_field; add the arm before adding the entry",
+                entry.field
+            ),
+        }
+    }
+
+    stale
+}
+
+/// Resolves a workflow in strict project-set mode (LOC-18).
+///
+/// The repo `WORKFLOW.md` is required to **omit** every project-set-owned
+/// field. When any stale moved field is present the call fails with
+/// [`WorkflowConfigError::StaleMovedProjectSetFields`] so operators get a
+/// precise migration diagnostic. On success, the returned
+/// [`ResolvedWorkflow`] is composed from two typed sources:
+///
+/// - Project-set supplies global tracker, polling, and total concurrency
+///   values.
+/// - Workflow supplies repo-local fields (workspace, hooks, repo-local agent
+///   caps, OpenHands/model contract, prompt template).
+pub(crate) fn resolve_workflow_strict_project_set<E: Environment>(
+    workflow: &WorkflowDefinition,
+    project_set: &ResolvedProjectSet,
+    base_dir: &Path,
+    env: &E,
+) -> Result<ResolvedWorkflow, WorkflowConfigError> {
+    let stale = detect_stale_project_set_fields(&workflow.front_matter);
+    if !stale.is_empty() {
+        return Err(WorkflowConfigError::StaleMovedProjectSetFields {
+            stale: StaleMovedProjectSetFields { fields: stale },
+        });
+    }
+
+    // Compose repo-local fields directly from the workflow front matter,
+    // skipping the per-field resolution for the fields project-set owns
+    // (tracker, polling, agent.max_concurrent_agents). The composed result
+    // is then overlaid with project-set's global values.
+    let resolved = resolve_workflow_repo_local_only(workflow, base_dir, env)?;
+    Ok(apply_project_set_to_resolved(resolved, project_set))
+}
+
+/// Resolves the repo-local portion of a `WORKFLOW.md` (LOC-18).
+///
+/// Skips per-field resolution of the moved/global fields (`tracker.*`,
+/// `polling.interval_ms`, `agent.max_concurrent_agents`) because those
+/// values are owned by `.opensymphony/project-set.yaml` in strict
+/// project-set mode. The returned `ResolvedWorkflow` still carries
+/// `TrackerKind::Linear` / `agent.max_concurrent_agents = 0` placeholders
+/// for the moved fields; [`apply_project_set_to_resolved`] replaces them
+/// with the project-set-owned values.
+fn resolve_workflow_repo_local_only<E: Environment>(
+    workflow: &WorkflowDefinition,
+    base_dir: &Path,
+    env: &E,
+) -> Result<ResolvedWorkflow, WorkflowConfigError> {
+    let front_matter = &workflow.front_matter;
+
+    let tracker = TrackerConfig {
+        kind: TrackerKind::Linear,
+        endpoint: String::new(),
+        api_key: String::new(),
+        project_slug: String::new(),
+        active_states: Vec::new(),
+        terminal_states: Vec::new(),
+    };
+
+    let polling = PollingConfig {
+        interval_ms: DEFAULT_POLL_INTERVAL_MS,
+    };
+
+    let workspace = resolve_workspace(&front_matter.workspace, base_dir, env)?;
+    let hooks = resolve_hooks(&front_matter.hooks)?;
+
+    // Resolve repo-local agent fields, but force `max_concurrent_agents = 0`
+    // because that field is owned by project-set in strict mode. The other
+    // agent fields (`max_turns`, retry/stall, per-state caps) stay repo-local.
+    let agent = AgentConfig {
+        max_concurrent_agents: 0,
+        max_turns: resolve_positive_u64(
+            front_matter.agent.max_turns.as_ref(),
+            "agent.max_turns",
+            DEFAULT_MAX_TURNS,
+        )?,
+        max_retry_backoff_ms: resolve_positive_u64(
+            front_matter.agent.max_retry_backoff_ms.as_ref(),
+            "agent.max_retry_backoff_ms",
+            DEFAULT_MAX_RETRY_BACKOFF_MS,
+        )?,
+        stall_timeout_ms: resolve_stall_timeout(front_matter.agent.stall_timeout_ms.as_ref())?,
+        max_concurrent_agents_by_state: resolve_state_limits(
+            front_matter.agent.max_concurrent_agents_by_state.as_ref(),
+        )?,
+    };
+
+    Ok(ResolvedWorkflow {
+        config: WorkflowConfig {
+            tracker,
+            polling,
+            workspace,
+            hooks,
+            agent,
+        },
+        extensions: WorkflowExtensions {
+            openhands: resolve_openhands(&front_matter.openhands, base_dir, env)?,
+        },
+        prompt_template: workflow.prompt_template.clone(),
+    })
+}
+
+/// Composes a workflow-resolved config with project-set global values.
+fn apply_project_set_to_resolved(
+    mut resolved: ResolvedWorkflow,
+    project_set: &ResolvedProjectSet,
+) -> ResolvedWorkflow {
+    let project_set_config = &project_set.config;
+    resolved.config.tracker.kind = TrackerKind::Linear;
+    resolved.config.tracker.endpoint = project_set_config.linear.endpoint.clone();
+    resolved.config.tracker.project_slug = project_set_config.linear.project_slug.clone();
+    resolved.config.tracker.api_key = project_set_config.linear.api_key.clone();
+    resolved.config.tracker.active_states = project_set_config.linear.active_states.clone();
+    resolved.config.tracker.terminal_states = project_set_config.linear.terminal_states.clone();
+    resolved.config.polling.interval_ms = project_set_config.polling.interval_ms;
+    resolved.config.agent.max_concurrent_agents = project_set_config.agent.max_concurrent_agents;
+    resolved
 }
 
 fn resolve_tracker<E: Environment>(
@@ -1225,9 +1374,16 @@ fn resolve_project_set_linear<E: Environment>(
         "project_set.linear.terminal_states",
     )?;
 
+    let api_key_env = linear
+        .api_key_env
+        .as_deref()
+        .and_then(normalize_optional)
+        .unwrap_or_else(|| "LINEAR_API_KEY".to_owned());
+
     Ok(ProjectSetLinearConfig {
         endpoint,
         project_slug,
+        api_key_env,
         api_key,
         active_states,
         terminal_states,

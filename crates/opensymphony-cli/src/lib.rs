@@ -214,11 +214,55 @@ struct LinearDoctorConfig {
 struct DoctorRuntimeConfig {
     target_repo: PathBuf,
     workflow_path: PathBuf,
+    /// Resolved workflow.
+    ///
+    /// - In legacy mode this is the legacy-resolved workflow (always present).
+    /// - In project-set mode this is the strict project-set composed workflow
+    ///   when the WORKFLOW.md front matter is clean. When the front matter
+    ///   carries stale moved fields, the strict path fails and the doctor's
+    ///   downstream workflow-dependent checks are skipped so the doctor
+    ///   remains useful as a migration guide. The `project-set-boundary`
+    ///   check carries the diagnostic in that case.
     workflow: ResolvedWorkflow,
+    /// Indicates that the strict project-set path failed to resolve because
+    /// stale moved fields were present in `WORKFLOW.md`. When `true`, the
+    /// runtime still carries a placeholder workflow so the rest of the
+    /// doctor can run; the `project-set-boundary` check is responsible for
+    /// emitting the migration diagnostic.
+    workflow_skipped_for_stale_fields: bool,
     tool_dir: Option<PathBuf>,
     probe_model: Option<String>,
     probe_api_key_env: Option<String>,
     probe_llm_base_url_env: Option<String>,
+    /// Active project-set runtime mode (LOC-18).
+    active_mode: DoctorActiveMode,
+    /// Resolved project-set when `active_mode == DoctorActiveMode::ProjectSet`.
+    project_set: Option<crate::opensymphony_workflow::ResolvedProjectSet>,
+    /// Path to the project-set YAML (only set in project-set mode).
+    project_set_path: Option<PathBuf>,
+    /// Stale project-set-owned fields detected in `WORKFLOW.md` (LOC-18).
+    /// Empty when the front matter is clean or when the active mode is legacy.
+    stale_project_set_fields: Vec<(String, String)>,
+}
+
+/// Runtime mode reported by `opensymphony doctor` (LOC-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DoctorActiveMode {
+    /// No `.opensymphony/project-set.yaml` present. Pre-migration legacy flow
+    /// using per-repo `config.yaml` + `WORKFLOW.md` only.
+    LegacySingleRepo,
+    /// `.opensymphony/project-set.yaml` present. Project-set owns global
+    /// tracker/polling/total-concurrency fields; workflow owns repo-local.
+    ProjectSet,
+}
+
+impl DoctorActiveMode {
+    fn label(self) -> &'static str {
+        match self {
+            DoctorActiveMode::LegacySingleRepo => "legacy-single-repo",
+            DoctorActiveMode::ProjectSet => "project-set",
+        }
+    }
 }
 
 struct RehydrateRuntimeConfig {
@@ -553,32 +597,58 @@ pub async fn run_doctor_command(
     let (runtime, rendered_probe_prompt) = match runtime {
         Ok(runtime) => {
             checks.push(check_target_repo(&runtime.target_repo).await);
+            checks.push(check_mode(&runtime));
             checks.push(check_workflow(&runtime));
 
-            let rendered_probe_prompt = match render_doctor_probe_prompt(&runtime.workflow) {
-                Ok(prompt) => {
-                    checks.push(CheckResult::pass(
-                        "workflow-prompt",
-                        format!(
-                            "rendered {} characters from {}",
-                            prompt.len(),
-                            runtime.workflow_path.display()
-                        ),
-                    ));
-                    prompt
-                }
-                Err(error) => {
-                    checks.push(CheckResult::fail("workflow-prompt", error));
-                    print_checks(&checks);
-                    return ExitCode::from(1);
+            let rendered_probe_prompt = if runtime.workflow_skipped_for_stale_fields {
+                checks.push(CheckResult::skip(
+                    "workflow-prompt",
+                    "skipped because project-set boundary is failing; fix stale moved fields in WORKFLOW.md",
+                ));
+                String::new()
+            } else {
+                match render_doctor_probe_prompt(&runtime.workflow) {
+                    Ok(prompt) => {
+                        checks.push(CheckResult::pass(
+                            "workflow-prompt",
+                            format!(
+                                "rendered {} characters from {}",
+                                prompt.len(),
+                                runtime.workflow_path.display()
+                            ),
+                        ));
+                        prompt
+                    }
+                    Err(error) => {
+                        checks.push(CheckResult::fail("workflow-prompt", error));
+                        print_checks(&checks);
+                        return ExitCode::from(1);
+                    }
                 }
             };
 
+            // LOC-18 AC: doctor continues unrelated checks where practical.
+            //
+            // When stale moved fields are present the strict path is
+            // rejected, but `resolve_doctor_workflow_for_mode` falls back to
+            // the legacy resolver so `runtime.workflow` is still populated.
+            // The four workflow-dependent checks below only inspect the
+            // resolved workflow fields (and `check_linear` reads the
+            // project-set's `api_key_env` directly), so they remain useful as
+            // a migration guide even while the boundary is failing. The
+            // `project-set-boundary` check (handled below) carries the
+            // migration diagnostic.
             checks.push(check_workspace_root(&runtime.workflow.config.workspace.root).await);
             checks.push(check_local_safety());
             checks.push(check_openhands_transport(&runtime.workflow));
-            checks.push(check_linear(&config.linear, &runtime.workflow));
+            checks.push(check_linear(
+                &config.linear,
+                &runtime.workflow,
+                runtime.active_mode,
+                runtime.project_set.as_ref(),
+            ));
             checks.push(check_project_set(config_root));
+            checks.push(check_project_set_boundary(&runtime));
             (runtime, rendered_probe_prompt)
         }
         Err(error) => {
@@ -586,6 +656,15 @@ pub async fn run_doctor_command(
                 configured_target_repo.unwrap_or_else(|| config_root.to_path_buf());
             checks.push(check_target_repo(&fallback_target_repo).await);
             checks.push(CheckResult::fail("workflow", error));
+            // Continue with the project-set check so operators see whether
+            // the global config is also broken (LOC-18). The boundary check
+            // needs the parsed workflow, which we couldn't build, so it
+            // skips here.
+            checks.push(check_project_set(config_root));
+            checks.push(CheckResult::skip(
+                "project-set-boundary",
+                "skipped because the workflow could not be resolved; fix `workflow` and re-run doctor",
+            ));
             print_checks(&checks);
             return ExitCode::from(1);
         }
@@ -1115,13 +1194,32 @@ fn resolve_doctor_runtime(
     let workflow_path = target_repo.join("WORKFLOW.md");
     let workflow = WorkflowDefinition::load_from_path(&workflow_path)
         .map_err(|error| format!("failed to load {}: {error}", workflow_path.display()))?;
-    let workflow = resolve_doctor_workflow(&workflow, &target_repo, config.linear.enabled)
-        .map_err(|error| format!("failed to resolve {}: {error}", workflow_path.display()))?;
+
+    // LOC-18: detect project-set mode BEFORE resolving the workflow so the
+    // strict path can run the stale-moved-field detector against the
+    // `WORKFLOW.md` front matter. Doctor continues other checks even when
+    // the strict path fails.
+    let (project_set, project_set_path) = load_optional_doctor_project_set(config_root)?;
+    let active_mode = if project_set.is_some() {
+        DoctorActiveMode::ProjectSet
+    } else {
+        DoctorActiveMode::LegacySingleRepo
+    };
+
+    let (resolved_workflow, stale_fields, workflow_skipped_for_stale_fields) =
+        resolve_doctor_workflow_for_mode(
+            &workflow,
+            project_set.as_ref(),
+            &target_repo,
+            &active_mode,
+            config.linear.enabled,
+        )?;
 
     Ok(DoctorRuntimeConfig {
         target_repo,
         workflow_path,
-        workflow,
+        workflow: resolved_workflow,
+        workflow_skipped_for_stale_fields,
         tool_dir: config
             .openhands
             .tool_dir
@@ -1130,7 +1228,96 @@ fn resolve_doctor_runtime(
         probe_model: config.openhands.probe_model.clone(),
         probe_api_key_env: config.openhands.probe_api_key_env.clone(),
         probe_llm_base_url_env: config.openhands.probe_llm_base_url_env.clone(),
+        active_mode,
+        project_set,
+        project_set_path,
+        stale_project_set_fields: stale_fields,
     })
+}
+
+/// Loads `.opensymphony/project-set.yaml` from `config_root` when present.
+///
+/// Returns `(None, None)` if the file is absent (legacy single-repo flow),
+/// `(Some(resolved), Some(path))` for a valid file, and `Err(message)` if
+/// the file is present but malformed.
+fn load_optional_doctor_project_set(
+    config_root: &Path,
+) -> Result<
+    (
+        Option<crate::opensymphony_workflow::ResolvedProjectSet>,
+        Option<PathBuf>,
+    ),
+    String,
+> {
+    let path = config_root.join(".opensymphony").join("project-set.yaml");
+    if !path.is_file() {
+        return Ok((None, None));
+    }
+
+    let raw = match crate::opensymphony_workflow::ProjectSetFrontMatter::load_from_path(&path) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return Ok((None, Some(path))),
+        Err(error) => {
+            return Err(format!("failed to load {}: {error}", path.display()));
+        }
+    };
+
+    match raw.resolve_with_process_env() {
+        Ok(resolved) => Ok((Some(resolved), Some(path))),
+        Err(error) => Err(format!("failed to resolve {}: {error}", path.display())),
+    }
+}
+
+/// Tuple returned by `resolve_doctor_workflow_for_mode`:
+/// `(resolved_workflow, stale_fields, workflow_skipped_for_stale_fields)`.
+type DoctorWorkflowResolution = Result<(ResolvedWorkflow, Vec<(String, String)>, bool), String>;
+
+/// Resolves the workflow according to the active mode.
+///
+/// - In project-set mode with stale moved fields, the strict path is
+///   reported via the returned `stale_fields` list. The runtime workflow is
+///   resolved using the legacy path so downstream workflow-dependent checks
+///   remain useful and `workflow_skipped_for_stale_fields` is `true`. This
+///   keeps the doctor usable as a migration guide while still flagging the
+///   boundary violation through the `project-set-boundary` check.
+/// - In project-set mode with a clean front matter, the strict project-set
+///   composition produces the resolved workflow and the stale list is empty.
+/// - In legacy single-repo mode the legacy path is used directly.
+fn resolve_doctor_workflow_for_mode(
+    workflow: &WorkflowDefinition,
+    project_set: Option<&crate::opensymphony_workflow::ResolvedProjectSet>,
+    target_repo: &Path,
+    active_mode: &DoctorActiveMode,
+    linear_enabled: bool,
+) -> DoctorWorkflowResolution {
+    match (active_mode, project_set) {
+        (DoctorActiveMode::ProjectSet, Some(resolved_project_set)) => {
+            let stale = workflow.detect_stale_project_set_fields();
+            if stale.is_empty() {
+                let resolved = workflow
+                    .resolve_strict_project_set(
+                        resolved_project_set,
+                        target_repo,
+                        &ProcessEnvironment,
+                    )
+                    .map_err(|error| format!("{error}"))?;
+                Ok((resolved, stale, false))
+            } else {
+                // Strict path will reject this front matter. Fall back to the
+                // legacy resolution so downstream checks have a workflow to
+                // inspect; the boundary check is responsible for the failing
+                // diagnostic.
+                let legacy = resolve_doctor_workflow(workflow, target_repo, linear_enabled)
+                    .map_err(|error| format!("{error}"))?;
+                Ok((legacy, stale, true))
+            }
+        }
+        _ => {
+            let resolved = resolve_doctor_workflow(workflow, target_repo, linear_enabled)
+                .map_err(|error| format!("{error}"))?;
+            Ok((resolved, Vec::new(), false))
+        }
+    }
 }
 
 fn resolve_doctor_workflow(
@@ -1188,6 +1375,80 @@ fn check_workflow(runtime: &DoctorRuntimeConfig) -> CheckResult {
             runtime.workflow.config.tracker.project_slug,
         ),
     )
+}
+
+/// Reports the active runtime mode (LOC-18).
+///
+/// Always passes because the active mode itself is informational. In
+/// project-set mode it also names the project-set path and the inventory
+/// size; in legacy mode it explicitly states that no `.opensymphony/project-set.yaml`
+/// is in use.
+fn check_mode(runtime: &DoctorRuntimeConfig) -> CheckResult {
+    let label = runtime.active_mode.label();
+    let detail = match runtime.active_mode {
+        DoctorActiveMode::ProjectSet => match (
+            runtime.project_set_path.as_ref(),
+            runtime.project_set.as_ref(),
+        ) {
+            (Some(path), Some(resolved)) => format!(
+                "active mode: {label}; project-set at {} (slug `{}`, inventory of {} repo(s)) owns global tracker/polling/total-concurrency; repo WORKFLOW.md owns repo-local fields",
+                path.display(),
+                resolved.config.slug,
+                resolved.inventory().len(),
+            ),
+            (Some(path), None) => format!(
+                "active mode: {label}; project-set at {} is present but could not be resolved",
+                path.display(),
+            ),
+            (None, _) => format!("active mode: {label}"),
+        },
+        DoctorActiveMode::LegacySingleRepo => format!(
+            "active mode: {label}; pre-migration single-repo flow in use; create `.opensymphony/project-set.yaml` to opt into strict project-set mode"
+        ),
+    };
+
+    CheckResult::pass("mode", detail)
+}
+
+/// Validates the LOC-18 project-set boundary (LOC-18).
+///
+/// - Legacy single-repo mode: skipped (no migration required).
+/// - Project-set mode with no stale moved fields: passed.
+/// - Project-set mode with stale moved fields: failed, listing the exact
+///   field(s) and the destination(s) in `.opensymphony/project-set.yaml`.
+fn check_project_set_boundary(runtime: &DoctorRuntimeConfig) -> CheckResult {
+    match runtime.active_mode {
+        DoctorActiveMode::LegacySingleRepo => CheckResult::skip(
+            "project-set-boundary",
+            "project-set mode inactive; legacy single-repo flow has no boundary to enforce",
+        ),
+        DoctorActiveMode::ProjectSet => {
+            if runtime.stale_project_set_fields.is_empty() {
+                let detail = match runtime.project_set_path.as_ref() {
+                    Some(path) => format!(
+                        "no stale moved fields in {}; project-set owns tracker/polling/total-concurrency and WORKFLOW.md owns repo-local fields",
+                        path.display()
+                    ),
+                    None => "no stale moved fields in WORKFLOW.md".to_string(),
+                };
+                CheckResult::pass("project-set-boundary", detail)
+            } else {
+                let formatted = format_stale_field_list(&runtime.stale_project_set_fields);
+                let detail = format!(
+                    "WORKFLOW.md still defines project-set-owned fields in project-set mode: {formatted}; remove them from WORKFLOW.md and set the matching values under `linear`/`polling`/`agent` in `.opensymphony/project-set.yaml` (migration owner: LOC-20)"
+                );
+                CheckResult::fail("project-set-boundary", detail)
+            }
+        }
+    }
+}
+
+fn format_stale_field_list(fields: &[(String, String)]) -> String {
+    fields
+        .iter()
+        .map(|(field, destination)| format!("{field} -> {destination}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn check_repo_root(repo_root: &Path) -> CheckResult {
@@ -1515,26 +1776,68 @@ fn check_openhands_transport(workflow: &ResolvedWorkflow) -> CheckResult {
     }
 }
 
-fn check_linear(linear: &LinearDoctorConfig, workflow: &ResolvedWorkflow) -> CheckResult {
-    if !linear.enabled {
-        return CheckResult::skip(
+fn check_linear(
+    linear: &LinearDoctorConfig,
+    workflow: &ResolvedWorkflow,
+    active_mode: DoctorActiveMode,
+    project_set: Option<&crate::opensymphony_workflow::ResolvedProjectSet>,
+) -> CheckResult {
+    if let DoctorActiveMode::ProjectSet = active_mode {
+        // LOC-18: project-set mode owns Linear auth. Do NOT bypass the real
+        // env check with `linear.enabled: false`; the legacy placeholder
+        // relaxation applies only in legacy single-repo mode.
+        //
+        // `active_mode == ProjectSet` is set only when the project-set file
+        // is present, so `project_set` is always `Some(...)` here. Use
+        // `expect` to make the invariant explicit rather than fall through
+        // to a `LINEAR_API_KEY` default that is unreachable.
+        let api_key_env = project_set
+            .expect("active_mode == ProjectSet implies project_set is Some")
+            .config
+            .linear
+            .api_key_env
+            .clone();
+        match env::var(&api_key_env) {
+            Ok(value) if !value.trim().is_empty() => CheckResult::pass(
+                "linear",
+                format!(
+                    "project-set Linear auth ready: project {}, api_key_env {} resolved ({} active / {} terminal)",
+                    workflow.config.tracker.project_slug,
+                    api_key_env,
+                    workflow.config.tracker.active_states.len(),
+                    workflow.config.tracker.terminal_states.len(),
+                ),
+            ),
+            _ => CheckResult::fail(
+                "linear",
+                format!(
+                    "project-set Linear auth missing: api_key_env `{}` must be set in project-set mode; configure it under `linear.api_key_env` in `.opensymphony/project-set.yaml`",
+                    api_key_env
+                ),
+            ),
+        }
+    } else if !linear.enabled {
+        // Legacy placeholder relaxation: LOC-12 keeps `linear.enabled: false`
+        // honoring a no-op Linear auth path so pre-migration repos can
+        // exercise the rest of the doctor pipeline.
+        CheckResult::skip(
             "linear",
             format!(
                 "Linear checks skipped because `linear.enabled` is false; workflow tracker project {} still resolved",
                 workflow.config.tracker.project_slug
             ),
-        );
+        )
+    } else {
+        CheckResult::pass(
+            "linear",
+            format!(
+                "workflow tracker ready for project {} with {} active and {} terminal states",
+                workflow.config.tracker.project_slug,
+                workflow.config.tracker.active_states.len(),
+                workflow.config.tracker.terminal_states.len(),
+            ),
+        )
     }
-
-    CheckResult::pass(
-        "linear",
-        format!(
-            "workflow tracker ready for project {} with {} active and {} terminal states",
-            workflow.config.tracker.project_slug,
-            workflow.config.tracker.active_states.len(),
-            workflow.config.tracker.terminal_states.len(),
-        ),
-    )
 }
 
 /// Result of live OpenHands checks, including optional supervisor for cleanup
@@ -2724,10 +3027,15 @@ openhands:
             target_repo,
             workflow_path: temp_dir.path().join("target-repo/WORKFLOW.md"),
             workflow,
+            workflow_skipped_for_stale_fields: false,
             tool_dir: Some(temp_dir.path().join("tools/openhands-server")),
             probe_model: None,
             probe_api_key_env: None,
             probe_llm_base_url_env: None,
+            active_mode: super::DoctorActiveMode::LegacySingleRepo,
+            project_set: None,
+            project_set_path: None,
+            stale_project_set_fields: Vec::new(),
         }
     }
 }

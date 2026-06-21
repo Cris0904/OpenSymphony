@@ -95,6 +95,14 @@ enum RunCommandError {
         source: crate::opensymphony_workflow::WorkflowConfigError,
     },
     #[error(
+        "project-set mode is active but {path} still defines project-set-owned fields: {source}; move them to `.opensymphony/project-set.yaml` and remove them from WORKFLOW.md"
+    )]
+    StaleProjectSetFields {
+        path: PathBuf,
+        #[source]
+        source: crate::opensymphony_workflow::WorkflowConfigError,
+    },
+    #[error(
         "memory auto-capture is enabled but {path} is missing; run `opensymphony memory init` or `opensymphony update` from the target repo before `opensymphony run`"
     )]
     MissingMemoryConfig { path: PathBuf },

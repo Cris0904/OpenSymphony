@@ -693,7 +693,7 @@ fn doctor_passes_project_set_when_global_config_is_valid() {
     std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
     std::fs::write(
         target_repo.join("WORKFLOW.md"),
-        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+        doctor_workflow_source_strict_project_set(&workspace_root, "http://127.0.0.1:8000"),
     )
     .expect("workflow should be written");
     std::fs::write(
@@ -790,7 +790,7 @@ fn doctor_fails_project_set_when_global_config_is_invalid() {
     std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
     std::fs::write(
         target_repo.join("WORKFLOW.md"),
-        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+        doctor_workflow_source_strict_project_set(&workspace_root, "http://127.0.0.1:8000"),
     )
     .expect("workflow should be written");
     // Empty slug → resolve failure for the project_set top-level slug.
@@ -973,6 +973,72 @@ Issue: {{{{ issue.identifier }}}}
     )
 }
 
+/// Strict project-set-mode WORKFLOW.md (LOC-18).
+///
+/// Omits the project-set-owned fields (`tracker.*`, `polling.interval_ms`,
+/// `agent.max_concurrent_agents`) so the `project-set-boundary` check passes
+/// when `.opensymphony/project-set.yaml` supplies them globally.
+fn doctor_workflow_source_strict_project_set(
+    workspace_root: &std::path::Path,
+    base_url: &str,
+) -> String {
+    format!(
+        r#"---
+workspace:
+  root: {}
+openhands:
+  transport:
+    base_url: {}
+---
+
+# Doctor Probe
+
+Issue: {{{{ issue.identifier }}}}
+"#,
+        workspace_root.display(),
+        base_url,
+    )
+}
+
+/// Stale project-set-mode WORKFLOW.md (LOC-18).
+///
+/// Keeps `tracker.*`, `polling.interval_ms`, and `agent.max_concurrent_agents`
+/// in `WORKFLOW.md` so the `project-set-boundary` check can flag them as
+/// migrated config.
+fn doctor_workflow_source_stale_project_set(
+    workspace_root: &std::path::Path,
+    base_url: &str,
+) -> String {
+    format!(
+        r#"---
+tracker:
+  kind: linear
+  project_slug: sample-project
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 5000
+agent:
+  max_concurrent_agents: 4
+workspace:
+  root: {}
+openhands:
+  transport:
+    base_url: {}
+---
+
+# Doctor Probe
+
+Issue: {{{{ issue.identifier }}}}
+"#,
+        workspace_root.display(),
+        base_url,
+    )
+}
+
 fn project_set_yaml_source(project_set_slug: &str, linear_project_slug: &str) -> String {
     format!(
         r#"---
@@ -1000,4 +1066,364 @@ project_set:
           path: ../OpenSymphony
 "#,
     )
+}
+
+// -------------------------------------------------------------------------
+// LOC-18: active mode, stale-fields boundary, and linear.enabled coverage
+// -------------------------------------------------------------------------
+
+/// Writes a doctor config that targets the given repo and pins
+/// `linear.enabled: false` so the legacy `linear.enabled: false` placeholder
+/// relaxation is exercised. Reused by the LOC-18 mode/legacy tests.
+fn write_doctor_config_with_linear_enabled(
+    config_path: &std::path::Path,
+    target_repo: &std::path::Path,
+    tool_dir: &std::path::Path,
+    linear_enabled: bool,
+) {
+    let config = serde_yaml::to_string(&Value::Mapping(
+        [
+            (
+                Value::String("target_repo".to_string()),
+                Value::String(target_repo.display().to_string()),
+            ),
+            (
+                Value::String("openhands".to_string()),
+                Value::Mapping(
+                    [
+                        (
+                            Value::String("tool_dir".to_string()),
+                            Value::String(tool_dir.display().to_string()),
+                        ),
+                        (Value::String("probe_model".to_string()), Value::Null),
+                        (Value::String("probe_api_key_env".to_string()), Value::Null),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ),
+            (
+                Value::String("linear".to_string()),
+                Value::Mapping(
+                    [(
+                        Value::String("enabled".to_string()),
+                        Value::Bool(linear_enabled),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    ))
+    .expect("config should serialize");
+    std::fs::write(config_path, config).expect("config should be written");
+}
+
+#[test]
+fn doctor_reports_active_mode_as_legacy_single_repo_when_project_set_absent() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor should succeed in legacy mode: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("active mode: legacy-single-repo"),
+        "doctor should report the active mode as `legacy-single-repo` when no project-set file is present: stdout={stdout}",
+    );
+}
+
+#[test]
+fn doctor_reports_active_mode_as_project_set_when_global_config_is_present() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
+    let opensymphony_dir = temp_dir.path().join(".opensymphony");
+    let project_set_path = opensymphony_dir.join("project-set.yaml");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source_strict_project_set(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    std::fs::write(
+        &project_set_path,
+        project_set_yaml_source(
+            "opensymphony-updates",
+            "opensymphony-bootstrap-e7b957855cb7",
+        ),
+    )
+    .expect("project-set should be written");
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .env("LINEAR_API_KEY", "test-linear-key")
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor should succeed with a valid project-set + migrated WORKFLOW.md: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("active mode: project-set"),
+        "doctor should report the active mode as `project-set` when `.opensymphony/project-set.yaml` is present: stdout={stdout}",
+    );
+}
+
+#[test]
+fn doctor_fails_project_set_boundary_when_workflow_has_stale_moved_fields() {
+    // The strict project-set boundary check must fail in project-set mode
+    // when WORKFLOW.md still defines project-set-owned fields, and the
+    // diagnostic must list the stale field and its project-set destination
+    // (LOC-18 AC: stale values are never used as fallback).
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
+    let opensymphony_dir = temp_dir.path().join(".opensymphony");
+    let project_set_path = opensymphony_dir.join("project-set.yaml");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
+    // Stale WORKFLOW.md: still defines tracker.*, polling.*, agent.max_concurrent_agents.
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source_stale_project_set(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    std::fs::write(
+        &project_set_path,
+        project_set_yaml_source(
+            "opensymphony-updates",
+            "opensymphony-bootstrap-e7b957855cb7",
+        ),
+    )
+    .expect("project-set should be written");
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .env("LINEAR_API_KEY", "test-linear-key")
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "doctor should fail in project-set mode when WORKFLOW.md has stale moved fields: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("[FAIL] project-set-boundary"),
+        "doctor should report a failing `project-set-boundary` check on stale moved fields: stdout={stdout}",
+    );
+    assert!(
+        combined.contains("tracker.project_slug")
+            && combined.contains("project_set.linear.project_slug"),
+        "stale-fields diagnostic should list `tracker.project_slug` and its `project_set.linear.project_slug` destination: combined={combined}",
+    );
+    assert!(
+        combined.contains("polling.interval_ms")
+            && combined.contains("project_set.polling.interval_ms"),
+        "stale-fields diagnostic should list `polling.interval_ms` and its destination: combined={combined}",
+    );
+    assert!(
+        combined.contains("agent.max_concurrent_agents")
+            && combined.contains("project_set.agent.max_concurrent_agents"),
+        "stale-fields diagnostic should list `agent.max_concurrent_agents` and its destination: combined={combined}",
+    );
+    assert!(
+        combined.contains("LOC-20"),
+        "stale-fields diagnostic should reference the LOC-20 migration owner: combined={combined}",
+    );
+    // Independent checks must still report (LOC-18 AC: doctor continues
+    // unrelated checks where practical).
+    assert!(
+        stdout.contains("[PASS] project-set") || stdout.contains("[FAIL] project-set"),
+        "doctor should still surface the `project-set` check result alongside the boundary failure: stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("[PASS] mode") || stdout.contains("[FAIL] mode"),
+        "doctor should still surface the `mode` check: stdout={stdout}",
+    );
+}
+
+#[test]
+fn doctor_legacy_mode_relaxes_linear_auth_with_linear_enabled_false() {
+    // LOC-18 AC: the legacy `linear.enabled: false` placeholder relaxation
+    // applies only when no project-set is present. In legacy mode, the
+    // `linear` check should pass without `LINEAR_API_KEY` when
+    // `linear.enabled: false`.
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .env_remove("LINEAR_API_KEY")
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor should succeed in legacy mode with `linear.enabled: false` even without `LINEAR_API_KEY`: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("[SKIP] linear"),
+        "legacy mode with `linear.enabled: false` should skip the linear check (placeholder relaxation): stdout={stdout}",
+    );
+}
+
+#[test]
+fn doctor_strict_project_set_mode_does_not_relax_linear_auth_with_linear_enabled_false() {
+    // LOC-18 AC: in project-set mode the legacy `linear.enabled: false`
+    // placeholder relaxation must NOT bypass the real Linear env check.
+    //
+    // We exercise this by configuring `linear.enabled: false` in
+    // `config.yaml` while a valid project-set is present, and confirming
+    // the linear check takes the strict (project-set) path: when the
+    // required env (`LINEAR_API_KEY`) is set, the linear check must PASS
+    // (proving it did not silently skip), and the doctor output must NOT
+    // contain the legacy "Linear checks skipped because `linear.enabled`
+    // is false" message that the legacy mode would emit.
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let target_repo = temp_dir.path().join("target-repo");
+    let workspace_root = temp_dir.path().join("var/workspaces");
+    let tool_dir = temp_dir.path().join("managed/openhands-server");
+    let opensymphony_dir = temp_dir.path().join(".opensymphony");
+    let project_set_path = opensymphony_dir.join("project-set.yaml");
+    let config_path = temp_dir.path().join("doctor.yaml");
+    let fake_bin_dir = TempDir::new().expect("fake bin dir should be created");
+
+    std::fs::create_dir_all(&target_repo).expect("target repo should be created");
+    std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should be created");
+    std::fs::write(
+        target_repo.join("WORKFLOW.md"),
+        doctor_workflow_source_strict_project_set(&workspace_root, "http://127.0.0.1:8000"),
+    )
+    .expect("workflow should be written");
+    std::fs::write(
+        &project_set_path,
+        project_set_yaml_source(
+            "opensymphony-updates",
+            "opensymphony-bootstrap-e7b957855cb7",
+        ),
+    )
+    .expect("project-set should be written");
+    // `linear.enabled: false` in `config.yaml` must NOT skip the linear
+    // check in project-set mode.
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
+
+    for command in ["cargo", "curl", "git", "uv"] {
+        write_fake_executable(fake_bin_dir.path().join(command));
+    }
+    write_bash_wrapper(fake_bin_dir.path().join("bash"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(temp_dir.path())
+        .env("PATH", path_only(fake_bin_dir.path()))
+        .env("LINEAR_API_KEY", "test-linear-key")
+        .output()
+        .expect("doctor command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor should succeed in project-set mode with `linear.enabled: false` and `LINEAR_API_KEY` set: stdout={stdout}, stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("[PASS] linear"),
+        "project-set mode must not skip the linear check; it must PASS when the configured api_key_env is set: stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("Linear checks skipped because `linear.enabled` is false"),
+        "project-set mode must not emit the legacy `linear.enabled: false` skip message: stdout={stdout}",
+    );
 }
