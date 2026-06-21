@@ -4,7 +4,7 @@ title: Multi-Repo Phase 1 — Repo Identity and Dispatch (Integration Audit)
 type: parent
 area: orchestrator
 priority: P0
-estimate: 13
+estimate: 13d
 milestone: M14: Multi-Repo Phase 1
 linear: LOC-9
 children:
@@ -22,7 +22,6 @@ decision_refs:
   - D7 — clone via static hook + env-injected RepoRef
   - D8 — Arch A (one orchestrator over N repos)
   - D10 — parent = lightweight, read-only review node
-status: integration-verified
 ---
 
 # OSYM-600: Multi-Repo Phase 1 — Repo Identity and Dispatch (Integration Audit)
