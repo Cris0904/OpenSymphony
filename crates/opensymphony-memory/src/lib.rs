@@ -1333,6 +1333,249 @@ Reviews are triggered when you open a pull request for review.
         assert_ne!(sanitize_issue_key("COE_123"), sanitize_issue_key("COE-123"));
     }
 
+    #[test]
+    fn infer_areas_does_not_create_repo_namespace_area() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["repo:opensymphony".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        assert!(
+            !plan.selected[0]
+                .areas
+                .iter()
+                .any(|area| area == "repo-opensymphony"),
+            "catch-all must not infer `repo-opensymphony` junk area; got {:?}",
+            plan.selected[0].areas
+        );
+    }
+
+    #[test]
+    fn infer_areas_keeps_plain_legacy_label() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["plainlabel".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        // The plain legacy `plainlabel` label must still produce the area
+        // `plainlabel` via the catch-all slugify fallback. Other areas may
+        // still be inferred from narrative evidence (unchanged existing
+        // behaviour).
+        assert!(
+            plan.selected[0].areas.contains(&"plainlabel".to_string()),
+            "`plainlabel` must yield area `plainlabel`; got {:?}",
+            plan.selected[0].areas
+        );
+    }
+
+    #[test]
+    fn infer_areas_keeps_canonical_area_label() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["area:bar".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        // The canonical `area:bar` label must yield the area slug `bar`.
+        // Other areas may still be inferred from narrative evidence
+        // (unchanged existing behaviour).
+        assert!(
+            plan.selected[0].areas.contains(&"bar".to_string()),
+            "`area:bar` must yield area `bar`; got {:?}",
+            plan.selected[0].areas
+        );
+    }
+
+    #[test]
+    fn area_alias_matches_rejects_stale_repo_namespace_area() {
+        let repo = TempDir::new().expect("temp repo");
+        let mut source = sample_source();
+        // Add an existing stale `repo-foo` area to the config, then add a
+        // `repo:foo` label to the issue. The alias-matching path must not
+        // associate the live label with the stale area.
+        let config_yaml = r#"
+areas:
+  repo-foo:
+    title: Repo Foo
+    docs_target: docs/repo-foo.md
+    status: stable
+    confidence: 90
+  openhands-runtime:
+    title: OpenHands Runtime
+    docs_target: docs/openhands-runtime.md
+    status: stable
+    confidence: 90
+    aliases:
+      - runtime
+      - OpenHands Runtime
+    source_refs:
+      linear_labels:
+        - runtime
+"#;
+        let config_path = repo.path().join("opensymphony-memory.yaml");
+        fs::write(&config_path, config_yaml).expect("config write");
+        let config = MemoryConfig::load(repo.path(), Some(&config_path)).expect("memory config");
+        source.issues[0].labels = vec!["repo:foo".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        assert!(
+            !plan.selected[0].areas.contains(&"repo-foo".to_string()),
+            "live `repo:foo` label must not match stale `repo-foo` area via alias matching; got {:?}",
+            plan.selected[0].areas
+        );
+    }
+
+    #[test]
+    fn merge_area_evidence_excludes_non_area_namespace_labels() {
+        let repo = TempDir::new().expect("temp repo");
+        let config_yaml = r#"
+areas:
+  repo-foo:
+    title: Repo Foo
+    docs_target: docs/repo-foo.md
+    status: candidate
+    confidence: 0
+"#;
+        let config_path = repo.path().join("opensymphony-memory.yaml");
+        fs::write(&config_path, config_yaml).expect("config write");
+        let config = MemoryConfig::load(repo.path(), Some(&config_path)).expect("memory config");
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["repo:foo".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        // The `repo-foo` area must not have gained any source evidence from
+        // the `repo:foo` label: it should remain a fresh candidate.
+        let _report = write_capture_plan(&config, &plan, false).expect("write");
+        let evolved = MemoryConfig::load(repo.path(), Some(&config_path)).expect("evolved config");
+        let repo_foo = evolved
+            .areas
+            .get("repo-foo")
+            .expect("repo-foo area should exist when `repo:foo` label is present");
+        assert!(
+            !repo_foo
+                .source_refs
+                .linear_labels
+                .contains(&"repo:foo".to_string()),
+            "`repo:foo` label must not pollute `repo-foo` source_refs.linear_labels; got {:?}",
+            repo_foo.source_refs.linear_labels
+        );
+        assert!(
+            !repo_foo.aliases.contains(&"repo:foo".to_string()),
+            "`repo:foo` label must not be recorded as an alias for `repo-foo`; got {:?}",
+            repo_foo.aliases
+        );
+        assert!(
+            repo_foo.confidence < 80,
+            "`repo:foo` label must not contribute high confidence to `repo-foo`; got {}",
+            repo_foo.confidence
+        );
+    }
+
+    #[test]
+    fn raw_repo_label_is_preserved_as_evidence() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["repo:opensymphony".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        // Raw label evidence must be preserved in the plan.
+        assert!(
+            plan.selected[0]
+                .issue
+                .labels
+                .contains(&"repo:opensymphony".to_string()),
+            "raw `repo:opensymphony` label must be preserved in IssueEvidence.labels"
+        );
+
+        // And after writing the plan, the label must remain in the indexed
+        // labels_json column.
+        write_capture_plan(&config, &plan, false).expect("write");
+        let connection = Connection::open(&config.index_path).expect("index should open");
+        let labels_json: String = connection
+            .query_row(
+                "SELECT labels_json FROM issues WHERE issue_key = 'COE-123'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("labels_json should be present");
+        let labels: Vec<String> =
+            serde_json::from_str(&labels_json).expect("labels_json should parse");
+        assert!(
+            labels.contains(&"repo:opensymphony".to_string()),
+            "raw `repo:opensymphony` label must be preserved in indexed labels_json; got {:?}",
+            labels
+        );
+    }
+
     fn config_for(repo_root: &Path) -> MemoryConfig {
         let config_path = repo_root.join("opensymphony-memory.yaml");
         fs::write(

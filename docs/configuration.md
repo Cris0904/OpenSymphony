@@ -311,6 +311,24 @@ names like `opensymphony` are fine and are what the resolver stores in
 `path` (optional) carries local boot metadata only and is intentionally not
 part of `RepoRef`.
 
+### Repo slugs and the `repo:<slug>` Linear label
+
+The reserved `repo:<slug>` Linear label namespace is keyed off this same
+project-set repo slug. `repo:<slug>` MUST map to a `project_set.projects[].repos[].slug`
+value (i.e. `RepoRef.key`) **exactly**, character-for-character. The
+`create-implementation-plan` and `convert-tasks-to-linear` skills, the
+`repo_for_issue` resolver, and the inventory validation in the converter all
+assume exact match:
+
+- Repo slugs are NOT lowercased, slugified, or otherwise coerced. Bare names
+  like `opensymphony` are stored and compared verbatim.
+- Area slugs, by contrast, ARE lowercased and slugified (see the
+  `area_slug` helper in `convert_tasks_to_linear.py`); that normalization
+  does NOT apply to `repo:` labels.
+- Treat `repo:` as a reserved Linear label namespace that maps to the
+  inventory slug exactly. See `docs/memory.md` for the related Memory-doc
+  boundary and `AGENTS.md` for the canonical reserved-namespace note.
+
 ### `LINEAR_API_KEY` fallback
 
 `project_set.linear.api_key_env` is the env-var name that holds the Linear

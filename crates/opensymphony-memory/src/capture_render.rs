@@ -173,7 +173,7 @@ fn infer_areas(
         }
     }
     for label in labels {
-        if !is_generic_label(&label) {
+        if !is_generic_label(&label) && !is_reserved_namespace_label(&label) {
             let label_slug = canonical_area_label_slug(&label).unwrap_or_else(|| slugify(&label));
             if !areas.contains(&label_slug) {
                 areas.insert(label_slug);
@@ -200,6 +200,9 @@ fn infer_areas(
 }
 
 fn area_alias_matches(area: &AreaConfig, value: &str) -> bool {
+    if is_reserved_namespace_label(value) {
+        return false;
+    }
     let value_slug = slugify(value);
     let canonical_area = canonical_area_label_slug(value);
     canonical_area.as_deref() == Some(area.slug.as_str())
@@ -225,6 +228,20 @@ fn canonical_area_label_slug(value: &str) -> Option<String> {
     }
     let slug = slugify(suffix);
     if slug.is_empty() { None } else { Some(slug) }
+}
+
+// Reserved-prefix guard: `area:` is the canonical area namespace; any other
+// `prefix:value` label (e.g. `repo:opensymphony`, `project:foo`,
+// `priority:high`) is a different facet and must not be treated as area
+// evidence. The raw label is still preserved in `IssueEvidence.labels` and
+// indexed as `labels_json`; this guard only stops it from becoming or
+// matching an area.
+fn is_reserved_namespace_label(label: &str) -> bool {
+    let Some((prefix, _)) = label.trim().split_once(':') else {
+        return false;
+    };
+    let prefix = prefix.trim();
+    !prefix.is_empty() && !prefix.eq_ignore_ascii_case("area")
 }
 
 fn area_matches_evidence(
@@ -449,6 +466,9 @@ fn merge_area_evidence(
         push_unique(&mut area.source_refs.linear_milestones, milestone);
     }
     for label in normalize_list(issue_plan.issue.labels.clone()) {
+        if is_reserved_namespace_label(&label) {
+            continue;
+        }
         let label_area = canonical_area_label_slug(&label);
         if label_area.as_deref() == Some(area.slug.as_str())
             || slugify(&label) == area.slug
@@ -473,8 +493,9 @@ fn inferred_area_confidence(area: &AreaConfig, issue_plan: &CaptureIssuePlan) ->
     let base: u8 = if normalize_list(issue_plan.issue.labels.clone())
         .iter()
         .any(|label| {
-            canonical_area_label_slug(label).as_deref() == Some(area.slug.as_str())
-                || (slugify(label) == area.slug && !is_generic_label(label))
+            !is_reserved_namespace_label(label)
+                && (canonical_area_label_slug(label).as_deref() == Some(area.slug.as_str())
+                    || (slugify(label) == area.slug && !is_generic_label(label)))
         })
     {
         90
