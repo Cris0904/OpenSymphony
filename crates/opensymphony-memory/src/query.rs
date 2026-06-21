@@ -16,6 +16,9 @@ fn render_indexed_brief(config: &MemoryConfig, indexed: &IndexedIssue) -> String
     if !indexed.areas().is_empty() {
         output.push_str(&format!("- Areas: {}\n", indexed.areas().join(", ")));
     }
+    if let Some(repo) = indexed.repositories().first() {
+        output.push_str(&format!("- Repository: {}\n", repo.key));
+    }
     output.push('\n');
     output.push_str(&compact_capsule_body(&indexed.body));
     output
@@ -67,6 +70,7 @@ pub fn search_with_scope(
                     title: indexed.title.clone(),
                     capsule_path: indexed.capsule_path.clone(),
                     areas: indexed.areas(),
+                    repositories: indexed.repositories(),
                     snippet: snippet_for_terms(&indexed.body, &terms),
                 },
             ));
@@ -124,6 +128,7 @@ pub fn related_by_issue_with_scope(
                     title: candidate.title.clone(),
                     capsule_path: candidate.capsule_path.clone(),
                     areas: candidate_areas,
+                    repositories: candidate.repositories(),
                     snippet: first_interesting_line(&candidate.body),
                 },
             ));
@@ -169,6 +174,7 @@ pub fn related_by_area_with_scope(
                 title: candidate.title.clone(),
                 capsule_path: candidate.capsule_path.clone(),
                 areas,
+                repositories: candidate.repositories(),
                 snippet: first_interesting_line(&candidate.body),
             });
         }
@@ -242,12 +248,23 @@ fn docs_scope_requires_index_check(scope: &MemoryScopeFilter) -> bool {
     scope.issue.is_some() || scope.milestone.is_some() || scope.repo.is_some()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryContextOptions {
     pub issue: String,
     pub explicit_includes: Vec<String>,
     pub paths: Vec<PathBuf>,
     pub limit: usize,
+    /// Repository key / `RepoRef.key` scope. When set, only indexed issues
+    /// with a matching `repo:<slug>` facet contribute to the selected
+    /// briefs (LOC-26). The repo scope is applied even when the call site
+    /// does not enable code-intelligence context.
+    pub repo: Option<String>,
+    /// Memory area scope (e.g. `runtime`). When set, only indexed issues in
+    /// the matching area contribute to the selected briefs.
+    pub area: Option<String>,
+    /// Milestone scope. When set, only indexed issues in the matching
+    /// milestone contribute to the selected briefs.
+    pub milestone: Option<String>,
 }
 
 impl MemoryContextOptions {
@@ -257,6 +274,9 @@ impl MemoryContextOptions {
             explicit_includes: Vec::new(),
             paths: Vec::new(),
             limit,
+            repo: None,
+            area: None,
+            milestone: None,
         }
     }
 }
@@ -269,6 +289,7 @@ enum ContextBucket {
     CompletedSiblings,
     PathMatches,
     AreaMatches,
+    RepositoryMatches,
 }
 
 impl ContextBucket {
@@ -280,6 +301,7 @@ impl ContextBucket {
             Self::CompletedSiblings => "Completed Siblings",
             Self::PathMatches => "Path Matches",
             Self::AreaMatches => "Area Matches",
+            Self::RepositoryMatches => "Repository Matches",
         }
     }
 
@@ -291,6 +313,7 @@ impl ContextBucket {
             Self::CompletedSiblings => "completed sibling",
             Self::PathMatches => "path match",
             Self::AreaMatches => "area match",
+            Self::RepositoryMatches => "repository match",
         }
     }
 
@@ -302,10 +325,11 @@ impl ContextBucket {
             Self::CompletedSiblings => 6,
             Self::PathMatches => 8,
             Self::AreaMatches => 8,
+            Self::RepositoryMatches => 8,
         }
     }
 
-    fn ordered() -> [Self; 6] {
+    fn ordered() -> [Self; 7] {
         [
             Self::ExplicitIncludes,
             Self::BlockingPredecessors,
@@ -313,6 +337,7 @@ impl ContextBucket {
             Self::CompletedSiblings,
             Self::PathMatches,
             Self::AreaMatches,
+            Self::RepositoryMatches,
         ]
     }
 }
@@ -373,6 +398,7 @@ pub fn context_for_issue_with_options(
         );
     }
 
+    let mut current_repo_key: Option<String> = None;
     if let Some(issue) = current_issue {
         for blocker in &issue.blocked_by {
             let blocker_key = normalize_issue_key(&blocker.identifier);
@@ -450,6 +476,41 @@ pub fn context_for_issue_with_options(
                 );
             }
         }
+
+        // Repository matches: prefer the live source's `repo:` evidence,
+        // falling back to the indexed facet on the current issue. This
+        // populates the `RepositoryMatches` bucket so workers see repo
+        // siblings even before the current issue is recaptured.
+        let source_repo = extract_repo_labels(&issue.labels).facet;
+        let indexed_repo = indexed_by_key
+            .get(&issue_key)
+            .and_then(|indexed| indexed.repositories().first().cloned());
+        current_repo_key = source_repo
+            .as_ref()
+            .map(|facet| facet.key.clone())
+            .or_else(|| indexed_repo.as_ref().map(|facet| facet.key.clone()));
+    }
+
+    if let Some(repo_key) = current_repo_key.as_deref() {
+        let repo_key = repo_key.to_string();
+        for indexed in &indexed_issues {
+            if indexed.issue_key == issue_key {
+                continue;
+            }
+            if indexed
+                .repositories()
+                .iter()
+                .any(|facet| facet.key == repo_key)
+            {
+                add_context_candidate(
+                    &mut candidates,
+                    ContextBucket::RepositoryMatches,
+                    &indexed.issue_key,
+                    &issue_key,
+                    &format!("{}: {}", ContextBucket::RepositoryMatches.reason(), repo_key),
+                );
+            }
+        }
     }
 
     if !options.paths.is_empty() {
@@ -463,6 +524,23 @@ pub fn context_for_issue_with_options(
             );
         }
     }
+
+    // Apply scope filters (LOC-26): when the caller sets `repo`/`area`/
+    // `milestone` on the options, drop candidates whose indexed record does
+    // not match. The scope applies to every selected memory brief even
+    // when the call site does not enable code-intelligence context. Note:
+    // we deliberately do NOT set `scope.issue` here because context
+    // candidates come from relations (blockers, children, siblings, repo
+    // matches) — filtering by issue would exclude them.
+    let scope = MemoryScopeFilter {
+        project_set: None,
+        project: None,
+        milestone: options.milestone.clone(),
+        issue: None,
+        repo: options.repo.clone(),
+        area: options.area.clone(),
+        all_accessible: false,
+    };
 
     let mut selected = Vec::<SelectedContextBrief>::new();
     let mut emitted = BTreeSet::<String>::new();
@@ -482,6 +560,9 @@ pub fn context_for_issue_with_options(
             let Some(indexed) = indexed_by_key.get(&candidate.issue_key) else {
                 continue;
             };
+            if !indexed_issue_matches_scope(config, indexed, &scope) {
+                continue;
+            }
             let (body, docs) = strip_documentation_impact_section(&render_indexed_brief(config, indexed));
             documentation_paths.extend(docs);
             selected.push(SelectedContextBrief {
@@ -707,6 +788,7 @@ pub fn status_with_scope(
         .into_iter()
         .map(|issue| {
             let areas = issue.areas();
+            let repository = issue.repositories().first().cloned();
             StatusIssue {
                 issue_key: issue.issue_key,
                 title: issue.title,
@@ -715,6 +797,7 @@ pub fn status_with_scope(
                 capsule_path: issue.capsule_path,
                 visibility: issue.visibility,
                 areas,
+                repository,
                 docs_sync_status: issue.docs_sync_status,
                 warning_count: issue.warning_count,
             }
@@ -758,13 +841,32 @@ fn indexed_issue_matches_scope(
 }
 
 fn indexed_issue_matches_repo(config: &MemoryConfig, issue: &IndexedIssue, repo: &str) -> bool {
-    let repo = repo_scope_prefix(config, repo);
+    let repo = repo.trim();
     if repo.is_empty() || repo == "." {
         return true;
     }
+    // Primary match: the issue has a captured `repo:<slug>` facet whose key
+    // matches the request. This is the documented `--repo` semantics after
+    // the LOC-26 repo-facet slice lands.
+    if issue
+        .repositories()
+        .iter()
+        .any(|facet| facet.key == repo)
+    {
+        return true;
+    }
+    // Transitional fallback: legacy path-prefix matching against changed
+    // files. Kept for migration from `--repo <path>` to `--repo <key>` /
+    // `--paths` semantics. New callers should use `--paths` for path
+    // filtering. The path-prefix hit must use the same relative-prefix
+    // shape as before (relative to `config.repo_root`).
+    let prefix = repo_scope_prefix(config, repo);
+    if prefix.is_empty() || prefix == "." {
+        return false;
+    }
     issue.changed_files.iter().any(|path| {
         let path = path.to_string_lossy();
-        path == repo || path.starts_with(&format!("{repo}/"))
+        path == prefix || path.starts_with(&format!("{prefix}/"))
     })
 }
 

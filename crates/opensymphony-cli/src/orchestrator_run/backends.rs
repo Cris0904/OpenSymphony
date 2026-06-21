@@ -814,10 +814,21 @@ fn inject_memory_env(
         "OPENSYMPHONY_MEMORY_PROJECT".to_string(),
         memory.project.clone(),
     );
-    env.insert(
-        "OPENSYMPHONY_MEMORY_PROJECT_SET".to_string(),
-        memory.project.clone(),
-    );
+    // LOC-26: project-set slug must not silently mirror the tracker
+    // project. Pass through an empty value when unknown so workers can
+    // fall back to the tracker project on their side without ambiguity.
+    if !memory.project_set.is_empty() {
+        env.insert(
+            "OPENSYMPHONY_MEMORY_PROJECT_SET".to_string(),
+            memory.project_set.clone(),
+        );
+    }
+    if !memory.execution_repo_key.is_empty() {
+        env.insert(
+            "OPENSYMPHONY_MEMORY_EXECUTION_REPO_KEY".to_string(),
+            memory.execution_repo_key.clone(),
+        );
+    }
     env.insert(
         "OPENSYMPHONY_MEMORY_EXECUTION_REPO".to_string(),
         memory.execution_repo.clone(),
@@ -832,6 +843,16 @@ fn memory_access_from_runtime(memory: &RuntimeMemoryEnv) -> MemoryWorkerAccess {
         endpoint: memory.endpoint.clone(),
         token: memory.token.clone(),
         project: Some(memory.project.clone()),
+        project_set: if memory.project_set.is_empty() {
+            None
+        } else {
+            Some(memory.project_set.clone())
+        },
+        execution_repo_key: if memory.execution_repo_key.is_empty() {
+            None
+        } else {
+            Some(memory.execution_repo_key.clone())
+        },
         execution_repo: Some(memory.execution_repo.clone()),
     }
 }
@@ -1092,6 +1113,8 @@ mod tests {
             endpoint: "http://127.0.0.1:8765/mcp".to_string(),
             token: Some("read-token".to_string()),
             project: "project-alpha".to_string(),
+            project_set: String::new(),
+            execution_repo_key: String::new(),
             execution_repo: "/tmp/project-alpha/services/api".to_string(),
         };
         let mut env = BTreeMap::new();
@@ -1110,10 +1133,49 @@ mod tests {
             env.get("OPENSYMPHONY_MEMORY_PROJECT").map(String::as_str),
             Some("project-alpha")
         );
+        // LOC-26: when the project-set slug is unknown, the legacy
+        // `OPENSYMPHONY_MEMORY_PROJECT_SET` env var should NOT silently
+        // mirror the tracker project.
         assert_eq!(
             env.get("OPENSYMPHONY_MEMORY_PROJECT_SET")
                 .map(String::as_str),
-            Some("project-alpha")
+            None
+        );
+        assert_eq!(
+            env.get("OPENSYMPHONY_MEMORY_EXECUTION_REPO_KEY")
+                .map(String::as_str),
+            None
+        );
+        assert_eq!(
+            env.get("OPENSYMPHONY_MEMORY_EXECUTION_REPO")
+                .map(String::as_str),
+            Some("/tmp/project-alpha/services/api")
+        );
+    }
+
+    #[test]
+    fn memory_env_injection_sets_project_set_and_repo_key_when_known() {
+        let memory = RuntimeMemoryEnv {
+            endpoint: "http://127.0.0.1:8765/mcp".to_string(),
+            token: Some("read-token".to_string()),
+            project: "project-alpha".to_string(),
+            project_set: "project-alpha-set".to_string(),
+            execution_repo_key: "open-symphony/services-api".to_string(),
+            execution_repo: "/tmp/project-alpha/services/api".to_string(),
+        };
+        let mut env = BTreeMap::new();
+
+        inject_memory_env(&mut env, &memory);
+
+        assert_eq!(
+            env.get("OPENSYMPHONY_MEMORY_PROJECT_SET")
+                .map(String::as_str),
+            Some("project-alpha-set")
+        );
+        assert_eq!(
+            env.get("OPENSYMPHONY_MEMORY_EXECUTION_REPO_KEY")
+                .map(String::as_str),
+            Some("open-symphony/services-api")
         );
         assert_eq!(
             env.get("OPENSYMPHONY_MEMORY_EXECUTION_REPO")

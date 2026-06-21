@@ -22,7 +22,7 @@ pub const ISSUE_CAPSULE_BEGIN: &str = "<!-- BEGIN OPENSYMPHONY MANAGED ISSUE CAP
 pub const ISSUE_CAPSULE_END: &str = "<!-- END OPENSYMPHONY MANAGED ISSUE CAPSULE -->";
 pub const TOPIC_DOC_BEGIN: &str = "<!-- BEGIN OPENSYMPHONY MANAGED MEMORY SYNC -->";
 pub const TOPIC_DOC_END: &str = "<!-- END OPENSYMPHONY MANAGED MEMORY SYNC -->";
-const MEMORY_SCHEMA_VERSION: i64 = 1;
+const MEMORY_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum MemoryError {
@@ -115,6 +115,43 @@ pub struct KnowledgeScope {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// Repository identity facet as captured by Memory.
+///
+/// `key` matches the exact project-set repo slug / `RepoRef.key`. The Memory
+/// facet is intentionally distinct from the orchestrator's `RepoRef`: the
+/// facet records what Memory learned about repository identity at capture
+/// time and may not always carry the resolved `url` / `default_branch`
+/// metadata. The Memory consumer code uses `key` for repo-scope matching.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryFacet {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+}
+
+/// Result of scanning raw Linear labels for `repo:<slug>` entries.
+///
+/// Memory treats `repo:<slug>` as a reserved label namespace owned by the
+/// project-set / `RepoRef` resolver. The extractor preserves the exact slug
+/// (no lowercase, no slugify) and only sets `facet` when exactly one
+/// well-formed `repo:<slug>` label exists on the issue. Multiple labels
+/// make repo identity ambiguous and surface a warning instead.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoLabelResolution {
+    pub facet: Option<RepositoryFacet>,
+    /// Every raw `repo:<slug>` label found on the issue, preserved in
+    /// original case and order. Empty list when no `repo:` labels exist.
+    pub raw_labels: Vec<String>,
+    /// True when more than one well-formed `repo:<slug>` label is present.
+    /// The facet is intentionally unset in that case.
+    pub ambiguous: bool,
+    /// Optional human-readable warning to surface alongside the issue plan
+    /// when `facet` could not be resolved deterministically.
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -593,6 +630,10 @@ pub struct CaptureIssuePlan {
     pub capsule_path: PathBuf,
     pub areas: Vec<String>,
     pub docs_targets: Vec<PathBuf>,
+    /// Repository facet captured for this issue. At most one facet is recorded
+    /// per issue — multiple `repo:` labels leave the facet unset and surface
+    /// a warning in `warnings`.
+    pub repository: Option<RepositoryFacet>,
     pub source_hash: String,
     pub already_captured: bool,
     pub stale: bool,
@@ -614,6 +655,9 @@ pub struct SearchResult {
     pub title: String,
     pub capsule_path: PathBuf,
     pub areas: Vec<String>,
+    /// Repository identity facets for the matched issue. Always empty when the
+    /// issue has no captured `repo:<slug>` evidence.
+    pub repositories: Vec<RepositoryFacet>,
     pub snippet: String,
 }
 
@@ -659,6 +703,8 @@ pub struct StatusIssue {
     pub capsule_path: PathBuf,
     pub visibility: MemoryVisibility,
     pub areas: Vec<String>,
+    /// Repository identity facet for the indexed issue, when one was captured.
+    pub repository: Option<RepositoryFacet>,
     pub docs_sync_status: String,
     pub warning_count: usize,
 }
@@ -727,6 +773,10 @@ struct IndexedIssue {
     milestone: Option<String>,
     labels: Vec<String>,
     areas: Vec<String>,
+    /// Repository identity facets, one per matching `repo:<slug>` label.
+    /// Backfilled on load from `issues.labels_json` when exactly one valid
+    /// `repo:<slug>` is present. Empty when no repo labels exist on the issue.
+    repositories: Vec<RepositoryFacet>,
     capsule_path: PathBuf,
     visibility: MemoryVisibility,
     source_hash: String,
@@ -1027,6 +1077,9 @@ Reviews are triggered when you open a pull request for review.
             explicit_includes: Vec::new(),
             paths: Vec::new(),
             limit: 20,
+            repo: None,
+            area: None,
+            milestone: None,
         };
 
         let context =
@@ -1573,6 +1626,362 @@ areas:
             labels.contains(&"repo:opensymphony".to_string()),
             "raw `repo:opensymphony` label must be preserved in indexed labels_json; got {:?}",
             labels
+        );
+    }
+
+    #[test]
+    fn capture_with_single_repo_label_records_repository_facet_and_no_area_pollution() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["repo:Open-Symphony".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        let selected = &plan.selected[0];
+        // Verbatim key preserved (no lowercase, no slugification).
+        assert_eq!(
+            selected.repository.as_ref().map(|facet| facet.key.clone()),
+            Some("Open-Symphony".to_string())
+        );
+        // No area pollution: areas does not gain `repo-open-symphony` or
+        // `repo-opensymphony` even though the catch-all path would have
+        // added it before LOC-23.
+        assert!(
+            !selected.areas.iter().any(|area| area.starts_with("repo")),
+            "areas must not contain `repo:*` entries; got {:?}",
+            selected.areas
+        );
+    }
+
+    #[test]
+    fn capture_with_multiple_repo_labels_emits_ambiguity_warning_and_no_facet() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec![
+            "repo:open-symphony".to_string(),
+            "repo:services-api".to_string(),
+        ];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        let selected = &plan.selected[0];
+        // Two well-formed `repo:` labels leave the facet unresolved.
+        assert!(
+            selected.repository.is_none(),
+            "expected unresolved repository facet when multiple `repo:` labels exist; got {:?}",
+            selected.repository
+        );
+        // But the raw labels are still preserved so the planner/UI can
+        // surface them.
+        assert!(
+            selected
+                .issue
+                .labels
+                .contains(&"repo:open-symphony".to_string()),
+            "raw repo labels must be preserved verbatim"
+        );
+        assert!(
+            selected
+                .issue
+                .labels
+                .contains(&"repo:services-api".to_string()),
+            "raw repo labels must be preserved verbatim"
+        );
+        // Warning surfaces the ambiguity with the slugs included.
+        let warning = plan.selected[0]
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("`repo:` labels"))
+            .expect("ambiguity warning should be present");
+        assert!(warning.contains("open-symphony"));
+        assert!(warning.contains("services-api"));
+    }
+
+    #[test]
+    fn capture_with_empty_repo_label_records_no_facet_but_keeps_raw_label() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["repo:".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        let selected = &plan.selected[0];
+        // Empty slug is ignored: no facet.
+        assert!(
+            selected.repository.is_none(),
+            "empty `repo:` label must not produce a facet"
+        );
+        // Raw label is preserved in the source evidence.
+        assert!(
+            selected.issue.labels.contains(&"repo:".to_string()),
+            "empty `repo:` label must be preserved verbatim in evidence"
+        );
+    }
+
+    #[test]
+    fn capture_with_non_repo_label_records_no_facet() {
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["area:memory".to_string()];
+
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+
+        let selected = &plan.selected[0];
+        assert!(
+            selected.repository.is_none(),
+            "non-`repo:` labels must not produce a repository facet"
+        );
+    }
+
+    #[test]
+    fn legacy_index_without_issue_repositories_backfills_from_labels_json() {
+        use duckdb::Connection;
+
+        let repo = TempDir::new().expect("temp repo");
+        let config = config_for(repo.path());
+        // DuckDB requires the parent directory to exist when opening a new
+        // database file. Older indexes (LOC-25 and prior) used the same
+        // convention, so the loader must not change.
+        fs::create_dir_all(config.index_path.parent().expect("index parent")).expect("memory dir");
+
+        // Build a pre-LOC-26 schema: every table LOC-25 used to read is
+        // present, but the `issue_repositories` table does not. The
+        // backfill path must synthesize the repository facet from
+        // `issues.labels_json` when the row references exactly one
+        // well-formed `repo:<slug>` label.
+        let connection = Connection::open(&config.index_path).expect("index should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE issues (
+                    issue_key TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    state TEXT,
+                    milestone TEXT,
+                    labels_json TEXT NOT NULL,
+                    capsule_path TEXT NOT NULL,
+                    visibility TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    warning_count INTEGER NOT NULL DEFAULT 0,
+                    docs_sync_status TEXT NOT NULL DEFAULT 'ok',
+                    body TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE issue_areas (
+                    issue_key TEXT NOT NULL,
+                    area TEXT NOT NULL
+                );
+                CREATE TABLE changed_files (
+                    issue_key TEXT NOT NULL,
+                    file_path TEXT NOT NULL
+                );
+                INSERT INTO issues(
+                    issue_key, title, state, milestone, labels_json,
+                    capsule_path, visibility, source_hash, warning_count,
+                    docs_sync_status, body
+                ) VALUES (
+                    'COE-123', 'WebSocket reconnect recovery', 'Done', 'M3',
+                    '["repo:open-symphony"]', '/repo/issues/COE-123.md',
+                    'public', 'sha256:abc', 0, 'ok', ''
+                );
+                INSERT INTO issue_areas(issue_key, area) VALUES ('COE-123', 'memory');
+                "#,
+            )
+            .expect("legacy schema");
+        drop(connection);
+
+        let issues = load_indexed_issues(&config).expect("legacy backfill");
+        assert_eq!(issues.len(), 1);
+        let repositories = issues[0].repositories();
+        assert_eq!(repositories.len(), 1, "expected backfilled facet");
+        assert_eq!(repositories[0].key, "open-symphony");
+        // Areas remain from the `issue_areas` table unchanged.
+        let areas = issues[0].areas();
+        assert!(areas.contains(&"memory".to_string()));
+        // Areas do not absorb `repo-open-symphony` (LOC-23).
+        assert!(!areas.iter().any(|area| area.starts_with("repo")));
+    }
+
+    #[test]
+    fn status_output_exposes_repository_facet() {
+        use crate::opensymphony_memory::StatusIssue;
+        use serde_json::json;
+
+        let issue = StatusIssue {
+            issue_key: "COE-123".to_string(),
+            title: "WebSocket reconnect recovery".to_string(),
+            state: Some("Done".to_string()),
+            milestone: Some("M14".to_string()),
+            capsule_path: PathBuf::from("/repo/.opensymphony/memory/issues/COE-123.md"),
+            visibility: MemoryVisibility::Public,
+            areas: vec!["memory".to_string()],
+            repository: Some(RepositoryFacet {
+                key: "open-symphony".to_string(),
+                url: Some("https://github.com/example-org/example-repo".to_string()),
+                default_branch: Some("main".to_string()),
+            }),
+            docs_sync_status: "ok".to_string(),
+            warning_count: 0,
+        };
+        // Mirror the JSON shape the CLI status renderer must produce so a
+        // regression in either the struct shape or the renderer is caught
+        // here, before reaching integration tests.
+        let repository = issue
+            .repository
+            .as_ref()
+            .map(|facet| {
+                json!({
+                    "key": facet.key.clone(),
+                    "url": facet.url.clone(),
+                    "defaultBranch": facet.default_branch.clone(),
+                })
+            })
+            .expect("status issue should expose a repository facet");
+        assert_eq!(repository["key"], "open-symphony");
+        assert_eq!(
+            repository["url"],
+            "https://github.com/example-org/example-repo"
+        );
+        assert_eq!(repository["defaultBranch"], "main");
+    }
+
+    #[test]
+    fn search_result_exposes_repository_facet() {
+        use crate::opensymphony_memory::SearchResult;
+        use serde_json::json;
+
+        let result = SearchResult {
+            issue_key: "COE-123".to_string(),
+            title: "WebSocket reconnect recovery".to_string(),
+            capsule_path: PathBuf::from("/repo/.opensymphony/memory/issues/COE-123.md"),
+            areas: vec!["memory".to_string()],
+            repositories: vec![RepositoryFacet {
+                key: "open-symphony".to_string(),
+                url: None,
+                default_branch: None,
+            }],
+            snippet: "...snippet...".to_string(),
+        };
+        let repositories: Vec<serde_json::Value> = result
+            .repositories
+            .iter()
+            .map(|facet| {
+                json!({
+                    "key": facet.key.clone(),
+                    "url": facet.url.clone(),
+                    "defaultBranch": facet.default_branch.clone(),
+                })
+            })
+            .collect();
+        assert_eq!(repositories.len(), 1);
+        assert_eq!(repositories[0]["key"], "open-symphony");
+    }
+
+    #[test]
+    fn search_with_scope_filters_by_repository_facet() {
+        use crate::opensymphony_memory::{MemoryScopeFilter, search_with_scope};
+
+        let tempdir = TempDir::new().expect("temp repo");
+        let config = config_for(tempdir.path());
+        let mut source = sample_source();
+        source.issues[0].labels = vec!["repo:open-symphony".to_string()];
+        let plan = plan_capture(
+            &config,
+            &source,
+            &IssueSelection {
+                identifiers: vec!["COE-123".to_string()],
+                ..IssueSelection::default()
+            },
+            false,
+            false,
+        )
+        .expect("plan");
+        write_capture_plan(&config, &plan, false).expect("write");
+
+        // Query against indexed issue content. The indexed issue is "WebSocket
+        // reconnect recovery", which is unrelated to "open-symphony" — but the
+        // repo facet must still gate which results come back.
+        let matching = search_with_scope(
+            &config,
+            "WebSocket",
+            10,
+            &MemoryScopeFilter {
+                repo: Some("open-symphony".to_string()),
+                ..MemoryScopeFilter::default()
+            },
+        )
+        .expect("scope match");
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected the indexed `repo:open-symphony` issue to match under its repo scope"
+        );
+
+        let non_matching = search_with_scope(
+            &config,
+            "WebSocket",
+            10,
+            &MemoryScopeFilter {
+                repo: Some("services-api".to_string()),
+                ..MemoryScopeFilter::default()
+            },
+        )
+        .expect("scope mismatch");
+        assert!(
+            non_matching.is_empty(),
+            "expected the same issue not to match a different repo scope; got {:?}",
+            non_matching
+        );
+
+        let unfiltered = search_with_scope(&config, "WebSocket", 10, &MemoryScopeFilter::default())
+            .expect("unscoped");
+        assert_eq!(
+            unfiltered.len(),
+            1,
+            "expected unscoped search to still surface the indexed issue"
         );
     }
 

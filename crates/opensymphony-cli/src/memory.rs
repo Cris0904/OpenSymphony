@@ -798,12 +798,18 @@ fn run_status(config: &MemoryConfig, args: StatusArgs) -> Result<(), MemoryError
     println!("Docs pending: {}", report.docs_pending_count);
     println!("Capture warnings: {}", report.warning_count);
     for issue in report.issues {
+        let repo = issue
+            .repository
+            .as_ref()
+            .map(|facet| facet.key.clone())
+            .unwrap_or_else(|| "-".to_string());
         println!(
-            "- {}: {} [{}] areas={} warnings={}",
+            "- {}: {} [{}] areas={} repo={} warnings={}",
             issue.issue_key,
             issue.title,
             issue.docs_sync_status,
             issue.areas.join(","),
+            repo,
             issue.warning_count
         );
     }
@@ -893,18 +899,21 @@ async fn run_context(
             SourceFile::default()
         }
     };
+    let scope = scope_filter(
+        &args.scope,
+        Some(args.issue.as_str()),
+        args.milestone.as_deref(),
+        args.area.as_deref(),
+    );
     let options = MemoryContextOptions {
         issue: args.issue,
         explicit_includes: args.include,
         paths: args.paths,
         limit: args.limit,
+        repo: scope.repo.clone(),
+        area: scope.area.clone(),
+        milestone: scope.milestone.clone(),
     };
-    let scope = scope_filter(
-        &args.scope,
-        Some(options.issue.as_str()),
-        args.milestone.as_deref(),
-        args.area.as_deref(),
-    );
     for warning in warnings {
         println!("> Warning: {warning}\n");
     }
@@ -1540,6 +1549,7 @@ async fn call_memory_tool(config: &MemoryConfig, params: Value) -> Result<Value,
     match name {
         "memory.context" => {
             let issue = required_string_arg(&arguments, "issue")?;
+            let scope = scope_filter_from_mcp(&arguments, true);
             let options = MemoryContextOptions {
                 issue: issue.clone(),
                 explicit_includes: string_list_arg(&arguments, "include"),
@@ -1548,6 +1558,9 @@ async fn call_memory_tool(config: &MemoryConfig, params: Value) -> Result<Value,
                     .map(PathBuf::from)
                     .collect(),
                 limit: usize_arg(&arguments, "limit", 20),
+                repo: scope.repo.clone(),
+                area: scope.area.clone(),
+                milestone: scope.milestone.clone(),
             };
             let source = context_source_from_mcp(&arguments);
             let mut text = context_for_issue_with_options(config, &source, &options)?;
@@ -1795,6 +1808,11 @@ fn search_results_json(
                 "title": result.title.clone(),
                 "capsulePath": path_for_json(config, &result.capsule_path),
                 "areas": result.areas.clone(),
+                "repositories": result.repositories.iter().map(|facet| json!({
+                    "key": facet.key.clone(),
+                    "url": facet.url.clone(),
+                    "defaultBranch": facet.default_branch.clone(),
+                })).collect::<Vec<_>>(),
                 "snippet": result.snippet.clone()
             })
         })
@@ -3252,14 +3270,14 @@ fn print_search_results(
             .capsule_path
             .strip_prefix(&config.repo_root)
             .unwrap_or(&result.capsule_path);
-        println!(
-            "- {}: {} [{}]\n  {}\n  {}",
-            result.issue_key,
-            result.title,
-            result.areas.join(", "),
-            path.display(),
-            result.snippet
-        );
+        let mut header = format!("{}: {}", result.issue_key, result.title);
+        if !result.areas.is_empty() {
+            header.push_str(&format!(" [{}]", result.areas.join(", ")));
+        }
+        if let Some(repo) = result.repositories.first() {
+            header.push_str(&format!(" repo={}", repo.key));
+        }
+        println!("- {}\n  {}\n  {}", header, path.display(), result.snippet);
     }
 }
 

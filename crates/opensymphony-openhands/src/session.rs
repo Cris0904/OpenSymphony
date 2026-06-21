@@ -85,7 +85,20 @@ pub struct IssueSessionRunnerConfig {
 pub struct MemoryWorkerAccess {
     pub endpoint: String,
     pub token: Option<String>,
+    /// Tracker project slug (Linear project). Distinct from the project-set
+    /// slug: a single tracker project can host many project-set repos.
     pub project: Option<String>,
+    /// Project-set slug (LOC-26). Distinct from the tracker project so a
+    /// multi-repo project-set can be scoped independently of the tracker
+    /// project slug.
+    pub project_set: Option<String>,
+    /// Resolved repository identity from the issue's `execution_repo_ref`,
+    /// i.e. the `RepoRef.key` for the repo the issue actually targets.
+    /// Preferred over the run-level `execution_repo` path when present.
+    pub execution_repo_key: Option<String>,
+    /// Run-level target repo path. Kept as a warning-backed transitional
+    /// fallback for the LOC-26 migration; new code should prefer
+    /// `execution_repo_key` whenever it is set.
     pub execution_repo: Option<String>,
 }
 
@@ -2914,6 +2927,26 @@ async fn fetch_memory_context_from_server(
     memory: &MemoryWorkerAccess,
     issue: &NormalizedIssue,
 ) -> Result<String, String> {
+    // LOC-26: prefer the issue's resolved `RepoRef.key` over the run-level
+    // target repo path. The path value remains a warning-backed transitional
+    // fallback for the migration window only.
+    let resolved_repo = issue
+        .execution_repo_ref
+        .as_ref()
+        .map(|repo_ref| repo_ref.key.clone())
+        .or_else(|| memory.execution_repo_key.clone())
+        .or_else(|| memory.execution_repo.clone());
+    let used_transitional_repo_path = resolved_repo.is_some()
+        && memory.execution_repo.is_some()
+        && issue.execution_repo_ref.is_none()
+        && memory.execution_repo_key.is_none();
+    if used_transitional_repo_path {
+        tracing::warn!(
+            "memory context request is using the run-level execution_repo path as a \
+             transitional fallback; prefer the issue's execution_repo_ref.key when available"
+        );
+    }
+
     let mut arguments = json!({
         "issue": issue.identifier.to_string(),
         "limit": 20,
@@ -2924,6 +2957,11 @@ async fn fetch_memory_context_from_server(
             "description": issue.description.clone(),
             "state": issue.state.name.clone(),
             "labels": issue.labels.clone(),
+            "executionRepoRef": issue.execution_repo_ref.as_ref().map(|repo| json!({
+                "key": repo.key.clone(),
+                "url": repo.url.clone(),
+                "defaultBranch": repo.default_branch.clone(),
+            })),
             "children": issue.sub_issues.iter().map(|child| json!({
                 "id": child.id.to_string(),
                 "identifier": child.identifier.to_string(),
@@ -2941,9 +2979,19 @@ async fn fetch_memory_context_from_server(
     if let Value::Object(map) = &mut arguments {
         if let Some(project) = &memory.project {
             map.insert("project".to_string(), json!(project));
-            map.insert("projectSet".to_string(), json!(project));
         }
-        if let Some(repo) = &memory.execution_repo {
+        // LOC-26: project-set scope is distinct from the tracker project
+        // scope; only fall back to the tracker project when the project-set
+        // slug is unknown. When both are available, the project-set value
+        // wins.
+        if let Some(project_set) = memory
+            .project_set
+            .clone()
+            .or_else(|| memory.project.clone())
+        {
+            map.insert("projectSet".to_string(), json!(project_set));
+        }
+        if let Some(repo) = resolved_repo.as_ref() {
             map.insert("repo".to_string(), json!(repo));
         }
     }
@@ -3397,6 +3445,8 @@ mod tests {
             endpoint: format!("http://{address}/mcp"),
             token: Some("read-token".to_string()),
             project: Some("project-alpha".to_string()),
+            project_set: Some("project-alpha-set".to_string()),
+            execution_repo_key: Some("org/repo-alpha".to_string()),
             execution_repo: Some("/tmp/repo-alpha".to_string()),
         };
 
@@ -3458,9 +3508,9 @@ mod tests {
         assert_eq!(request["params"]["arguments"]["project"], "project-alpha");
         assert_eq!(
             request["params"]["arguments"]["projectSet"],
-            "project-alpha"
+            "project-alpha-set"
         );
-        assert_eq!(request["params"]["arguments"]["repo"], "/tmp/repo-alpha");
+        assert_eq!(request["params"]["arguments"]["repo"], "org/repo-alpha");
         task.abort();
     }
 
