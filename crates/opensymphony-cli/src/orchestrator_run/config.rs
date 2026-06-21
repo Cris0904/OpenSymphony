@@ -8,9 +8,7 @@ use std::{
 
 use crate::opensymphony_memory::DEFAULT_PRIVATE_MEMORY_CONFIG_FILE;
 use crate::opensymphony_openhands::OpenHandsConversationStorePaths;
-use crate::opensymphony_workflow::{
-    ResolvedProjectSet, ResolvedWorkflow, TrackerKind, WorkflowDefinition,
-};
+use crate::opensymphony_workflow::{ResolvedProjectSet, ResolvedWorkflow, WorkflowDefinition};
 use serde::Deserialize;
 use tokio::fs;
 
@@ -113,18 +111,47 @@ pub(super) async fn resolve_runtime_config(
         .map(|path| super::super::resolve_path(config_root, path))
         .unwrap_or_else(|| cwd.clone());
     let workflow_path = target_repo.join("WORKFLOW.md");
-    let workflow = WorkflowDefinition::load_from_path(&workflow_path).map_err(|source| {
+    let workflow_definition = WorkflowDefinition::load_from_path(&workflow_path).map_err(|source| {
         RunCommandError::LoadWorkflow {
             path: workflow_path.clone(),
             source,
         }
     })?;
-    let workflow = workflow
-        .resolve_with_process_env(&target_repo)
-        .map_err(|source| RunCommandError::ResolveWorkflow {
-            path: workflow_path.clone(),
-            source,
-        })?;
+
+    // LOC-18: project-set is the strict runtime boundary owner when present.
+    // It is loaded BEFORE the workflow is resolved so we can run the
+    // stale-moved-field detector against `WORKFLOW.md` front matter and
+    // compose the two typed sources explicitly instead of silently
+    // overwriting the workflow's per-repo values.
+    let (project_set, project_set_path) = load_optional_project_set(config_root)?;
+    let workflow = if let Some(resolved_project_set) = &project_set {
+        let resolved = workflow_definition
+            .resolve_strict_project_set(
+                resolved_project_set,
+                &target_repo,
+                &crate::opensymphony_workflow::ProcessEnvironment,
+            )
+            .map_err(|source| match source {
+                crate::opensymphony_workflow::WorkflowConfigError::StaleMovedProjectSetFields { .. } => {
+                    RunCommandError::StaleProjectSetFields {
+                        path: workflow_path.clone(),
+                        source,
+                    }
+                }
+                other => RunCommandError::ResolveWorkflow {
+                    path: workflow_path.clone(),
+                    source: other,
+                },
+            })?;
+        resolved
+    } else {
+        workflow_definition
+            .resolve_with_process_env(&target_repo)
+            .map_err(|source| RunCommandError::ResolveWorkflow {
+                path: workflow_path.clone(),
+                source,
+            })?
+    };
     let bind_value = config
         .control_plane
         .bind
@@ -185,17 +212,6 @@ pub(super) async fn resolve_runtime_config(
     };
     validate_memory_bootstrap(&target_repo, &memory)?;
 
-    // Optional global `.opensymphony/project-set.yaml` (LOC-12). Absent →
-    // legacy single-repo flow. When present, the project-set's linear scope,
-    // polling interval, and total `max_concurrent_agents` override the
-    // workflow's per-repo values; the inventory is exposed for the resolver
-    // and gate (LOC-13/LOC-14).
-    let (project_set, project_set_path) = load_optional_project_set(config_root)?;
-    let mut workflow = workflow;
-    if let Some(resolved) = &project_set {
-        apply_project_set_overrides(&mut workflow, resolved);
-    }
-
     Ok(RunRuntimeConfig {
         config_path,
         target_repo,
@@ -250,26 +266,6 @@ fn load_optional_project_set(
     raw.resolve_with_process_env()
         .map(|resolved| (Some(resolved), Some(path.clone())))
         .map_err(|source| RunCommandError::ResolveProjectSet { path, source })
-}
-
-/// Applies project-set-level overrides to the workflow's resolved config.
-///
-/// Per LOC-12, when `.opensymphony/project-set.yaml` is present, the
-/// project-set's `linear.*`, `polling.interval_ms`, and
-/// `agent.max_concurrent_agents` are the authoritative values for the single
-/// orchestrator and override the corresponding fields in the per-repo
-/// `WORKFLOW.md`. Per-repo fields (workspace, hooks, per-repo agent caps,
-/// prompt template, etc.) are preserved from the workflow.
-fn apply_project_set_overrides(workflow: &mut ResolvedWorkflow, project_set: &ResolvedProjectSet) {
-    let config = &project_set.config;
-    workflow.config.tracker.kind = TrackerKind::Linear;
-    workflow.config.tracker.endpoint = config.linear.endpoint.clone();
-    workflow.config.tracker.project_slug = config.linear.project_slug.clone();
-    workflow.config.tracker.api_key = config.linear.api_key.clone();
-    workflow.config.tracker.active_states = config.linear.active_states.clone();
-    workflow.config.tracker.terminal_states = config.linear.terminal_states.clone();
-    workflow.config.polling.interval_ms = config.polling.interval_ms;
-    workflow.config.agent.max_concurrent_agents = config.agent.max_concurrent_agents;
 }
 
 async fn load_run_config(path: &Path) -> Result<RunConfigFile, RunCommandError> {

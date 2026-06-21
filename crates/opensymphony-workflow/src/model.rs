@@ -459,6 +459,83 @@ pub struct ProjectSetAgentFrontMatter {
     pub max_concurrent_agents: Option<IntegerLike>,
 }
 
+/// A field that has moved out of `WORKFLOW.md` into
+/// `.opensymphony/project-set.yaml` (LOC-18).
+///
+/// In project-set mode these fields are no longer live runtime inputs from the
+/// repo workflow; their presence in `WORKFLOW.md` is stale config that must
+/// be migrated away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleMovedField {
+    /// Dotted field path inside `WORKFLOW.md` front matter.
+    pub field: &'static str,
+    /// Diagnostic destination for migration (project-set path / env key).
+    pub destination: &'static str,
+}
+
+/// One or more `WORKFLOW.md` fields are stale in project-set mode (LOC-18).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaleMovedProjectSetFields {
+    pub fields: Vec<(String, String)>,
+}
+
+impl std::fmt::Display for StaleMovedProjectSetFields {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.fields.is_empty() {
+            return formatter.write_str("<none>");
+        }
+        let mut first = true;
+        for (field, destination) in &self.fields {
+            if !first {
+                formatter.write_str(", ")?;
+            }
+            first = false;
+            write!(formatter, "{field} -> {destination}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Canonical list of `WORKFLOW.md` fields that move to `.opensymphony/project-set.yaml`.
+///
+/// Keep in sync with the `TrackerFrontMatter`, `PollingFrontMatter`, and
+/// `AgentFrontMatter` fields that `ProjectSetConfig` owns in strict project-set
+/// mode. Adding a new entry requires extending [`detect_stale_project_set_fields`].
+pub const STALE_MOVED_FIELDS: &[StaleMovedField] = &[
+    StaleMovedField {
+        field: "tracker.kind",
+        destination: "project_set.linear (kind implied: linear)",
+    },
+    StaleMovedField {
+        field: "tracker.endpoint",
+        destination: "project_set.linear.endpoint",
+    },
+    StaleMovedField {
+        field: "tracker.project_slug",
+        destination: "project_set.linear.project_slug",
+    },
+    StaleMovedField {
+        field: "tracker.api_key",
+        destination: "project_set.linear.api_key_env",
+    },
+    StaleMovedField {
+        field: "tracker.active_states",
+        destination: "project_set.linear.active_states",
+    },
+    StaleMovedField {
+        field: "tracker.terminal_states",
+        destination: "project_set.linear.terminal_states",
+    },
+    StaleMovedField {
+        field: "polling.interval_ms",
+        destination: "project_set.polling.interval_ms",
+    },
+    StaleMovedField {
+        field: "agent.max_concurrent_agents",
+        destination: "project_set.agent.max_concurrent_agents",
+    },
+];
+
 /// Resolved project-set config produced by [`resolve_project_set`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedProjectSet {
@@ -503,6 +580,11 @@ pub struct ProjectSetConfig {
 pub struct ProjectSetLinearConfig {
     pub endpoint: String,
     pub project_slug: String,
+    /// Name of the env var that supplied the api key (defaults to
+    /// `LINEAR_API_KEY` when `api_key_env` is unset). Preserved so doctor and
+    /// operator-facing diagnostics can point operators at the right env var
+    /// (LOC-18).
+    pub api_key_env: String,
     pub api_key: String,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,

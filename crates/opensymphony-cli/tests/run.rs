@@ -164,6 +164,93 @@ Run the scheduler.
     );
 }
 
+// -----------------------------------------------------------------------
+// LOC-18: Strict project-set boundary integration tests
+// -----------------------------------------------------------------------
+
+/// Minimal `WORKFLOW.md` body that omits every project-set-owned field —
+/// the migrated shape that strict project-set mode requires (LOC-18).
+const MIGRATED_WORKFLOW_BODY: &str = r#"---
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+    session_api_key_env: OPENHANDS_API_KEY
+---
+
+# Migrated Workflow
+"#;
+
+/// Minimal project-set YAML used by the strict-mode run tests.
+const STRICT_PROJECT_SET_YAML: &str = r#"---
+schema_version: 1
+
+project_set:
+  slug: opensymphony-updates
+  name: OpenSymphony Updates
+
+  linear:
+    endpoint: http://127.0.0.1:9/graphql
+    project_slug: opensymphony-bootstrap-e7b957855cb7
+    api_key_env: LINEAR_API_KEY
+    active_states:
+      - Todo
+      - In Progress
+    terminal_states:
+      - Done
+
+  polling:
+    interval_ms: 5000
+
+  agent:
+    max_concurrent_agents: 4
+
+  projects:
+    - slug: opensymphony
+      name: OpenSymphony
+      repos:
+        - slug: opensymphony
+          url: git@github.com:Cris0904/OpenSymphony.git
+          default_branch: main
+"#;
+
+/// WORKFLOW.md body that still defines project-set-owned fields — used by
+/// the stale-fields run test (LOC-18).
+const STALE_WORKFLOW_BODY: &str = r#"---
+tracker:
+  kind: linear
+  endpoint: http://127.0.0.1:9/graphql
+  project_slug: legacy-project
+  active_states:
+    - In Progress
+  terminal_states:
+    - Done
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+    session_api_key_env: OPENHANDS_API_KEY
+---
+
+# Stale Workflow
+"#;
+
+/// Writes a strict-mode project-set into `.opensymphony/project-set.yaml`
+/// plus a `config.yaml` that points `target_repo` at the temp project.
+fn write_strict_project_set(project_root: &std::path::Path) {
+    let opensymphony_dir = project_root.join(".opensymphony");
+    std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should exist");
+    std::fs::write(opensymphony_dir.join("project-set.yaml"), STRICT_PROJECT_SET_YAML)
+        .expect("project-set should be written");
+    std::fs::write(
+        project_root.join("config.yaml"),
+        "openhands:\n  tool_dir: ./managed/openhands-server\nlinear:\n  enabled: false\n",
+    )
+    .expect("config should be written");
+}
+
 fn spawn_run_child(project_root: &std::path::Path, extra_args: &[&str]) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_opensymphony"));
     command
@@ -292,4 +379,146 @@ async fn handle_graphql() -> Json<serde_json::Value> {
             }
         }
     }))
+}
+
+// -------------------------------------------------------------------------
+// LOC-18: strict project-set boundary tests for `opensymphony run`
+// -------------------------------------------------------------------------
+
+#[test]
+fn run_hard_fails_with_stale_fields_diagnostic_in_project_set_mode() {
+    let project = TempDir::new().expect("temp project should exist");
+    write_strict_project_set(project.path());
+    std::fs::write(project.path().join("WORKFLOW.md"), STALE_WORKFLOW_BODY)
+        .expect("workflow should be written");
+    write_memory_config(project.path());
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("run")
+        .current_dir(project.path())
+        .env("LINEAR_API_KEY", "test-linear-key")
+        .env("OPENHANDS_API_KEY", "test-openhands-key")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "run should hard-fail when WORKFLOW.md still defines project-set-owned fields in project-set mode: status={:?}, stdout={stdout}, stderr={stderr}",
+        output.status.code(),
+    );
+    // The diagnostic must list the stale moved fields and their project-set
+    // destinations, so operators know exactly what to migrate (LOC-20).
+    assert!(
+        combined.contains("tracker.project_slug"),
+        "stale-fields diagnostic should list `tracker.project_slug`: combined={combined}",
+    );
+    assert!(
+        combined.contains("project_set.linear.project_slug"),
+        "stale-fields diagnostic should point at `project_set.linear.project_slug`: combined={combined}",
+    );
+    // The legacy migration guidance points at LOC-20.
+    assert!(
+        combined.contains("LOC-20") || combined.contains("move them"),
+        "stale-fields diagnostic should explain how to migrate: combined={combined}",
+    );
+}
+
+#[test]
+fn run_legacy_single_repo_mode_preserves_existing_behavior_when_project_set_absent() {
+    // No `.opensymphony/project-set.yaml` written: the runtime must fall
+    // back to the legacy single-repo flow unchanged (LOC-18 AC).
+    let project = TempDir::new().expect("temp project should exist");
+    std::fs::write(
+        project.path().join("WORKFLOW.md"),
+        r#"---
+tracker:
+  kind: linear
+  endpoint: http://127.0.0.1:9/graphql
+  project_slug: legacy-project
+  active_states:
+    - In Progress
+  terminal_states:
+    - Done
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+    session_api_key_env: OPENHANDS_API_KEY
+---
+
+# Legacy Workflow
+"#,
+    )
+    .expect("workflow should be written");
+    std::fs::write(
+        project.path().join("config.yaml"),
+        "openhands:\n  tool_dir: ./managed/openhands-server\nlinear:\n  enabled: false\n",
+    )
+    .expect("config should be written");
+    write_memory_config(project.path());
+
+    // We don't expect success — the Linear mock is not running and the
+    // managed local OpenHands tooling is absent. But the failure must NOT
+    // be the stale-fields diagnostic; the legacy flow does not flag
+    // `tracker.*` because no project-set is in play.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("run")
+        .current_dir(project.path())
+        .env("LINEAR_API_KEY", "test-linear-key")
+        .env("OPENHANDS_API_KEY", "test-openhands-key")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "run without project-set and without managed-local tooling should fail at a later stage: combined={combined}",
+    );
+    assert!(
+        !combined.contains("still defines project-set-owned fields"),
+        "legacy mode must NOT emit the stale-fields diagnostic: combined={combined}",
+    );
+}
+
+#[test]
+fn run_strict_project_set_mode_succeeds_in_resolving_migrated_workflow() {
+    // Strict project-set mode with a migrated WORKFLOW.md (omitting every
+    // moved field) must NOT fail at the strict-resolution stage. The run
+    // may still fail later for environment reasons (no managed local
+    // tooling, no live Linear), but the failure must not be the stale
+    // moved-fields diagnostic.
+    let project = TempDir::new().expect("temp project should exist");
+    write_strict_project_set(project.path());
+    std::fs::write(project.path().join("WORKFLOW.md"), MIGRATED_WORKFLOW_BODY)
+        .expect("workflow should be written");
+    write_memory_config(project.path());
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_opensymphony"))
+        .arg("run")
+        .current_dir(project.path())
+        .env("LINEAR_API_KEY", "test-linear-key")
+        .env("OPENHANDS_API_KEY", "test-openhands-key")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run command should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        !combined.contains("still defines project-set-owned fields"),
+        "strict project-set mode must accept migrated WORKFLOW.md: combined={combined}",
+    );
+    assert!(
+        !combined.contains("StaleProjectSetFields"),
+        "strict project-set mode must not surface the stale-fields error: combined={combined}",
+    );
 }

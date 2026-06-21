@@ -24,9 +24,9 @@ pub use model::{
     ProjectSetBody, ProjectSetConfig, ProjectSetFrontMatter, ProjectSetLinearConfig,
     ProjectSetLinearFrontMatter, ProjectSetPollingConfig, ProjectSetPollingFrontMatter,
     PromptContext, RepoEntry, ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry,
-    ResolvedWorkflow, TrackerConfig, TrackerFrontMatter, TrackerKind, WorkflowConfig,
-    WorkflowDefinition, WorkflowExtensions, WorkflowFrontMatter, WorkspaceConfig,
-    WorkspaceFrontMatter,
+    ResolvedWorkflow, STALE_MOVED_FIELDS, StaleMovedField, StaleMovedProjectSetFields,
+    TrackerConfig, TrackerFrontMatter, TrackerKind, WorkflowConfig, WorkflowDefinition,
+    WorkflowExtensions, WorkflowFrontMatter, WorkspaceConfig, WorkspaceFrontMatter,
 };
 
 pub const CRATE_NAME: &str = "opensymphony-workflow";
@@ -54,6 +54,33 @@ impl WorkflowDefinition {
         env: &E,
     ) -> Result<ResolvedWorkflow, WorkflowConfigError> {
         resolve::resolve_workflow(self, base_dir, env)
+    }
+
+    /// Resolves this workflow in strict project-set mode (LOC-18).
+    ///
+    /// The repo `WORKFLOW.md` is required to **omit** every project-set-owned
+    /// field. When any stale moved field is present the call fails with
+    /// [`WorkflowConfigError::StaleMovedProjectSetFields`] so operators get a
+    /// precise migration diagnostic. On success, the returned
+    /// [`ResolvedWorkflow`] is composed from two typed sources: project-set
+    /// supplies global tracker/polling/total-concurrency, the workflow
+    /// supplies repo-local fields.
+    pub fn resolve_strict_project_set<E: Environment>(
+        &self,
+        project_set: &ResolvedProjectSet,
+        base_dir: &Path,
+        env: &E,
+    ) -> Result<ResolvedWorkflow, WorkflowConfigError> {
+        resolve::resolve_workflow_strict_project_set(self, project_set, base_dir, env)
+    }
+
+    /// Detects `WORKFLOW.md` fields that have moved into
+    /// `.opensymphony/project-set.yaml` (LOC-18). Each entry is
+    /// `(field, destination)` where `field` is the dotted path inside the
+    /// `WORKFLOW.md` front matter and `destination` is the project-set path
+    /// (or env key) that owns the value in project-set mode.
+    pub fn detect_stale_project_set_fields(&self) -> Vec<(String, String)> {
+        resolve::detect_stale_project_set_fields(&self.front_matter)
     }
 
     pub fn resolve_with_process_env(
@@ -151,6 +178,7 @@ mod tests {
     };
 
     use serde::Serialize;
+    use tempfile::TempDir;
 
     use super::{
         ProjectSetFrontMatter, PromptTemplateError, TrackerKind, WorkflowConfigError,
@@ -2762,5 +2790,273 @@ project_set:
           default_branch: main
           path: ../OpenSymphony
 "#
+    }
+
+    /// WORKFLOW.md front matter that omits every project-set-owned field —
+    /// the migrated shape that strict project-set mode requires (LOC-18).
+    fn migrated_workflow_source() -> &'static str {
+        r#"---
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+---
+
+# Strict project-set workflow
+"#
+    }
+
+    // -----------------------------------------------------------------------
+    // LOC-18: Strict project-set mode + stale-field detector tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detect_stale_project_set_fields_returns_empty_when_no_moved_fields_present() {
+        let workflow = WorkflowDefinition::parse(migrated_workflow_source())
+            .expect("migrated workflow should parse");
+        let stale = workflow.detect_stale_project_set_fields();
+        assert!(
+            stale.is_empty(),
+            "migrated workflow should not flag any stale moved fields, got {stale:?}",
+        );
+    }
+
+    #[test]
+    fn detect_stale_project_set_fields_flags_each_tracker_field_with_destination() {
+        // Build a workflow that re-introduces every project-set-owned tracker
+        // field, plus `polling.interval_ms` and `agent.max_concurrent_agents`.
+        let source = r#"---
+tracker:
+  kind: linear
+  endpoint: https://api.linear.app/graphql
+  project_slug: legacy-project
+  api_key: legacy-key
+  active_states: [Todo]
+  terminal_states: [Done]
+polling:
+  interval_ms: 1000
+agent:
+  max_concurrent_agents: 16
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+---
+"#;
+        let workflow = WorkflowDefinition::parse(source).expect("workflow should parse");
+        let stale = workflow.detect_stale_project_set_fields();
+        let names: Vec<&str> = stale.iter().map(|(field, _)| field.as_str()).collect();
+
+        assert!(
+            names.contains(&"tracker.kind"),
+            "should detect tracker.kind as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"tracker.endpoint"),
+            "should detect tracker.endpoint as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"tracker.project_slug"),
+            "should detect tracker.project_slug as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"tracker.api_key"),
+            "should detect tracker.api_key as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"tracker.active_states"),
+            "should detect tracker.active_states as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"tracker.terminal_states"),
+            "should detect tracker.terminal_states as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"polling.interval_ms"),
+            "should detect polling.interval_ms as stale: {stale:?}",
+        );
+        assert!(
+            names.contains(&"agent.max_concurrent_agents"),
+            "should detect agent.max_concurrent_agents as stale: {stale:?}",
+        );
+
+        // The diagnostic destinations follow the ticket spec.
+        let destinations: Vec<(&str, &str)> = stale
+            .iter()
+            .map(|(field, destination)| (field.as_str(), destination.as_str()))
+            .collect();
+        assert!(destinations.contains(&("tracker.kind", "project_set.linear (kind implied: linear)")));
+        assert!(destinations.contains(&("tracker.api_key", "project_set.linear.api_key_env")));
+        assert!(destinations.contains(&("tracker.project_slug", "project_set.linear.project_slug")));
+    }
+
+    #[test]
+    fn detect_stale_project_set_fields_flags_partial_set() {
+        // Only `tracker.kind` is present; nothing else.
+        let source = r#"---
+tracker:
+  kind: linear
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+---
+"#;
+        let workflow = WorkflowDefinition::parse(source).expect("workflow should parse");
+        let stale = workflow.detect_stale_project_set_fields();
+        assert_eq!(
+            stale.len(),
+            1,
+            "exactly one stale field should be flagged, got {stale:?}",
+        );
+        assert_eq!(stale[0].0, "tracker.kind");
+    }
+
+    #[test]
+    fn resolve_strict_project_set_succeeds_when_no_moved_fields_present() {
+        let raw_project_set =
+            ProjectSetFrontMatter::parse(sample_project_set()).expect("project-set should parse");
+        let env = env([("LINEAR_API_KEY", "test-linear-key")]);
+        let resolved_project_set = raw_project_set
+            .resolve(&env)
+            .expect("project-set should resolve");
+
+        let workflow = WorkflowDefinition::parse(migrated_workflow_source())
+            .expect("migrated workflow should parse");
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let resolved = workflow
+            .resolve_strict_project_set(&resolved_project_set, temp_dir.path(), &env)
+            .expect("strict project-set resolution should succeed for migrated workflow");
+
+        // Project-set owns the global values; workflow owns repo-local ones.
+        assert_eq!(resolved.config.tracker.kind, TrackerKind::Linear);
+        assert_eq!(resolved.config.tracker.project_slug, "opensymphony-bootstrap-e7b957855cb7");
+        assert_eq!(resolved.config.tracker.api_key, "test-linear-key");
+        assert_eq!(resolved.config.polling.interval_ms, 5000);
+        assert_eq!(resolved.config.agent.max_concurrent_agents, 4);
+    }
+
+    #[test]
+    fn resolve_strict_project_set_hard_fails_when_stale_moved_field_present() {
+        let raw_project_set =
+            ProjectSetFrontMatter::parse(sample_project_set()).expect("project-set should parse");
+        let env = env([("LINEAR_API_KEY", "test-linear-key")]);
+        let resolved_project_set = raw_project_set
+            .resolve(&env)
+            .expect("project-set should resolve");
+
+        // `tracker.project_slug` is a moved field; strict mode must reject.
+        let source = r#"---
+tracker:
+  project_slug: legacy-project-slug
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+---
+"#;
+        let workflow = WorkflowDefinition::parse(source).expect("workflow should parse");
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let error = workflow
+            .resolve_strict_project_set(&resolved_project_set, temp_dir.path(), &env)
+            .expect_err("strict project-set resolution should hard-fail on stale moved fields");
+        match error {
+            WorkflowConfigError::StaleMovedProjectSetFields { stale } => {
+                let names: Vec<&str> =
+                    stale.fields.iter().map(|(field, _)| field.as_str()).collect();
+                assert!(
+                    names.contains(&"tracker.project_slug"),
+                    "diagnostic should list tracker.project_slug, got {:?}",
+                    stale.fields,
+                );
+            }
+            other => panic!("expected StaleMovedProjectSetFields, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_strict_project_set_hard_fails_on_multiple_stale_moved_fields() {
+        let raw_project_set =
+            ProjectSetFrontMatter::parse(sample_project_set()).expect("project-set should parse");
+        let env = env([("LINEAR_API_KEY", "test-linear-key")]);
+        let resolved_project_set = raw_project_set
+            .resolve(&env)
+            .expect("project-set should resolve");
+
+        // Two moved fields: `polling.interval_ms` and `agent.max_concurrent_agents`.
+        let source = r#"---
+polling:
+  interval_ms: 5000
+agent:
+  max_concurrent_agents: 8
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+---
+"#;
+        let workflow = WorkflowDefinition::parse(source).expect("workflow should parse");
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let error = workflow
+            .resolve_strict_project_set(&resolved_project_set, temp_dir.path(), &env)
+            .expect_err("strict project-set resolution should hard-fail on stale moved fields");
+        match error {
+            WorkflowConfigError::StaleMovedProjectSetFields { stale } => {
+                let names: Vec<&str> =
+                    stale.fields.iter().map(|(field, _)| field.as_str()).collect();
+                assert!(
+                    names.contains(&"polling.interval_ms"),
+                    "diagnostic should list polling.interval_ms, got {:?}",
+                    stale.fields,
+                );
+                assert!(
+                    names.contains(&"agent.max_concurrent_agents"),
+                    "diagnostic should list agent.max_concurrent_agents, got {:?}",
+                    stale.fields,
+                );
+            }
+            other => panic!("expected StaleMovedProjectSetFields, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_project_set_overrides_never_used_as_fallback_when_stale_fields_present() {
+        // The strict path must hard-fail on stale fields, never silently
+        // override the workflow with project-set values.
+        let raw_project_set =
+            ProjectSetFrontMatter::parse(sample_project_set()).expect("project-set should parse");
+        let env = env([("LINEAR_API_KEY", "test-linear-key")]);
+        let resolved_project_set = raw_project_set
+            .resolve(&env)
+            .expect("project-set should resolve");
+
+        // A workflow that *would* resolve fine in legacy mode but has stale
+        // tracker fields; the strict path must refuse to consume the
+        // project-set values as a fallback.
+        let source = r#"---
+tracker:
+  kind: linear
+  project_slug: legacy-slug
+workspace:
+  root: ./var/workspaces
+openhands:
+  transport:
+    base_url: http://127.0.0.1:8000
+---
+"#;
+        let workflow = WorkflowDefinition::parse(source).expect("workflow should parse");
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let error = workflow
+            .resolve_strict_project_set(&resolved_project_set, temp_dir.path(), &env)
+            .expect_err("strict project-set resolution must never silently fall back");
+        assert!(
+            matches!(error, WorkflowConfigError::StaleMovedProjectSetFields { .. }),
+            "error must be the stale-fields diagnostic, got {error:?}",
+        );
     }
 }

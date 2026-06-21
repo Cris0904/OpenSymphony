@@ -58,6 +58,12 @@ pub enum WorkflowConfigError {
         field: &'static str,
         message: String,
     },
+
+    /// One or more `WORKFLOW.md` fields are stale in project-set mode (LOC-18).
+    #[error("stale project-set-owned fields in WORKFLOW.md: {stale}")]
+    StaleMovedProjectSetFields {
+        stale: super::model::StaleMovedProjectSetFields,
+    },
 }
 
 #[derive(Debug, Error)]

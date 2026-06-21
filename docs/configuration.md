@@ -316,6 +316,69 @@ resolver still consults `LINEAR_API_KEY` directly. A missing or empty
 See [examples/project-set.yaml](../examples/project-set.yaml) for a
 ready-to-edit template.
 
+### Strict project-set boundary (LOC-18)
+
+When `.opensymphony/project-set.yaml` is present, the runtime treats the
+project-set as the **only** source of truth for the moved global fields.
+`WORKFLOW.md` is allowed to omit them in project-set mode; if it does not,
+the runtime reports them as **stale moved config** and the orchestrator
+hard-fails.
+
+Fields that move from `WORKFLOW.md` into `.opensymphony/project-set.yaml`
+when project-set mode is active:
+
+| WORKFLOW.md field (moved) | Project-set destination |
+|---------------------------|--------------------------|
+| `tracker.kind` | `project_set.linear` (kind implied: `linear`) |
+| `tracker.endpoint` | `project_set.linear.endpoint` |
+| `tracker.project_slug` | `project_set.linear.project_slug` |
+| `tracker.api_key` | `project_set.linear.api_key_env` |
+| `tracker.active_states` | `project_set.linear.active_states` |
+| `tracker.terminal_states` | `project_set.linear.terminal_states` |
+| `polling.interval_ms` | `project_set.polling.interval_ms` |
+| `agent.max_concurrent_agents` | `project_set.agent.max_concurrent_agents` |
+
+`tracker.api_key` is intentionally a **destination-only** field in the
+diagnostic — the project-set stores the env-var name, not the secret
+itself. The secret stays in the process environment.
+
+In project-set mode, `opensymphony run` and `opensymphony doctor` enforce
+the boundary as follows:
+
+* `opensymphony run` hard-fails with a diagnostic that names the stale
+  field(s) and the project-set destination(s). The stale values are
+  **never** silently used as a fallback.
+* `opensymphony doctor` reports a failing `[FAIL] project-set-boundary`
+  check with the same diagnostic, and continues unrelated checks where
+  practical so it remains useful as a migration guide.
+* `opensymphony doctor` reports the active mode via `[PASS] mode: active
+  mode: project-set` (or `legacy-single-repo` when the project-set file
+  is absent).
+* The legacy `linear.enabled: false` placeholder relaxation applies
+  **only** in legacy single-repo mode. In project-set mode the real
+  `project_set.linear.api_key_env` is always consulted; the Linear check
+  cannot be silenced by `config.yaml` alone.
+
+### Migrating an existing single-repo
+
+`opensymphony run` never modifies user files. Migrating an existing repo
+into project-set mode is owned by a separate migration command
+([LOC-20](https://linear.app/localgputokenscrazy/issue/LOC-20/existing-repo-project-set-migration)),
+which is responsible for:
+
+1. Writing `.opensymphony/project-set.yaml` with the moved `tracker.*`,
+   `polling.interval_ms`, and `agent.max_concurrent_agents` values from
+   the existing `WORKFLOW.md`.
+2. Removing those fields from `WORKFLOW.md` and leaving only the
+   repo-local surface (workspace, hooks, per-repo agent settings,
+   OpenHands/model contract, prompt template).
+
+Until the migration runs, the existing single-repo flow remains
+functional as the pre-migration legacy mode. The two shapes do **not**
+intermix at runtime: the presence of `.opensymphony/project-set.yaml`
+flips the mode to `project-set`, and `WORKFLOW.md` must be in the
+migrated shape or the orchestrator will refuse to boot.
+
 ## Planning Workspace
 
 The planning workspace is a dense, editable, review-oriented UI for the
