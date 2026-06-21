@@ -67,6 +67,44 @@ parent: null
 stable lowercase area slugs. The converter applies them to Linear as canonical
 `area:<slug>` labels.
 
+### Reserved Linear label namespaces
+
+OpenSymphony owns and manages two reserved Linear label namespaces. The
+converter MUST treat them as managed and MUST NOT let user-supplied values
+collide with them:
+
+- `area:<slug>` — the canonical Memory / docs area label. Emitted only from
+  `areas` frontmatter (after slug normalization).
+- `repo:<slug>` — the canonical repository identity label. Emitted only from
+  the task's `repo` frontmatter (exact-match) or applied by the runtime
+  resolver from the project-set inventory. `repo:<slug>` MUST map to the
+  exact project-set repo slug / `RepoRef.key`; the converter does not
+  lowercase, slugify, or otherwise coerce it.
+
+The two namespaces are deliberately separate:
+
+- `areas` frontmatter produces only `area:<slug>` labels. A `repo:<slug>`
+  entry MUST NOT appear in `areas`; the converter rejects `areas` values
+  that use reserved non-area namespaces such as `repo:`.
+- `repo` frontmatter (when present) produces exactly one `repo:<slug>`
+  label per leaf task; parents and review nodes MUST NOT carry `repo:`.
+
+### Area slug normalization vs exact repo slug matching
+
+Area and repo labels follow different rules on purpose:
+
+- **Areas are normalized.** The converter lowercases, trims, and slugifies
+  each `areas` entry (see `area_slug` in `convert_tasks_to_linear.py`), so
+  `OpenHands Runtime`, `OpenHands-Runtime`, and `area:OpenHands Runtime`
+  all collapse to the canonical `area:openhands-runtime`.
+- **Repo slugs are exact.** `repo:<slug>` MUST match the project-set
+  inventory slug / `RepoRef.key` character-for-character. The converter
+  trims surrounding whitespace but does not lowercase or slugify; the
+  resolver depends on the exact key to look the repo up.
+
+See `create-implementation-plan/SKILL.md` for the planning-side contract that
+produces this frontmatter.
+
 ## Preferred Script Workflow
 
 Use the skill-local Python converter:

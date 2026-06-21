@@ -154,6 +154,33 @@ state. GitHub changed files are indexed for later lookup such as "which issues
 touched this file?", but they are not rendered into capsules or docs and do not
 infer areas.
 
+### `repo:` labels are NOT Memory areas
+
+The Linear `repo:<slug>` namespace is reserved for repository identity, not
+Memory areas. It is intentionally kept out of every Memory taxonomy surface:
+
+- `repo:<slug>` is **not** an area. The Memory area-inference path consumes
+  only `area:<slug>` labels; `repo:<slug>` labels never become an
+  `area:repo-...` entry, and they do not add a new area to the docs topic
+  index or capsule frontmatter.
+- `repo:<slug>` is **not** a docs topic. It does not seed or rename an entry
+  under `docs/*.md` or under the `memory.yaml` `areas:` ontology map.
+- `repo:<slug>` is **not** a path filter. The Memory path-filter surface
+  remains `--paths`; `--repo` means the project-set repo slug / `RepoRef.key`
+  after the repo-facet slice lands.
+- `repo:<slug>` is **not** an entry in the `memory.yaml` ontology. The
+  `memory.yaml` `areas:` map owns only `area:<slug>` values.
+
+Raw `repo:<slug>` labels MAY be preserved as label evidence on the issue
+capsule (alongside other raw labels), but any structured repo-scoped Memory
+behavior — repo-aware context selection, `--repo` filtering, repo facet
+indexing — belongs to the Memory repository-facet slice
+([LOC-26](https://linear.app/localgputokenscrazy/issue/LOC-26/memory-repository-facet-and-repo-scoped-context)),
+not to area inference. Until that slice lands, treat `repo:` as a reserved
+Linear label that exists for the runtime resolver and the project-set
+inventory; do not turn it into a Memory area, docs topic, path filter, or
+`memory.yaml` ontology entry.
+
 Selecting a parent issue also captures its child issue closure. Capsules link
 parents, children, and milestones so the Obsidian graph shows the work
 structure.
