@@ -2993,14 +2993,14 @@ async fn fetch_memory_context_from_server(
             map.insert("project".to_string(), json!(project));
         }
         // LOC-26: project-set scope is distinct from the tracker project
-        // scope; only fall back to the tracker project when the project-set
-        // slug is unknown. When both are available, the project-set value
-        // wins.
-        if let Some(project_set) = memory
-            .project_set
-            .clone()
-            .or_else(|| memory.project.clone())
-        {
+        // scope. Do NOT fall back to the tracker project slug when the
+        // project-set slug is unknown — that is the silent mirror the
+        // env-var path (`backends.rs`) intentionally avoids by leaving
+        // `OPENSYMPHONY_MEMORY_PROJECT_SET` unset. The MCP server's
+        // `scope_filter_from_mcp` already handles a missing `projectSet`
+        // gracefully (omits the field rather than mirroring tracker
+        // project), matching the env-var semantics end to end.
+        if let Some(project_set) = memory.project_set.clone() {
             map.insert("projectSet".to_string(), json!(project_set));
         }
         // LOC-26: send both `executionRepoKey` (the resolved `RepoRef.key`,
@@ -3689,6 +3689,151 @@ mod tests {
                 .is_none()
                 || request["params"]["arguments"]["executionRepoKey"].is_null(),
             "executionRepoKey must be absent/null when only the run-level path is known"
+        );
+        task.abort();
+    }
+
+    // LOC-26: when `project_set` is `None`, the MCP request must NOT
+    // silently mirror the tracker project slug into the `projectSet`
+    // field. The env-var path (`backends.rs`) intentionally leaves
+    // `OPENSYMPHONY_MEMORY_PROJECT_SET` unset when the project-set slug
+    // is unknown, so the MCP path must match that semantics end to end
+    // rather than falling back to the tracker project.
+    #[tokio::test]
+    async fn fetch_memory_context_from_server_does_not_mirror_tracker_project_into_project_set() {
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("memory test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("memory test listener should expose an address");
+        let app = Router::new()
+            .route("/mcp", post(memory_test_mcp))
+            .with_state(requests.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("memory test server should run");
+        });
+        let access = MemoryWorkerAccess {
+            endpoint: format!("http://{address}/mcp"),
+            token: Some("read-token".to_string()),
+            project: Some("project-alpha".to_string()),
+            project_set: None,
+            execution_repo_key: Some("org/repo-alpha".to_string()),
+            execution_repo: None,
+        };
+        let issue = NormalizedIssue {
+            id: must(IssueId::new("issue-1002")),
+            identifier: must(IssueIdentifier::new("COE-1002")),
+            title: "Memory server context (no project-set slug)".to_string(),
+            description: Some(
+                "Tracker project is known but project-set slug is unknown.".to_string(),
+            ),
+            priority: None,
+            state: IssueState {
+                id: None,
+                name: "In Progress".to_string(),
+                category: IssueStateCategory::Active,
+            },
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            parent_id: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            created_at: None,
+            updated_at: None,
+            execution_repo_ref: None,
+        };
+
+        let _ = fetch_memory_context_from_server(&access, &issue)
+            .await
+            .expect("memory server context should load");
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request["params"]["arguments"]["project"], "project-alpha");
+        assert!(
+            request["params"]["arguments"].get("projectSet").is_none()
+                || request["params"]["arguments"]["projectSet"].is_null(),
+            "projectSet must be absent/null when the project-set slug is unknown \
+             — must not silently mirror the tracker project"
+        );
+        task.abort();
+    }
+
+    // LOC-26: when both project-set and tracker project are available, the
+    // request must surface them as DISTINCT fields (no silent mirror in
+    // either direction).
+    #[tokio::test]
+    async fn fetch_memory_context_from_server_sends_distinct_project_and_project_set() {
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("memory test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("memory test listener should expose an address");
+        let app = Router::new()
+            .route("/mcp", post(memory_test_mcp))
+            .with_state(requests.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("memory test server should run");
+        });
+        let access = MemoryWorkerAccess {
+            endpoint: format!("http://{address}/mcp"),
+            token: Some("read-token".to_string()),
+            project: Some("project-alpha".to_string()),
+            project_set: Some("project-alpha-set".to_string()),
+            execution_repo_key: None,
+            execution_repo: None,
+        };
+        let issue = NormalizedIssue {
+            id: must(IssueId::new("issue-1003")),
+            identifier: must(IssueIdentifier::new("COE-1003")),
+            title: "Memory server context (both slugs available)".to_string(),
+            description: Some(
+                "Both project-set and tracker project are known and distinct.".to_string(),
+            ),
+            priority: None,
+            state: IssueState {
+                id: None,
+                name: "In Progress".to_string(),
+                category: IssueStateCategory::Active,
+            },
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            parent_id: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            created_at: None,
+            updated_at: None,
+            execution_repo_ref: None,
+        };
+
+        let _ = fetch_memory_context_from_server(&access, &issue)
+            .await
+            .expect("memory server context should load");
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request["params"]["arguments"]["project"], "project-alpha");
+        assert_eq!(
+            request["params"]["arguments"]["projectSet"],
+            "project-alpha-set"
+        );
+        // The two slugs must remain distinct on the wire — no silent
+        // aliasing in either direction.
+        assert_ne!(
+            request["params"]["arguments"]["project"],
+            request["params"]["arguments"]["projectSet"]
         );
         task.abort();
     }
