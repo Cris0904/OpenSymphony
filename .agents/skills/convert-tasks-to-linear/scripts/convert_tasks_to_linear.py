@@ -22,6 +22,20 @@ from typing import Any
 
 import yaml
 
+# Make sibling ``label_merge`` importable when this script is run via
+# ``uv run --script`` (PEP 723). The skill scripts folder is on sys.path so
+# tests and direct ``python3`` invocations both work.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from label_merge import (  # noqa: E402  - intentional sys.path tweak above
+    AREA_PREFIX,
+    REPO_PREFIX,
+    DesiredRepo,
+    merge_label_ids,
+)
+
 
 REQUIRED_FRONTMATTER = [
     "id",
@@ -594,6 +608,7 @@ def apply_to_linear(
     team_key: str | None,
     publish_path: Path,
     update_project_overview: bool,
+    desired_repo_by_task: dict[str, DesiredRepo] | None = None,
 ) -> None:
     client = LinearClient(package.repo_root)
     state = load_project_state(client, project_slug)
@@ -602,7 +617,15 @@ def apply_to_linear(
     publish = load_publish_file(publish_path)
 
     milestone_map = ensure_milestones(client, package, project)
-    issue_map = ensure_issues(client, package, project, team, milestone_map, publish)
+    issue_map = ensure_issues(
+        client,
+        package,
+        project,
+        team,
+        milestone_map,
+        publish,
+        desired_repo_by_task=desired_repo_by_task,
+    )
     apply_blockers(client, package, issue_map)
     rewrite_issue_bodies(client, package, milestone_map, issue_map, project_slug)
 
@@ -619,7 +642,30 @@ def load_project_state(client: LinearClient, project_slug: str) -> dict[str, Any
     nodes = data.get("data", {}).get("projects", {}).get("nodes", [])
     if not nodes:
         raise LinearError(f"Linear project not found for slug {project_slug}")
-    return {"project": nodes[0]}
+    project = nodes[0]
+    _assert_project_state_complete(project, project_slug)
+    return {"project": project}
+
+
+def _assert_project_state_complete(project: dict[str, Any], project_slug: str) -> None:
+    """Fail fast when the project issue or label pages are truncated."""
+
+    issues = project.get("issues") or {}
+    if (issues.get("pageInfo") or {}).get("hasNextPage"):
+        raise LinearError(
+            f"project {project_slug!r} issues page was truncated by pagination; "
+            "cannot safely merge labels against a partial issue set"
+        )
+    for issue in issues.get("nodes") or []:
+        if not isinstance(issue, dict):
+            continue
+        labels = issue.get("labels") or {}
+        if (labels.get("pageInfo") or {}).get("hasNextPage"):
+            identifier = issue.get("identifier") or issue.get("id") or "<unknown>"
+            raise LinearError(
+                f"issue {identifier!r} labels page was truncated by pagination; "
+                "cannot safely merge against a partial label set"
+            )
 
 
 def select_team(project: dict[str, Any], team_key: str | None) -> dict[str, Any]:
@@ -673,21 +719,34 @@ def ensure_issues(
     team: dict[str, Any],
     milestone_map: dict[str, dict[str, Any]],
     publish: dict[str, Any],
+    desired_repo_by_task: dict[str, DesiredRepo] | None = None,
 ) -> dict[str, dict[str, Any]]:
     existing_by_provenance = issues_by_provenance(project, package.planning_wave)
     publish_tasks = publish.get("tasks", {}) if isinstance(publish.get("tasks"), dict) else {}
     issue_map: dict[str, dict[str, Any]] = {}
     area_label_ids = ensure_area_labels(client, package, team)
+    desired_repo_by_task = desired_repo_by_task or {}
 
     for wave in package.waves:
         for task_id in wave:
             task = package.tasks[task_id]
             mapped = publish_tasks.get(task_id, {}) if isinstance(publish_tasks.get(task_id), dict) else {}
             existing = None
+            needs_full_hydration = False
             if mapped.get("issueId"):
-                existing = {"id": mapped["issueId"], "identifier": mapped.get("issue"), "url": mapped.get("url")}
+                # linear-publish.yaml only stores id/identifier/url - we need
+                # to fetch the full issue with labels before updating.
+                existing = {
+                    "id": mapped["issueId"],
+                    "identifier": mapped.get("issue"),
+                    "url": mapped.get("url"),
+                }
+                needs_full_hydration = True
             elif task_id in existing_by_provenance:
                 existing = existing_by_provenance[task_id]
+
+            if existing and needs_full_hydration:
+                existing = fetch_issue_with_labels(client, existing["id"], existing)
 
             body = issue_body(package, task, issue_map=None)
             input_data: dict[str, Any] = {
@@ -701,8 +760,13 @@ def ensure_issues(
             }
             if task.parent:
                 input_data["parentId"] = issue_map[task.parent]["id"]
-            label_ids = [area_label_ids[area] for area in task.areas if area in area_label_ids]
-            if label_ids:
+            label_ids = merged_label_ids(
+                existing=existing,
+                task=task,
+                area_label_ids=area_label_ids,
+                desired_repo=desired_repo_by_task.get(task_id),
+            )
+            if label_ids is not None:
                 input_data["labelIds"] = label_ids
 
             if existing:
@@ -716,7 +780,13 @@ def ensure_issues(
 
 
 def ensure_area_labels(client: LinearClient, package: Package, team: dict[str, Any]) -> dict[str, str]:
-    areas = sorted({area for task in package.tasks.values() for area in task.areas})
+    areas = sorted(
+        {
+            area
+            for task in package.tasks.values()
+            for area in (task.areas or [])
+        }
+    )
     if not areas:
         return {}
     label_ids: dict[str, str] = {}
@@ -767,6 +837,177 @@ def issues_by_provenance(project: dict[str, Any], planning_wave: str) -> dict[st
         if wave_match and id_match and wave_match.group(1) == planning_wave:
             result[id_match.group(1)] = issue
     return result
+
+
+def merged_label_ids(
+    *,
+    existing: dict[str, Any] | None,
+    task: Task,
+    area_label_ids: dict[str, str],
+    desired_repo: DesiredRepo | None,
+) -> list[str] | None:
+    """Compute the merged ``labelIds`` payload for a single task.
+
+    Returns ``None`` when the task would not have any labels (so the caller
+    can simply omit ``labelIds`` from the GraphQL input - matching the
+    pre-LOC-22 behaviour for legacy tasks with no frontmatter ``areas``).
+    """
+
+    existing_label_entries = _collect_existing_labels(existing)
+    existing_ids_by_name = {
+        label["name"]: label["id"] for label in existing_label_entries
+    }
+
+    desired_areas: list[str] | None = list(task.areas) if task.areas is not None else None
+    # When ``desired_areas`` is an empty list, ``merge_label_ids`` will clear
+    # all area labels; when it is ``None``, existing area labels are kept.
+
+    area_ids_by_slug: dict[str, str] = {}
+    for slug in task.areas or []:
+        label_id = area_label_ids.get(slug)
+        if label_id:
+            area_ids_by_slug[slug] = label_id
+
+    repo_id_by_slug: dict[str, str] = {}
+    if desired_repo is not None and desired_repo.kind == "managed" and desired_repo.slug:
+        label_id = _lookup_repo_label_id(slug=desired_repo.slug, existing=existing)
+        if label_id:
+            repo_id_by_slug[desired_repo.slug] = label_id
+
+    merged = merge_label_ids(
+        existing_ids_by_name,
+        desired_areas=desired_areas,
+        desired_repo=desired_repo,
+        area_ids_by_slug=area_ids_by_slug,
+        repo_id_by_slug=repo_id_by_slug,
+    )
+    if not merged:
+        return None
+    return merged
+
+
+def _collect_existing_labels(issue: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Extract the ``labels.nodes`` list from an issue, validating completeness.
+
+    Returns an empty list when the issue has no labels, and raises
+    :class:`LinearError` when the labels field is present but cannot be
+    proven complete (paginated).
+    """
+
+    if issue is None:
+        return []
+    labels = issue.get("labels")
+    if labels is None:
+        return []
+    if not isinstance(labels, dict):
+        raise LinearError(
+            f"issue {issue.get('identifier') or issue.get('id')!r} labels field "
+            "is not a connection object"
+        )
+    nodes = labels.get("nodes") or []
+    if not isinstance(nodes, list):
+        raise LinearError(
+            f"issue {issue.get('identifier') or issue.get('id')!r} labels.nodes "
+            "is not a list"
+        )
+    page_info = labels.get("pageInfo") or {}
+    if page_info.get("hasNextPage"):
+        raise LinearError(
+            f"issue {issue.get('identifier') or issue.get('id')!r} labels were "
+            "truncated by pagination; cannot safely merge against partial set"
+        )
+    return [node for node in nodes if isinstance(node, dict)]
+
+
+def _lookup_repo_label_id(
+    *,
+    slug: str,
+    existing: dict[str, Any] | None,
+) -> str | None:
+    """Return the id of an existing ``repo:<slug>`` label, if any.
+
+    LOC-22 does not create ``repo:*`` labels - it only reuses ones that
+    already exist on the issue. LOC-25 owns creating new repo labels.
+    """
+
+    if existing is None:
+        return None
+    for label in _collect_existing_labels(existing):
+        name = label.get("name")
+        if isinstance(name, str) and name.lower() == f"{REPO_PREFIX}{slug.lower()}":
+            return label.get("id")
+    return None
+
+
+def fetch_issue_with_labels(
+    client: LinearClient,
+    issue_id: str,
+    base: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fetch the full set of labels for an issue and merge them onto ``base``.
+
+    The merge uses the per-issue ``issue_labels.graphql`` query, which is
+    paginated so the caller (this function) is responsible for confirming
+    completeness before returning.
+    """
+
+    base = dict(base or {})
+    base.setdefault("id", issue_id)
+    labels_by_name = fetch_labels_complete(client, issue_id)
+    base["labels"] = {
+        "nodes": [
+            {"id": label_id, "name": name}
+            for name, label_id in labels_by_name.items()
+        ],
+        "pageInfo": {"hasNextPage": False, "endCursor": None},
+    }
+    return base
+
+
+def fetch_labels_complete(
+    client: LinearClient,
+    issue_id: str,
+    page_size: int = 100,
+) -> dict[str, str]:
+    """Fetch every label on ``issue_id`` and prove completeness via pagination.
+
+    Raises :class:`LinearError` when the labels field is truncated beyond the
+    configurable page size, or when Linear reports an error mid-pagination.
+    """
+
+    labels_by_name: dict[str, str] = {}
+    cursor: str | None = None
+    while True:
+        variables: dict[str, Any] = {"id": issue_id, "first": page_size}
+        if cursor is not None:
+            variables["after"] = cursor
+        data = client.call("issue_labels.graphql", variables)
+        if data.get("errors"):
+            raise LinearError(
+                f"failed to fetch labels for issue {issue_id}: "
+                f"{json.dumps(data['errors'], indent=2)}"
+            )
+        issue_payload = data.get("data", {}).get("issue")
+        if issue_payload is None:
+            raise LinearError(f"issue {issue_id} not found while fetching labels")
+        connection = issue_payload.get("labels") or {}
+        nodes = connection.get("nodes") or []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = node.get("name")
+            label_id = node.get("id")
+            if isinstance(name, str) and isinstance(label_id, str):
+                labels_by_name[name] = label_id
+        page_info = connection.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            return labels_by_name
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise LinearError(
+                f"issue {issue_id} labels pagination reported hasNextPage without "
+                "endCursor; cannot safely fetch the rest"
+            )
 
 
 def create_issue(client: LinearClient, input_data: dict[str, Any], title: str) -> dict[str, Any]:

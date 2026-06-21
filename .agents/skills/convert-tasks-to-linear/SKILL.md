@@ -3,7 +3,8 @@ name: convert-tasks-to-linear
 description: |
   Use this skill when a docs/tasks/task-package.yaml planning wave should be
   validated, previewed, or published to Linear with milestone assignments,
-  parent/sub-issue relationships, blocker relations, and publish state.
+  parent/sub-issue relationships, blocker relations, and additive label
+  management.
 ---
 
 # Convert Task Packages To Linear
@@ -180,6 +181,35 @@ adds short HTML comments to Linear issue descriptions as a recovery aid:
 - Rewrite created issue bodies so task references point to real Linear issue IDs and canonical URLs.
 - Update the Linear project overview with a planning-wave summary and live issue links.
 
+## Label Management (Additive, Namespace-Aware)
+
+Linear's `issue_update` REPLACES the issue's label set on every call, so the
+converter cannot simply overwrite labels. Labels are merged by namespace:
+
+- **`area:*`** is rebuilt exactly from the task's frontmatter `areas` field.
+  - When `areas` is present (including an empty list), the converter drops
+    every existing `area:*` label and applies exactly the listed ones.
+  - When `areas` is absent, existing `area:*` labels are preserved.
+- **`repo:*`** is *not* managed by this skill (LOC-25 owns repo labels).
+  When `apply` is called without an explicit desired-repo state, existing
+  `repo:*` labels are preserved.
+- **All other labels** (e.g. `priority:*`, `ops:*`, hand-set team labels)
+  are preserved untouched.
+
+Concretely:
+
+- A re-publish never wipes a hand-set `repo:` label.
+- A re-publish never deletes a `priority:` / `severity:` / `bug:` label
+  authored outside this converter.
+- The converter fails the run before calling `issue_update` if the existing
+  label set is paginated/truncated so it cannot be proven complete.
+- Per-issue label hydration happens for both provenance-discovered issues
+  and issues mapped through `linear-publish.yaml`.
+
+The merge helper itself lives in
+`scripts/label_merge.py` and can be imported independently for unit tests
+or for callers (like LOC-25) that want to drive the same merge logic.
+
 ## Validation Checklist
 
 Before reporting success:
@@ -189,6 +219,7 @@ Before reporting success:
 - Every `parent` task is represented as a Linear parent/sub-issue relationship.
 - Every `blockedBy` edge is represented as a Linear blocker relation.
 - Every declared area is represented as a Linear `area:<slug>` label.
+- Unmanaged labels (hand-set `repo:`, `priority:`, etc.) survive a re-publish.
 - No issue is blocked by itself.
 - Local task IDs remain only in provenance comments or explicit source-context sections.
 - `linear-publish.yaml` contains every converted task.

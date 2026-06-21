@@ -1,0 +1,16 @@
+query IssueLabels($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    id
+    identifier
+    labels(first: $first, after: $after) {
+      nodes {
+        id
+        name
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
