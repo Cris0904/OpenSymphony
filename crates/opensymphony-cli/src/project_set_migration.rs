@@ -147,9 +147,13 @@ pub fn classify_legacy_api_key(value: Option<&str>) -> Result<MigratedApiKey, Mi
     };
     let bytes = value.as_bytes();
     if let Some(rest) = bytes.strip_prefix(b"${") {
+        // Reject `${...}` shapes that are not an exact `${VAR}` reference:
+        // anything after the closing `}` (including whitespace) means the
+        // value is a literal token, not an env-var reference.
         if let Some(close) = rest.iter().position(|byte| *byte == b'}') {
             let var_bytes = &rest[..close];
-            if is_valid_env_var(var_bytes) {
+            let after_brace = &rest[close + 1..];
+            if after_brace.is_empty() && is_valid_env_var(var_bytes) {
                 let var =
                     std::str::from_utf8(var_bytes).map_err(|_| MigrationError::LiteralApiKey)?;
                 return Ok(MigratedApiKey::EnvVar(var.to_owned()));
@@ -698,8 +702,28 @@ mod tests {
             "${UNCLOSED",
             "${WITH SPACE}",
             "${VAR-EXTRA}",
+            "${VAR}extra",
+            "${VAR} extra",
             "prefix$LITERAL",
         ] {
+            assert!(
+                matches!(
+                    classify_legacy_api_key(Some(value)),
+                    Err(MigrationError::LiteralApiKey)
+                ),
+                "expected literal-api-key error for value `{value}`, got: {:?}",
+                classify_legacy_api_key(Some(value))
+            );
+        }
+    }
+
+    #[test]
+    fn classify_legacy_api_key_rejects_braced_env_var_with_suffix() {
+        // Regression: `${VAR}extra` and `${VAR} extra` are NOT exact `${VAR}`
+        // references — anything after the closing brace means the legacy value
+        // is a literal token. The classifier must reject it before any file is
+        // written (LOC-20 safe-auth rules).
+        for value in ["${VAR}extra", "${VAR} extra"] {
             assert!(
                 matches!(
                     classify_legacy_api_key(Some(value)),
