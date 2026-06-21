@@ -13,6 +13,7 @@ use super::repo_detection::{
     GitRemoteDetection, derive_repo_slug_from_dir, derive_repo_slug_from_remote,
     detect_git_default_branch, detect_git_remote_url,
 };
+use super::util::trimmed_non_empty;
 // `git_remote_url` and `git_remote_name` were the `init`-private free
 // functions; their equivalents now live as inherent methods on
 // [`GitRemoteDetection`] in [`super::repo_detection`] (LOC-19).
@@ -536,6 +537,10 @@ where
         self.allow_prompts = allow_prompts;
     }
 
+    fn allow_prompts(&self) -> bool {
+        self.allow_prompts
+    }
+
     fn line(&mut self, message: impl AsRef<str>) -> Result<(), InitCommandError> {
         writeln!(self.writer, "{}", message.as_ref()).map_err(InitCommandError::PromptIo)
     }
@@ -794,9 +799,11 @@ where
     match upsert_project_set_entry_for_init(
         &target_repo,
         &git_remote,
-        args.repo_url.as_deref(),
-        args.repo_slug.as_deref(),
-        args.repo_default_branch.as_deref(),
+        RepoOverrides {
+            repo_url: args.repo_url.as_deref(),
+            repo_slug: args.repo_slug.as_deref(),
+            repo_default_branch: args.repo_default_branch.as_deref(),
+        },
         linear_project_slug.as_deref(),
         ui,
     )? {
@@ -1225,13 +1232,6 @@ fn apply_asset(
     })
 }
 
-fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
 fn build_final_contents(asset: &FetchedAsset, action: &PlannedAction) -> Option<String> {
     match action {
         PlannedAction::Create | PlannedAction::Overwrite => Some(match asset.kind {
@@ -1658,8 +1658,18 @@ fn strip_project_set_owned_fields(template: &str) -> String {
     // If parsing fails for any reason we fall back to returning the
     // template unchanged — the strict project-set mode resolver will
     // surface the field-migration error to the operator.
-    let Some((head, front_matter_yaml, body)) = split_front_matter(template) else {
-        return template.to_string();
+    //
+    // Reuse the canonical `split_front_matter` from
+    // [`crate::opensymphony_workflow`] so we have exactly one parser
+    // implementation. The canonical version is line-based, so a YAML
+    // scalar that contains `---` (e.g. `description: "use --- as
+    // separator"`) is correctly preserved instead of being mistaken for
+    // the closing delimiter (LOC-19 AI review feedback on the divergent
+    // `split_front_matter` parser).
+    let (front_matter_yaml, body) = match crate::opensymphony_workflow::split_front_matter(template)
+    {
+        Some(split) => split,
+        None => return template.to_string(),
     };
     let Ok(mut value) = serde_yaml::from_str::<serde_yaml::Value>(front_matter_yaml) else {
         return template.to_string();
@@ -1668,21 +1678,44 @@ fn strip_project_set_owned_fields(template: &str) -> String {
         return template.to_string();
     };
 
-    // `tracker.*` — every sub-field is project-set-owned, so we drop the
-    // whole key to avoid leaving empty mappings behind.
-    mapping.remove("tracker");
+    // Iterate the canonical [`STALE_MOVED_FIELDS`] list so a new field
+    // added to the project-set migration contract is automatically stripped
+    // from the generated `WORKFLOW.md`. This is the single source of truth
+    // for which fields move to `.opensymphony/project-set.yaml` (LOC-19 AI
+    // review feedback on the hardcoded strip list).
+    for entry in crate::opensymphony_workflow::STALE_MOVED_FIELDS {
+        match entry.field.split_once('.') {
+            None => {
+                // Top-level field (e.g. an exact-match single key). Drop
+                // the whole key so we don't leave an empty mapping behind.
+                mapping.remove(entry.field);
+            }
+            Some((parent, child)) => {
+                if let Some(parent_mapping) =
+                    mapping.get_mut(parent).and_then(|v| v.as_mapping_mut())
+                {
+                    parent_mapping.remove(child);
+                }
+            }
+        }
+    }
 
-    // `polling.interval_ms` is the only sub-field of `polling`. Drop the
-    // whole key to match the same policy as `tracker`.
-    mapping.remove("polling");
-
-    // `agent.max_concurrent_agents` is one sub-field of `agent` (the others
-    // — `max_turns`, `stall_timeout_ms`, etc. — are repo-local). Remove
-    // only the sub-key.
-    if let Some(agent) = mapping.get_mut("agent").and_then(|v| v.as_mapping_mut()) {
-        agent.remove("max_concurrent_agents");
-        if agent.is_empty() {
-            mapping.remove("agent");
+    // After removing stale sub-fields, drop the parent key if it is now
+    // empty (e.g. `tracker` after every `tracker.*` was removed, or
+    // `polling` after `polling.interval_ms` was the only sub-field). The
+    // set of parent keys is derived from `STALE_MOVED_FIELDS` so it stays
+    // in sync with the canonical contract.
+    let stale_parents: BTreeSet<&str> = crate::opensymphony_workflow::STALE_MOVED_FIELDS
+        .iter()
+        .filter_map(|entry| entry.field.split_once('.').map(|(parent, _)| parent))
+        .collect();
+    for parent in &stale_parents {
+        let is_empty_mapping = mapping
+            .get(*parent)
+            .and_then(|value| value.as_mapping())
+            .is_some_and(|m| m.is_empty());
+        if is_empty_mapping {
+            mapping.remove(*parent);
         }
     }
 
@@ -1690,19 +1723,53 @@ fn strip_project_set_owned_fields(template: &str) -> String {
         Ok(serialized) => serialized,
         Err(_) => return template.to_string(),
     };
+    // The canonical `split_front_matter` returns:
+    //   * `front_matter_yaml` = source slice between the opening `---`
+    //     marker line and the closing `---` marker line
+    //   * `body` = source slice after the closing `---` marker line
+    //
+    // To rebuild the file we splice in the original opening marker line
+    // (`head`) and the original closing marker line (the 4 bytes
+    // immediately before `body`) so the rebuilt document keeps its
+    // exact framing byte-for-byte (LOC-19). The offsets come straight
+    // from the slices' pointers; we never have to re-match against `---`
+    // appearing inside YAML scalars.
+    let template_base = template.as_ptr().addr();
+    let head_end = front_matter_yaml
+        .as_ptr()
+        .addr()
+        .saturating_sub(template_base);
+    let head = &template[..head_end.min(template.len())];
+    let body_start = body.as_ptr().addr().saturating_sub(template_base);
+    // `body_start - 4` lands at the start of the closing `---\n` line so
+    // we keep it verbatim in the output.
+    let body_close_start = body_start.saturating_sub(4).min(template.len());
+    let body = &template[body_close_start..];
     format!("{head}{serialized_front_matter}{body}")
-}
-
-fn split_front_matter(template: &str) -> Option<(&str, &str, &str)> {
-    let trimmed = template
-        .strip_prefix("---\n")
-        .or_else(|| template.strip_prefix("---\r\n"))?;
-    let (front_matter, body) = trimmed.split_once("\n---")?;
-    Some(("---\n", front_matter, body))
 }
 
 fn comparable_text(value: &str) -> String {
     value.replace("\r\n", "\n").trim_end().to_owned()
+}
+
+/// Operator-supplied overrides for the repo entry that `init` writes into
+/// `.opensymphony/project-set.yaml`.
+///
+/// Groups the `--repo-url`, `--repo-slug`, and `--repo-default-branch`
+/// flag overrides into one struct so the upsert call site stays
+/// self-documenting (LOC-19 AI review feedback on the 7-argument
+/// `upsert_project_set_entry_for_init` signature).
+#[derive(Debug, Clone, Default)]
+struct RepoOverrides<'a> {
+    /// Operator-supplied repo URL override (e.g. when no git remote is
+    /// configured, or when registering a different repo than cwd).
+    repo_url: Option<&'a str>,
+    /// Operator-supplied repo slug override (takes precedence over the
+    /// remote-name and directory-name derived defaults).
+    repo_slug: Option<&'a str>,
+    /// Operator-supplied default-branch override (takes precedence over
+    /// the value `git remote show <remote>` reports).
+    repo_default_branch: Option<&'a str>,
 }
 
 /// Registers the freshly onboarded repo into the project-set inventory
@@ -1712,13 +1779,10 @@ fn comparable_text(value: &str) -> String {
 /// (either by passing `--skip-project-set-registration` or by answering
 /// "no" to the interactive prompt). Returns `Ok(Some(_))` whenever the
 /// upsert succeeded so callers can surface the change in the summary.
-#[allow(clippy::too_many_arguments)]
 fn upsert_project_set_entry_for_init<R, W>(
     target_repo: &Path,
     git_remote: &GitRemoteDetection,
-    repo_url_override: Option<&str>,
-    repo_slug_override: Option<&str>,
-    repo_default_branch_override: Option<&str>,
+    overrides: RepoOverrides<'_>,
     linear_project_slug: Option<&str>,
     ui: &mut PromptUi<R, W>,
 ) -> Result<Option<ProjectSetAppliedOutcome>, InitCommandError>
@@ -1735,7 +1799,7 @@ where
     //    that isn't the cwd).
     // 2. The confidently detected git remote URL.
     // 3. None (the operator will be prompted for one, unless non-interactive).
-    let trimmed_override = trimmed_non_empty(repo_url_override);
+    let trimmed_override = trimmed_non_empty(overrides.repo_url);
     let detected_url = git_remote.url().map(ToOwned::to_owned);
     let repo_url = trimmed_override.clone().or_else(|| detected_url.clone());
 
@@ -1745,7 +1809,7 @@ where
             // Phase-1 missing remote: prompt interactively; fail with actionable
             // guidance in non-interactive mode.
             let reason = "OpenSymphony detected no git remote and no `--repo-url` flag, so it cannot register this repo into the project-set inventory.";
-            if ui.allow_prompts {
+            if ui.allow_prompts() {
                 let response = ui.prompt(
                     "Enter the clone URL for this repo (leave blank to skip project-set registration): ",
                 )?;
@@ -1764,7 +1828,7 @@ where
         }
     };
 
-    let trimmed_default_branch_override = trimmed_non_empty(repo_default_branch_override);
+    let trimmed_default_branch_override = trimmed_non_empty(overrides.repo_default_branch);
     let detected_default_branch = git_remote
         .remote_name()
         .and_then(|remote| detect_git_default_branch(target_repo, remote));
@@ -1772,7 +1836,7 @@ where
         .clone()
         .or(detected_default_branch);
 
-    let repo_slug = trimmed_non_empty(repo_slug_override)
+    let repo_slug = trimmed_non_empty(overrides.repo_slug)
         .or_else(|| derive_repo_slug_from_remote(&repo_url))
         .or_else(|| derive_repo_slug_from_dir(target_repo))
         .unwrap_or_else(|| DEFAULT_REPO_SLUG_FALLBACK.to_owned());

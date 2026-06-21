@@ -7,6 +7,7 @@ mod orchestrator_run;
 mod project_set_writer;
 mod repo_detection;
 mod update_repo;
+pub(crate) mod util;
 mod workspace_clone;
 
 use std::{

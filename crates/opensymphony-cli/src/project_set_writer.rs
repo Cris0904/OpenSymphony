@@ -18,6 +18,7 @@ use thiserror::Error;
 
 use serde::Serialize;
 
+use super::util::trimmed_non_empty;
 use crate::opensymphony_workflow::{
     IntegerLike, PROJECT_SET_SCHEMA_VERSION, ProjectEntry, ProjectSetAgentFrontMatter,
     ProjectSetBody, ProjectSetFrontMatter, ProjectSetLinearFrontMatter,
@@ -494,13 +495,6 @@ fn upsert_repo_entry(
         });
         Ok(ProjectSetUpsertOutcome::Updated)
     }
-}
-
-fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn missing_field_error(field: &str) -> ProjectSetUpsertError {

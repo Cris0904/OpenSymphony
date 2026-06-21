@@ -67,7 +67,23 @@ fn parse_front_matter(
     }
 }
 
-fn split_front_matter(source: &str) -> Option<(&str, &str)> {
+/// Splits a `WORKFLOW.md`-style document into its YAML front matter and the
+/// body that follows it.
+///
+/// The function is the canonical parser used by [`parse_workflow`] and is
+/// re-exported so other crates (e.g. the `init` command) can reuse the same
+/// implementation instead of reinventing it (see `LOC-19` AI review feedback
+/// on the divergent `split_front_matter` parser in `init_repo.rs`).
+///
+/// Returns `(front_matter, body)` where `front_matter` is the YAML text
+/// between the two `---` markers and `body` is whatever follows. Returns
+/// `None` when the document has no leading `---` marker or when no closing
+/// `---` marker is found.
+///
+/// The parser walks the document line-by-line, so a YAML scalar that
+/// contains `---` (e.g. `description: "use --- as separator"`) is correctly
+/// preserved instead of being mistaken for the closing delimiter.
+pub fn split_front_matter(source: &str) -> Option<(&str, &str)> {
     let mut lines = source.split_inclusive('\n');
     let first_line = lines.next()?;
 
