@@ -910,6 +910,112 @@ async fn init_fails_when_template_fetch_times_out() {
     );
 }
 
+/// LOC-27: `opensymphony init` must not hang when `git remote show` is
+/// unresponsive. The CLI must kill the child `git` after the configured
+/// timeout, fall through to a `default_branch`-less inventory entry, and
+/// still complete successfully. The fake `git` wrapper hangs the
+/// `remote show` subcommand on a long `sleep`, forcing the timeout path to
+/// be the one being exercised.
+#[tokio::test]
+async fn init_completes_when_git_remote_show_times_out() {
+    let server = TemplateServer::start().await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    init_git_repo(repo.path(), "https://github.com/example/demo.git");
+
+    // Build a fake bin dir that shadows the real `git` with a wrapper that
+    // hangs on `git remote show` so the helper must time out and return
+    // `None`. Everything else is forwarded to the real `git` on PATH so
+    // `git init`, `git remote add`, etc. keep working inside the spawned
+    // init child.
+    let fake_bin = repo.path().join(".fake-bin");
+    fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+    let fake_git = fake_bin.join("git");
+    let real_git = which_real_git();
+    fs::write(
+        &fake_git,
+        format!(
+            "#!/bin/sh\n\
+             # LOC-27 fake git: hang `git remote show` past the test timeout.\n\
+             if [ \"$1\" = \"remote\" ] && [ \"$2\" = \"show\" ]; then\n\
+               sleep 5\n\
+               exit 128\n\
+             fi\n\
+             exec {real_git} \"$@\"\n"
+        ),
+    )
+    .expect("fake git should be written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&fake_git)
+            .expect("fake git metadata should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_git, permissions).expect("fake git should be executable");
+    }
+
+    let mut child = spawn_init_child_with_env(
+        repo.path(),
+        server.base_url(),
+        &[],
+        &[
+            ("OPENHANDS_GIT_REMOTE_SHOW_TIMEOUT_MS", "50"),
+            (
+                "PATH",
+                &format!(
+                    "{}:{}",
+                    fake_bin.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            ),
+        ],
+    );
+    write_stdin(&mut child, "\ndemo-project\nno\n").await;
+
+    // Bound the wait so a regression that reintroduces the hang fails the
+    // test instead of timing out the whole cargo run. The init command
+    // legitimately spends a few hundred milliseconds on the template fetch
+    // and the 50ms `git remote show` timeout, so 30s is a very generous
+    // upper bound on the well-behaved path.
+    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
+        .await
+        .expect("init must complete within the bounded window when git remote show times out")
+        .expect("init command should finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "init should succeed even when git remote show times out: stdout={stdout}, stderr={stderr}",
+    );
+
+    let project_set_path = repo.path().join(".opensymphony/project-set.yaml");
+    let project_set = fs::read_to_string(&project_set_path).expect("project-set.yaml should exist");
+    assert!(
+        project_set.contains("url: https://github.com/example/demo.git"),
+        "project-set.yaml should still record the remote URL even when git remote show times out: {project_set}",
+    );
+    assert!(
+        !project_set.contains("default_branch: "),
+        "project-set.yaml must not record a default_branch when the probe timed out: {project_set}",
+    );
+}
+
+fn which_real_git() -> String {
+    let output = std::process::Command::new("which")
+        .arg("git")
+        .output()
+        .expect("which git should run");
+    assert!(
+        output.status.success(),
+        "which git should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert!(!path.is_empty(), "which git should return a path");
+    path
+}
+
 fn spawn_init_child(
     repo_root: &std::path::Path,
     template_base_url: &str,
