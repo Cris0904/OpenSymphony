@@ -111,12 +111,13 @@ pub(super) async fn resolve_runtime_config(
         .map(|path| super::super::resolve_path(config_root, path))
         .unwrap_or_else(|| cwd.clone());
     let workflow_path = target_repo.join("WORKFLOW.md");
-    let workflow_definition = WorkflowDefinition::load_from_path(&workflow_path).map_err(|source| {
-        RunCommandError::LoadWorkflow {
-            path: workflow_path.clone(),
-            source,
-        }
-    })?;
+    let workflow_definition =
+        WorkflowDefinition::load_from_path(&workflow_path).map_err(|source| {
+            RunCommandError::LoadWorkflow {
+                path: workflow_path.clone(),
+                source,
+            }
+        })?;
 
     // LOC-18: project-set is the strict runtime boundary owner when present.
     // It is loaded BEFORE the workflow is resolved so we can run the
@@ -132,12 +133,12 @@ pub(super) async fn resolve_runtime_config(
                 &crate::opensymphony_workflow::ProcessEnvironment,
             )
             .map_err(|source| match source {
-                crate::opensymphony_workflow::WorkflowConfigError::StaleMovedProjectSetFields { .. } => {
-                    RunCommandError::StaleProjectSetFields {
-                        path: workflow_path.clone(),
-                        source,
-                    }
-                }
+                crate::opensymphony_workflow::WorkflowConfigError::StaleMovedProjectSetFields {
+                    ..
+                } => RunCommandError::StaleProjectSetFields {
+                    path: workflow_path.clone(),
+                    source,
+                },
                 other => RunCommandError::ResolveWorkflow {
                     path: workflow_path.clone(),
                     source: other,

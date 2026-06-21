@@ -2887,9 +2887,13 @@ openhands:
             .iter()
             .map(|(field, destination)| (field.as_str(), destination.as_str()))
             .collect();
-        assert!(destinations.contains(&("tracker.kind", "project_set.linear (kind implied: linear)")));
+        assert!(
+            destinations.contains(&("tracker.kind", "project_set.linear (kind implied: linear)"))
+        );
         assert!(destinations.contains(&("tracker.api_key", "project_set.linear.api_key_env")));
-        assert!(destinations.contains(&("tracker.project_slug", "project_set.linear.project_slug")));
+        assert!(
+            destinations.contains(&("tracker.project_slug", "project_set.linear.project_slug"))
+        );
     }
 
     #[test]
@@ -2933,7 +2937,10 @@ openhands:
 
         // Project-set owns the global values; workflow owns repo-local ones.
         assert_eq!(resolved.config.tracker.kind, TrackerKind::Linear);
-        assert_eq!(resolved.config.tracker.project_slug, "opensymphony-bootstrap-e7b957855cb7");
+        assert_eq!(
+            resolved.config.tracker.project_slug,
+            "opensymphony-bootstrap-e7b957855cb7"
+        );
         assert_eq!(resolved.config.tracker.api_key, "test-linear-key");
         assert_eq!(resolved.config.polling.interval_ms, 5000);
         assert_eq!(resolved.config.agent.max_concurrent_agents, 4);
@@ -2966,8 +2973,11 @@ openhands:
             .expect_err("strict project-set resolution should hard-fail on stale moved fields");
         match error {
             WorkflowConfigError::StaleMovedProjectSetFields { stale } => {
-                let names: Vec<&str> =
-                    stale.fields.iter().map(|(field, _)| field.as_str()).collect();
+                let names: Vec<&str> = stale
+                    .fields
+                    .iter()
+                    .map(|(field, _)| field.as_str())
+                    .collect();
                 assert!(
                     names.contains(&"tracker.project_slug"),
                     "diagnostic should list tracker.project_slug, got {:?}",
@@ -3007,8 +3017,11 @@ openhands:
             .expect_err("strict project-set resolution should hard-fail on stale moved fields");
         match error {
             WorkflowConfigError::StaleMovedProjectSetFields { stale } => {
-                let names: Vec<&str> =
-                    stale.fields.iter().map(|(field, _)| field.as_str()).collect();
+                let names: Vec<&str> = stale
+                    .fields
+                    .iter()
+                    .map(|(field, _)| field.as_str())
+                    .collect();
                 assert!(
                     names.contains(&"polling.interval_ms"),
                     "diagnostic should list polling.interval_ms, got {:?}",
@@ -3055,7 +3068,10 @@ openhands:
             .resolve_strict_project_set(&resolved_project_set, temp_dir.path(), &env)
             .expect_err("strict project-set resolution must never silently fall back");
         assert!(
-            matches!(error, WorkflowConfigError::StaleMovedProjectSetFields { .. }),
+            matches!(
+                error,
+                WorkflowConfigError::StaleMovedProjectSetFields { .. }
+            ),
             "error must be the stale-fields diagnostic, got {error:?}",
         );
     }

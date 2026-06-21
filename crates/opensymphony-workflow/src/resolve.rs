@@ -29,9 +29,8 @@ use super::{
         PROJECT_SET_SCHEMA_VERSION, PollingConfig, PollingFrontMatter, ProjectSetAgentConfig,
         ProjectSetConfig, ProjectSetFrontMatter, ProjectSetLinearConfig, ProjectSetPollingConfig,
         ResolvedProject, ResolvedProjectSet, ResolvedRepoEntry, ResolvedWorkflow,
-        StaleMovedProjectSetFields, TrackerConfig, TrackerFrontMatter, TrackerKind,
-        WorkflowConfig, WorkflowDefinition, WorkflowExtensions, WorkspaceConfig,
-        WorkspaceFrontMatter,
+        StaleMovedProjectSetFields, TrackerConfig, TrackerFrontMatter, TrackerKind, WorkflowConfig,
+        WorkflowDefinition, WorkflowExtensions, WorkspaceConfig, WorkspaceFrontMatter,
     },
 };
 

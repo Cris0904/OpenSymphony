@@ -1105,9 +1105,12 @@ fn write_doctor_config_with_linear_enabled(
             (
                 Value::String("linear".to_string()),
                 Value::Mapping(
-                    [(Value::String("enabled".to_string()), Value::Bool(linear_enabled))]
-                        .into_iter()
-                        .collect(),
+                    [(
+                        Value::String("enabled".to_string()),
+                        Value::Bool(linear_enabled),
+                    )]
+                    .into_iter()
+                    .collect(),
                 ),
             ),
         ]
@@ -1133,12 +1136,7 @@ fn doctor_reports_active_mode_as_legacy_single_repo_when_project_set_absent() {
         doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
     )
     .expect("workflow should be written");
-    write_doctor_config_with_linear_enabled(
-        &config_path,
-        &target_repo,
-        &tool_dir,
-        false,
-    );
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
 
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
@@ -1192,12 +1190,7 @@ fn doctor_reports_active_mode_as_project_set_when_global_config_is_present() {
         ),
     )
     .expect("project-set should be written");
-    write_doctor_config_with_linear_enabled(
-        &config_path,
-        &target_repo,
-        &tool_dir,
-        false,
-    );
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
 
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
@@ -1257,12 +1250,7 @@ fn doctor_fails_project_set_boundary_when_workflow_has_stale_moved_fields() {
         ),
     )
     .expect("project-set should be written");
-    write_doctor_config_with_linear_enabled(
-        &config_path,
-        &target_repo,
-        &tool_dir,
-        false,
-    );
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
 
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
@@ -1312,8 +1300,7 @@ fn doctor_fails_project_set_boundary_when_workflow_has_stale_moved_fields() {
     // Independent checks must still report (LOC-18 AC: doctor continues
     // unrelated checks where practical).
     assert!(
-        stdout.contains("[PASS] project-set")
-            || stdout.contains("[FAIL] project-set"),
+        stdout.contains("[PASS] project-set") || stdout.contains("[FAIL] project-set"),
         "doctor should still surface the `project-set` check result alongside the boundary failure: stdout={stdout}",
     );
     assert!(
@@ -1341,12 +1328,7 @@ fn doctor_legacy_mode_relaxes_linear_auth_with_linear_enabled_false() {
         doctor_workflow_source(&workspace_root, "http://127.0.0.1:8000"),
     )
     .expect("workflow should be written");
-    write_doctor_config_with_linear_enabled(
-        &config_path,
-        &target_repo,
-        &tool_dir,
-        false,
-    );
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
 
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));
@@ -1413,12 +1395,7 @@ fn doctor_strict_project_set_mode_does_not_relax_linear_auth_with_linear_enabled
     .expect("project-set should be written");
     // `linear.enabled: false` in `config.yaml` must NOT skip the linear
     // check in project-set mode.
-    write_doctor_config_with_linear_enabled(
-        &config_path,
-        &target_repo,
-        &tool_dir,
-        false,
-    );
+    write_doctor_config_with_linear_enabled(&config_path, &target_repo, &tool_dir, false);
 
     for command in ["cargo", "curl", "git", "uv"] {
         write_fake_executable(fake_bin_dir.path().join(command));

@@ -242,8 +242,11 @@ openhands:
 fn write_strict_project_set(project_root: &std::path::Path) {
     let opensymphony_dir = project_root.join(".opensymphony");
     std::fs::create_dir_all(&opensymphony_dir).expect(".opensymphony dir should exist");
-    std::fs::write(opensymphony_dir.join("project-set.yaml"), STRICT_PROJECT_SET_YAML)
-        .expect("project-set should be written");
+    std::fs::write(
+        opensymphony_dir.join("project-set.yaml"),
+        STRICT_PROJECT_SET_YAML,
+    )
+    .expect("project-set should be written");
     std::fs::write(
         project_root.join("config.yaml"),
         "openhands:\n  tool_dir: ./managed/openhands-server\nlinear:\n  enabled: false\n",
