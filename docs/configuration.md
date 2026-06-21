@@ -19,9 +19,20 @@ opensymphony init
 - leaves an existing `AGENTS.md` untouched and writes starter guidance to
   `AGENTS-example.md` during first-time setup
 - prompts before overwriting other conflicting files
-- fills the `WORKFLOW.md` clone hook from `git remote` when possible
-- offers to fill the Linear project slug/key in `WORKFLOW.md`
-- creates or updates `.gitignore` so local OpenSymphony runtime state stays untracked
+- writes the static `opensymphony workspace clone` hook into `WORKFLOW.md`'s
+  `after_create` (no hardcoded URL); the runtime injects the resolved
+  `RepoRef` via env vars at clone time
+- registers the onboarded repo into the project-set inventory under
+  `<cwd>/.opensymphony/project-set.yaml` (slug → `{ url, default_branch }`),
+  using the `git remote` URL when one is confidently detected
+- writes the Linear project slug/key into
+  `project_set.linear.project_slug` (not `WORKFLOW.md`); `api_key_env` is
+  env-backed and stays out of the serialized file
+- strips project-set-owned global fields (`tracker.*`, `polling.interval_ms`,
+  `agent.max_concurrent_agents`) from the generated `WORKFLOW.md` so it is
+  already valid under strict project-set mode
+- creates or updates `.gitignore` so local OpenSymphony runtime state stays
+  untracked, while keeping `.opensymphony/project-set.yaml` versioned
 - can optionally scaffold OpenHands AI PR review
 - can configure the GitHub Actions variables, label, and optional review secret
   automatically when `gh` is installed and can access the repository
@@ -54,11 +65,15 @@ manual setup step:
 
 Core bootstrap payload:
 
-- `WORKFLOW.md`
+- `WORKFLOW.md` (with the static `opensymphony workspace clone` `after_create`
+  hook and without project-set-owned global fields)
 - `AGENTS.md`
 - `AGENTS-example.md` when `AGENTS.md` already existed before first-time setup
 - `config.yaml`
-- `.gitignore` created or updated to ignore OpenSymphony runtime state
+- `.opensymphony/project-set.yaml` created when missing, or upserted with the
+  onboarded repo's inventory entry
+- `.gitignore` created or updated to ignore OpenSymphony runtime state while
+  keeping `.opensymphony/project-set.yaml` versioned
 - `.agents/skills/` copied recursively, including skill-local `references/`, `scripts/`, and similar helper files
 - `.agents/skills/linear/references/`
 - `.github/CODEOWNERS`

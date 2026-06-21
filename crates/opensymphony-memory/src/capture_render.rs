@@ -211,14 +211,10 @@ fn area_alias_matches(area: &AreaConfig, value: &str) -> bool {
             let alias_slug = slugify(alias);
             value_slug == alias_slug || value == alias
         })
-        || area
-            .source_refs
-            .linear_labels
-            .iter()
-            .any(|label| {
-                canonical_area_label_slug(label).as_deref() == Some(area.slug.as_str())
-                    || value_slug == slugify(label)
-            })
+        || area.source_refs.linear_labels.iter().any(|label| {
+            canonical_area_label_slug(label).as_deref() == Some(area.slug.as_str())
+                || value_slug == slugify(label)
+        })
 }
 
 fn canonical_area_label_slug(value: &str) -> Option<String> {
@@ -337,7 +333,10 @@ fn is_generic_milestone(milestone: &str) -> bool {
     slug.is_empty()
         || slug.chars().all(|character| character.is_ascii_digit())
         || slug.len() <= 2
-        || matches!(slug.as_str(), "mvp" | "v1" | "v2" | "m1" | "m2" | "m3" | "m4")
+        || matches!(
+            slug.as_str(),
+            "mvp" | "v1" | "v2" | "m1" | "m2" | "m3" | "m4"
+        )
 }
 
 fn infer_candidate_area_from_narrative(
@@ -352,7 +351,12 @@ fn infer_candidate_area_from_narrative(
                 .iter()
                 .filter_map(|parent| parent.title.as_deref()),
         )
-        .chain(issue.children.iter().filter_map(|child| child.title.as_deref()))
+        .chain(
+            issue
+                .children
+                .iter()
+                .filter_map(|child| child.title.as_deref()),
+        )
         .chain(issue.comments.iter().map(|comment| comment.body.as_str()))
         .chain(prs.iter().map(|pr| pr.title.as_str()))
         .chain(prs.iter().filter_map(|pr| pr.body.as_deref()))
@@ -412,7 +416,9 @@ fn looks_like_issue_key_token(token: &str) -> bool {
     let Some((prefix, suffix)) = token.split_once('-') else {
         return false;
     };
-    prefix.chars().all(|character| character.is_ascii_alphabetic())
+    prefix
+        .chars()
+        .all(|character| character.is_ascii_alphabetic())
         && suffix.chars().all(|character| character.is_ascii_digit())
 }
 
@@ -442,10 +448,7 @@ fn is_area_stopword(token: &str) -> bool {
     )
 }
 
-fn evolve_memory_config(
-    config: &MemoryConfig,
-    plan: &CapturePlan,
-) -> MemoryConfig {
+fn evolve_memory_config(config: &MemoryConfig, plan: &CapturePlan) -> MemoryConfig {
     let mut evolved = config.clone();
     for issue_plan in &plan.selected {
         for area_slug in &issue_plan.areas {
@@ -462,7 +465,12 @@ fn merge_area_evidence(
     issue_plan: &CaptureIssuePlan,
     confidence_threshold: u8,
 ) {
-    if let Some(milestone) = issue_plan.issue.milestone.as_deref().and_then(normalize_optional) {
+    if let Some(milestone) = issue_plan
+        .issue
+        .milestone
+        .as_deref()
+        .and_then(normalize_optional)
+    {
         push_unique(&mut area.source_refs.linear_milestones, milestone);
     }
     for label in normalize_list(issue_plan.issue.labels.clone()) {
@@ -496,8 +504,7 @@ fn inferred_area_confidence(area: &AreaConfig, issue_plan: &CaptureIssuePlan) ->
             !is_reserved_namespace_label(label)
                 && (canonical_area_label_slug(label).as_deref() == Some(area.slug.as_str())
                     || (slugify(label) == area.slug && !is_generic_label(label)))
-        })
-    {
+        }) {
         90
     } else if issue_plan
         .issue
@@ -917,7 +924,10 @@ fn review_signal(review: &ReviewEvidence) -> Option<String> {
     let reviewer = review.reviewer.as_deref().unwrap_or("reviewer");
     let state = review.state.as_deref().unwrap_or("reviewed");
     let state_upper = state.trim().to_ascii_uppercase();
-    let summary = review.disposition.as_deref().and_then(review_signal_summary);
+    let summary = review
+        .disposition
+        .as_deref()
+        .and_then(review_signal_summary);
 
     if summary.is_none() && state_upper == "COMMENTED" {
         return None;
@@ -978,12 +988,16 @@ fn clean_review_line(raw: &str) -> Option<String> {
         .trim()
         .replace("**", "")
         .replace('`', "");
-    if line.contains("Badge]") && line.contains("</sub>")
+    if line.contains("Badge]")
+        && line.contains("</sub>")
         && let Some(index) = line.rfind("</sub>")
     {
         line = line[index + "</sub>".len()..].trim().to_string();
     }
-    let line = line.trim().trim_start_matches(|ch: char| !ch.is_ascii()).trim();
+    let line = line
+        .trim()
+        .trim_start_matches(|ch: char| !ch.is_ascii())
+        .trim();
     if line.is_empty() || line == "---" || line == "```" {
         None
     } else {

@@ -391,11 +391,19 @@ fn render_memory_gitignore(before: Option<&str>) -> String {
         ".opensymphony/memory/*",
         "!.opensymphony/memory/memory.yaml",
     ];
+    // LOC-19: the project-set inventory file is intentionally versioned so
+    // operators can track inventory changes in git. Without this allow-list
+    // line, the blanket `.opensymphony/*` rule would silently ignore
+    // `<cwd>/.opensymphony/project-set.yaml` after `opensymphony init`.
+    const PROJECT_SET_ALLOW_LINE: &str = "!.opensymphony/project-set.yaml";
 
     let mut lines = before
         .unwrap_or_default()
         .lines()
-        .filter(|line| !MEMORY_IGNORE_LINES.contains(&line.trim()))
+        .filter(|line| {
+            let trimmed = line.trim();
+            !MEMORY_IGNORE_LINES.contains(&trimmed) && trimmed != PROJECT_SET_ALLOW_LINE
+        })
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     while lines.last().is_some_and(|line| line.trim().is_empty()) {
@@ -410,5 +418,7 @@ fn render_memory_gitignore(before: Option<&str>) -> String {
         output.push_str(line);
         output.push('\n');
     }
+    output.push_str(PROJECT_SET_ALLOW_LINE);
+    output.push('\n');
     output
 }
