@@ -55,6 +55,11 @@ pub enum ProjectSetUpsertError {
     },
     #[error("failed to serialize project-set config: {0}")]
     Serialize(serde_yaml::Error),
+    #[error("project-set upsert plan missing required field `{field}`")]
+    MissingField {
+        /// The plan field that was empty / unset.
+        field: &'static str,
+    },
     #[error("failed to write project-set config at {path}: {source}")]
     WriteFile {
         path: PathBuf,
@@ -497,9 +502,12 @@ fn upsert_repo_entry(
     }
 }
 
-fn missing_field_error(field: &str) -> ProjectSetUpsertError {
-    // We do not have a dedicated `MissingField` variant; surface the failure
-    // as a serialization error so the existing error enum stays narrow.
-    let message = format!("project-set upsert plan missing required field `{field}`");
-    ProjectSetUpsertError::Serialize(<serde_yaml::Error as serde::de::Error>::custom(message))
+fn missing_field_error(field: &'static str) -> ProjectSetUpsertError {
+    // Surface the failure via the dedicated `MissingField` variant so
+    // operators and tests can distinguish an incomplete upsert plan
+    // (a programming error) from a YAML serialization failure (a
+    // runtime data error). Previously this synthesized a `Serialize`
+    // variant, which conflated the two failure modes (LOC-19 AI
+    // review feedback on `project_set_writer::missing_field_error`).
+    ProjectSetUpsertError::MissingField { field }
 }

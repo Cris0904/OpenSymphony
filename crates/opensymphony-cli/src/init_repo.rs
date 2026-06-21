@@ -46,13 +46,24 @@ const OPENHANDS_PR_REVIEW_SETUP_GUIDE_URL: &str =
 const AI_REVIEW_LABEL_NAME: &str = "review-this";
 const AGENTS_EXAMPLE_PATH: &str = "AGENTS-example.md";
 
-/// Default repo slug used when neither the remote nor the directory produces
-/// a usable slug. Matches the workspace-friendly slug operators see in the
-/// `init` summary output.
+/// Default repo slug used when neither the `--repo-slug` flag, the git
+/// remote URL, nor the directory name produces a usable slug. Phase-1
+/// `init` is single-project, so a literal sentinel keeps the inventory
+/// commit-ready. Operators who onboard a second repo under a different
+/// project-set slug should rerun `init --repo-slug <slug>` to override
+/// before committing the project-set file (LOC-19 AI review feedback on
+/// the silent `DEFAULT_REPO_SLUG_FALLBACK` usage).
 const DEFAULT_REPO_SLUG_FALLBACK: &str = "repo";
 
-/// Sentinel for the project-set slug when none was supplied; falls back to
-/// the repo slug so the freshly written file still resolves.
+/// Sentinel for the project-set slug when no `--project-set-slug` flag
+/// was supplied. Phase-1 `init` writes a one-repo project-set so a
+/// fixed, recognisable literal is preferable to deriving from
+/// `repo_slug` (which would silently couple the inventory to whatever
+/// slug the operator happened to land on). Operators who onboard a
+/// second repo under a different project-set slug should rerun
+/// `init --project-set-slug <slug>` to rename the file before
+/// committing it (LOC-19 AI review feedback on the literal
+/// `DEFAULT_PROJECT_SET_SLUG_FALLBACK`).
 const DEFAULT_PROJECT_SET_SLUG_FALLBACK: &str = "default-project-set";
 
 /// Default Linear `api_key_env` for fresh project-set bootstrap. Operators can
@@ -1653,6 +1664,23 @@ fn rewrite_after_create_to_static_hook(template: &str) -> String {
     template.replace(&needle, STATIC_AFTER_CREATE_HOOK)
 }
 
+/// Strip project-set-owned global fields from the canonical `WORKFLOW.md`
+/// template so the generated file is already valid under strict
+/// project-set mode (no stale `tracker.*`, `polling.*`, or
+/// `agent.max_concurrent_agents`).
+///
+/// The fields are derived from the canonical [`STALE_MOVED_FIELDS`] constant
+/// in [`crate::opensymphony_workflow`], so adding a new migration field there
+/// automatically extends the strip list.
+///
+/// **Known limitation (LOC-19):** the rewritten YAML is produced via
+/// [`serde_yaml::to_string`], which does not preserve comments, key
+/// ordering, or blank-line formatting from the original document. This
+/// function is intended for the fresh-init template (which has no
+/// hand-edited YAML comments yet) and is not currently reused for
+/// `opensymphony update` (LOC-20); see the linked AI review feedback
+/// on `init_repo.rs::strip_project_set_owned_fields` for the suggested
+/// comment-preserving YAML library when the migration path lands.
 fn strip_project_set_owned_fields(template: &str) -> String {
     // The template's front matter is fenced between two `---\n` markers.
     // If parsing fails for any reason we fall back to returning the
@@ -1825,10 +1853,24 @@ where
         .clone()
         .or(detected_default_branch);
 
-    let repo_slug = trimmed_non_empty(overrides.repo_slug)
+    // The slug chain runs from override → remote-name → directory-name.
+    // When all three sources fail the literal `DEFAULT_REPO_SLUG_FALLBACK`
+    // is used as a last resort. Surface that to the operator so the
+    // inventory never silently picks up a low-quality slug like `repo`
+    // or `default-project-set` (LOC-19 AI review feedback on the slug
+    // derivation chain at `init_repo.rs::upsert_project_set_entry_for_init`).
+    let derived_slug = trimmed_non_empty(overrides.repo_slug)
         .or_else(|| derive_repo_slug_from_remote(&repo_url))
-        .or_else(|| derive_repo_slug_from_dir(target_repo))
-        .unwrap_or_else(|| DEFAULT_REPO_SLUG_FALLBACK.to_owned());
+        .or_else(|| derive_repo_slug_from_dir(target_repo));
+    let repo_slug = match derived_slug {
+        Some(slug) => slug,
+        None => {
+            ui.line(format!(
+                "warning: could not derive a repo slug from `--repo-slug`, the git remote URL, or the directory name; falling back to `{DEFAULT_REPO_SLUG_FALLBACK}`. Re-run with `--repo-slug <slug>` to override."
+            ))?;
+            DEFAULT_REPO_SLUG_FALLBACK.to_owned()
+        }
+    };
 
     // The Linear project slug is reused for both `project_set.projects[].slug`
     // and `project_set.linear.project_slug`. When the operator skipped the
@@ -1863,11 +1905,6 @@ where
 
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-#[allow(dead_code)] // Reserved for future YAML serialization needs (e.g. LOC-20 migration).
-fn yaml_double_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn custom_codereview_guide_contents() -> String {

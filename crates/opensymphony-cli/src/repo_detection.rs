@@ -297,6 +297,24 @@ mod tests {
     }
 
     #[test]
+    fn derive_repo_slug_from_remote_rejects_malformed_scp_paths() {
+        // SCP-like form with a leading slash inside the path (e.g.
+        // `git@github.com:/org/repo.git`) is malformed; `scp_like_path`
+        // rejects it so the caller can fall back to `derive_repo_slug_from_dir`
+        // rather than producing a low-quality slug from a broken path.
+        assert_eq!(
+            derive_repo_slug_from_remote("git@github.com:/org/repo.git"),
+            None
+        );
+        // SCP-like form starting with `~` (e.g. `git@host:~/repo.git`) is
+        // also rejected for the same reason.
+        assert_eq!(
+            derive_repo_slug_from_remote("git@github.com:~/repo.git"),
+            None
+        );
+    }
+
+    #[test]
     fn derive_repo_slug_from_dir_returns_last_component() {
         let path = Path::new("/tmp/example");
         assert_eq!(derive_repo_slug_from_dir(path), Some("example".to_string()));
