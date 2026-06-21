@@ -592,19 +592,37 @@ def load_project_set_inventory(
       tests can prove the explicit override path was used instead of
       the default).
 
-    The loader is intentionally permissive: missing files surface as
-    ``(None, None)`` rather than an exception so tests and dry-runs
-    can decide whether to fail-fast or warn. Hard YAML/IO failures
-    (when the file exists but is unreadable) append a validation
-    error so the converter can fail fast before any Linear write.
+    Fail-fast semantics:
+
+    * The **default** inventory path (``<repo_root>/.opensymphony/project-set.yaml``)
+      is mandatory: a missing file appends an error so a planning wave
+      cannot silently skip the out-of-inventory check.
+    * An **explicit** ``--project-set`` override may legitimately point
+      at a missing file (the operator intentionally disabled the
+      inventory for the test). The override is allowed to be missing,
+      but a missing override still surfaces a warning so the operator
+      knows the inventory gate was bypassed.
     """
 
+    is_override = override_path is not None
     source = (
         override_path.resolve()
-        if override_path is not None
+        if is_override
         else (repo_root / DEFAULT_PROJECT_SET_PATH).resolve()
     )
     if not source.is_file():
+        if is_override:
+            errors.append(
+                f"project-set override {source} does not exist; the explicit "
+                "override path is required to point at a real file so "
+                "out-of-inventory checks remain effective"
+            )
+        else:
+            errors.append(
+                f"project-set file {source} is missing; the default inventory "
+                "is required for LOC-25 repo validation — onboard the project set "
+                "or pass --project-set to override the path"
+            )
         return None, source
     try:
         data = yaml.safe_load(source.read_text(encoding="utf-8"))
@@ -689,7 +707,13 @@ def validate_repo_routing(
         is_parent = task.id in parent_ids
         declared = task.repo
         if is_parent:
-            if declared is not None and declared.strip():
+            # LOC-25 review feedback: align Python and Rust on parent
+            # ``repo`` semantics. The Rust manifest validator (see
+            # ``graph_validate/manifest.rs``) treats any non-``None``
+            # declared repo on a parent as an error, so the Python
+            # converter must do the same — ``repo: ""`` (or any
+            # whitespace-only value) on a parent is rejected here too.
+            if declared is not None:
                 errors.append(
                     f"task {task.id} is a parent/review task and must not carry "
                     f"`repo: {declared!r}`; the routing lives on the leaves"

@@ -175,6 +175,39 @@ class ValidateRepoRoutingTests(unittest.TestCase):
         finally:
             _cleanup(repo_root)
 
+    def test_parent_with_empty_repo_is_rejected(self) -> None:
+        """A parent with ``repo: ""`` is rejected (aligns Python with Rust).
+
+        Review feedback (LOC-25 PR #15): the Rust manifest validator
+        treats any non-``None`` declared repo on a parent as an error;
+        Python previously passed ``repo: ""`` silently.
+        """
+
+        repo_root = _build_repo_root(
+            tasks=[
+                {"id": "TASK-1", "title": "Parent", "repo": ""},
+                {"id": "TASK-2", "title": "Leaf", "parent": "TASK-1", "repo": "opensymphony"},
+            ],
+        )
+        try:
+            self._expect_error(repo_root, fragment="TASK-1 is a parent/review task")
+        finally:
+            _cleanup(repo_root)
+
+    def test_parent_with_whitespace_repo_is_rejected(self) -> None:
+        """A parent with ``repo: "   "`` is rejected (same rationale)."""
+
+        repo_root = _build_repo_root(
+            tasks=[
+                {"id": "TASK-1", "title": "Parent", "repo": "   "},
+                {"id": "TASK-2", "title": "Leaf", "parent": "TASK-1", "repo": "opensymphony"},
+            ],
+        )
+        try:
+            self._expect_error(repo_root, fragment="TASK-1 is a parent/review task")
+        finally:
+            _cleanup(repo_root)
+
     # ---- exact-case slug preservation -----------------------------------
 
     def test_exact_case_slug_is_preserved(self) -> None:
@@ -296,11 +329,14 @@ class ProjectSetLoaderTests(unittest.TestCase):
                 (repo_root / ctl.DEFAULT_PROJECT_SET_PATH).resolve(),
             )
 
-    def test_missing_file_returns_none_inventory(self) -> None:
-        """Missing inventory file yields ``(None, source)`` with no error.
+    def test_missing_default_file_appends_error(self) -> None:
+        """Missing default inventory is fail-fast: an error is appended so a
+        planning wave cannot silently skip the out-of-inventory check.
 
-        The validator decides whether to fail fast; the loader simply
-        reports that nothing was loaded.
+        Review feedback (LOC-25 PR #15): previously the loader returned
+        ``(None, source)`` with no error, so ``validate_repo_routing``
+        silently skipped the inventory-membership check. Now the default
+        path is mandatory and an error is appended.
         """
 
         with TempRepoRoot() as repo_root:
@@ -309,8 +345,32 @@ class ProjectSetLoaderTests(unittest.TestCase):
                 repo_root, None, errors
             )
             self.assertIsNone(inventory)
-            self.assertEqual(errors, [])
             self.assertTrue(source.is_absolute())
+            self.assertTrue(
+                any("project-set file" in err and "missing" in err for err in errors),
+                f"expected a missing-inventory error, got {errors!r}",
+            )
+
+    def test_missing_override_file_appends_error(self) -> None:
+        """Explicit ``--project-set`` overrides must point at a real file.
+
+        Review feedback (LOC-25 PR #15): a missing override path is also
+        an error so operators cannot accidentally disable the inventory
+        gate by passing a non-existent path.
+        """
+
+        with TempRepoRoot() as repo_root:
+            override = repo_root / "does-not-exist.yaml"
+            errors: list[str] = []
+            inventory, source = ctl.load_project_set_inventory(
+                repo_root, override, errors
+            )
+            self.assertIsNone(inventory)
+            self.assertEqual(source, override.resolve())
+            self.assertTrue(
+                any("override" in err and "does not exist" in err for err in errors),
+                f"expected a missing-override error, got {errors!r}",
+            )
 
     def test_malformed_yaml_appends_error(self) -> None:
         """Unreadable inventory surfaces a validation error rather than crashing."""
