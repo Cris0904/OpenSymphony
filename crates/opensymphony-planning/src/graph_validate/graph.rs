@@ -20,9 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 
-use crate::opensymphony_planning::generator::domain::{
-    PlanArtifacts, PlannedMilestone, TaskId,
-};
+use crate::opensymphony_planning::generator::domain::{PlanArtifacts, PlannedMilestone, TaskId};
 
 use super::checks::creation_order_waves;
 use super::domain::{DependencyGraph, GraphEdge, GraphEdgeReason, GraphNode, GraphNodeKind};

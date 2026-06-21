@@ -614,10 +614,8 @@ mod tests {
     #[test]
     fn parent_with_repo_is_reported() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let manifest_text = manifest_with_tasks(&[
-            ("TASK-A", "docs/tasks/a.md"),
-            ("TASK-B", "docs/tasks/b.md"),
-        ]);
+        let manifest_text =
+            manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md"), ("TASK-B", "docs/tasks/b.md")]);
         let a_body = "---\nid: TASK-A\ntitle: \"A\"\nmilestone: \"M1\"\n\
                       repo: opensymphony\nblockedBy: []\nblocks: []\n---\n# A\n";
         // Sub-issue leaves carry the leaf repo so the only routing

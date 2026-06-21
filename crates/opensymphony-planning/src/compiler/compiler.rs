@@ -1275,10 +1275,12 @@ mod tests {
         // its routing MUST stay empty on the receipt.
         artifact.milestones[0].issues[0].routing = TaskRoutingMetadata::default();
         // Sub-issues are leaves so each must carry a slug.
-        artifact.milestones[0].issues[0].sub_issues[0].routing =
-            TaskRoutingMetadata { repo: Some("opensymphony".to_string()) };
-        artifact.milestones[0].issues[0].sub_issues[1].routing =
-            TaskRoutingMetadata { repo: Some("OpenSymphony-Config".to_string()) };
+        artifact.milestones[0].issues[0].sub_issues[0].routing = TaskRoutingMetadata {
+            repo: Some("opensymphony".to_string()),
+        };
+        artifact.milestones[0].issues[0].sub_issues[1].routing = TaskRoutingMetadata {
+            repo: Some("OpenSymphony-Config".to_string()),
+        };
 
         let compiler = PlanCompiler::new();
         let result = compiler.compile(&artifact);
@@ -1289,15 +1291,22 @@ mod tests {
         // lowercasing, no slugification.
         let receipt: LinearPublishReceipt =
             serde_yaml::from_str(&result.publish_receipt_yaml).expect("yaml parses");
-        let parent = receipt.tasks.get(&TaskId("OSYM-733".to_string())).expect("parent");
+        let parent = receipt
+            .tasks
+            .get(&TaskId("OSYM-733".to_string()))
+            .expect("parent");
         assert_eq!(parent.repo, None, "parent/review nodes must not carry repo");
 
-        let sub_impl =
-            receipt.tasks.get(&TaskId("OSYM-733-IMPL".to_string())).expect("sub-issue impl");
+        let sub_impl = receipt
+            .tasks
+            .get(&TaskId("OSYM-733-IMPL".to_string()))
+            .expect("sub-issue impl");
         assert_eq!(sub_impl.repo.as_deref(), Some("opensymphony"));
 
-        let sub_val =
-            receipt.tasks.get(&TaskId("OSYM-733-VAL".to_string())).expect("sub-issue val");
+        let sub_val = receipt
+            .tasks
+            .get(&TaskId("OSYM-733-VAL".to_string()))
+            .expect("sub-issue val");
         assert_eq!(sub_val.repo.as_deref(), Some("OpenSymphony-Config"));
     }
 

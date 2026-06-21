@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn repo_must_be_scalar_not_list() {
         let text = "---\nid: BAD-1\ntitle: B\nrepo:\n  - foo\n  - bar\n---\n# body\n";
-        let err = parse_task_text(text, "test.md")
-            .expect_err("list repo must be rejected by the parser");
+        let err =
+            parse_task_text(text, "test.md").expect_err("list repo must be rejected by the parser");
         assert!(matches!(err, TaskFrontmatterError::Yaml { .. }));
     }
 }

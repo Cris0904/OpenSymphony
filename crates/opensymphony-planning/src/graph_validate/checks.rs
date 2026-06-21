@@ -16,9 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::opensymphony_planning::generator::domain::{
-    PlanArtifacts, PlannedMilestone, TaskId,
-};
+use crate::opensymphony_planning::generator::domain::{PlanArtifacts, PlannedMilestone, TaskId};
 
 use super::domain::{PlanCheckCategory, PlanCheckFinding, PlanCheckSeverity};
 
@@ -431,7 +429,7 @@ mod tests {
             blocks: vec![],
             sub_issues: vec![],
             task_file: None,
-        routing: TaskRoutingMetadata::default(),
+            routing: TaskRoutingMetadata::default(),
         }
     }
 
@@ -560,7 +558,7 @@ mod tests {
             blocked_by: vec![],
             blocks: vec![],
             task_file: None,
-        routing: TaskRoutingMetadata::default(),
+            routing: TaskRoutingMetadata::default(),
         };
         let mut parent_issue = issue("I", &[]);
         parent_issue.acceptance_criteria = vec![
