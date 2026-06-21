@@ -441,6 +441,125 @@ intermix at runtime: the presence of `.opensymphony/project-set.yaml`
 flips the mode to `project-set`, and `WORKFLOW.md` must be in the
 migrated shape or the orchestrator will refuse to boot.
 
+#### Evidence (LOC-18 PR #7)
+
+The three runtime shapes were exercised against a freshly built binary
+(`cargo build` -> `target/debug/opensymphony`) using three temporary
+project trees (cleaned up after capture).
+
+**1. Project-set mode with a migrated `WORKFLOW.md`** (omits every
+project-set-owned field). `opensymphony doctor` reaches the strict
+composer, reports the active mode, and the boundary check passes:
+
+```
+[PASS] mode: active mode: project-set; project-set at ./.opensymphony/project-set.yaml
+        (slug `opensymphony-updates`, inventory of 1 repo(s)) owns global
+        tracker/polling/total-concurrency; repo WORKFLOW.md owns repo-local fields
+[PASS] workflow: resolved ./target-repo/WORKFLOW.md -> workspace ...,
+        OpenHands http://127.0.0.1:8000, project opensymphony-bootstrap-e7b957855cb7,
+        tracker auth resolved
+[PASS] linear: project-set Linear auth ready: project
+        opensymphony-bootstrap-e7b957855cb7, api_key_env LINEAR_API_KEY resolved
+        (5 active / 5 terminal)
+[PASS] project-set: resolved ./.opensymphony/project-set.yaml -> slug
+        `opensymphony-updates`, linear project `opensymphony-bootstrap-e7b957855cb7`,
+        1 repos in inventory
+[PASS] project-set-boundary: no stale moved fields in
+        ./.opensymphony/project-set.yaml; project-set owns
+        tracker/polling/total-concurrency and WORKFLOW.md owns repo-local fields
+```
+
+`opensymphony run` reaches the strict composer without the stale-field
+diagnostic; downstream failures are unrelated to LOC-18
+(e.g. `memory.yaml` missing — fixed with `opensymphony memory init`).
+
+**2. Project-set mode with a stale `WORKFLOW.md`** (still defines all
+eight moved fields). `opensymphony run` hard-fails (exit code `1`) with
+the per-field diagnostic listing every stale field and its project-set
+destination:
+
+```
+$ opensymphony run --config ./doctor.yaml
+project-set mode is active but .../WORKFLOW.md still defines project-set-owned
+fields: stale project-set-owned fields in WORKFLOW.md:
+  tracker.kind -> project_set.linear (kind implied: linear),
+  tracker.endpoint -> project_set.linear.endpoint,
+  tracker.project_slug -> project_set.linear.project_slug,
+  tracker.api_key -> project_set.linear.api_key_env,
+  tracker.active_states -> project_set.linear.active_states,
+  tracker.terminal_states -> project_set.linear.terminal_states,
+  polling.interval_ms -> project_set.polling.interval_ms,
+  agent.max_concurrent_agents -> project_set.agent.max_concurrent_agents;
+  move them to `.opensymphony/project-set.yaml` and remove them from WORKFLOW.md
+$ echo $?
+1
+```
+
+`opensymphony doctor` in the same stale project surfaces the full
+picture — the unrelated `workspace-root`, `local-safety`,
+`openhands-transport`, and `linear` checks all run against the
+legacy-resolved workflow and the `[FAIL] project-set-boundary` check
+carries the migration diagnostic:
+
+```
+[PASS] mode: active mode: project-set; ...
+[PASS] workflow: resolved ... -> ... , tracker auth resolved
+[SKIP] workflow-prompt: skipped because project-set boundary is failing;
+        fix stale moved fields in WORKFLOW.md
+[WARN] workspace-root: workspace root ... is usable but looks shared
+[WARN] local-safety: trusted-machine mode only; ...
+[PASS] bind-scope: OpenHands loopback target http://127.0.0.1:8000 ...
+[PASS] linear: project-set Linear auth ready: project
+        opensymphony-bootstrap-e7b957855cb7, api_key_env LINEAR_API_KEY resolved
+        (2 active / 1 terminal)
+[PASS] project-set: resolved ./.opensymphony/project-set.yaml -> ...
+[FAIL] project-set-boundary: WORKFLOW.md still defines project-set-owned
+        fields in project-set mode: tracker.kind -> project_set.linear
+        (kind implied: linear), tracker.endpoint -> project_set.linear.endpoint,
+        tracker.project_slug -> project_set.linear.project_slug,
+        tracker.api_key -> project_set.linear.api_key_env,
+        tracker.active_states -> project_set.linear.active_states,
+        tracker.terminal_states -> project_set.linear.terminal_states,
+        polling.interval_ms -> project_set.polling.interval_ms,
+        agent.max_concurrent_agents -> project_set.agent.max_concurrent_agents;
+        remove them from WORKFLOW.md and set the matching values under
+        `linear`/`polling`/`agent` in `.opensymphony/project-set.yaml`
+        (migration owner: LOC-20)
+```
+
+Note the `[PASS] linear` line — the `linear` check now runs against
+the project-set's `api_key_env` even while the boundary is failing,
+because the legacy-resolved workflow still carries the same tracker
+fields the project-set owns.
+
+**3. Legacy single-repo mode** (no `.opensymphony/project-set.yaml`).
+The pre-migration `config.yaml` + `WORKFLOW.md` flow is preserved
+exactly:
+
+```
+[PASS] mode: active mode: legacy-single-repo; pre-migration single-repo
+        flow in use; create `.opensymphony/project-set.yaml` to opt into
+        strict project-set mode
+[PASS] workflow: resolved ./target-repo/WORKFLOW.md -> workspace ...,
+        tracker auth resolved
+[PASS] workflow-prompt: rendered 41 characters from ./target-repo/WORKFLOW.md
+[SKIP] linear: Linear checks skipped because `linear.enabled` is false;
+        workflow tracker project opensymphony-bootstrap-e7b957855cb7 still resolved
+[SKIP] project-set: no ./.opensymphony/project-set.yaml present;
+        legacy single-repo flow in use
+[SKIP] project-set-boundary: project-set mode inactive; legacy single-repo
+        flow has no boundary to enforce
+```
+
+`opensymphony run` reaches the legacy resolver without the stale-field
+diagnostic, confirming the legacy path is unaffected.
+
+These three transcripts are the operational definition of the LOC-18
+runtime boundary. The integration tests in
+`crates/opensymphony-cli/tests/{run,doctor}.rs` cover the same three
+shapes with deterministic assertions so future regressions show up in
+CI.
+
 ## Planning Workspace
 
 The planning workspace is a dense, editable, review-oriented UI for the
