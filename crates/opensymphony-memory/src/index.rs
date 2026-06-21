@@ -72,6 +72,27 @@ fn index_capture_plan(config: &MemoryConfig, plan: &CapturePlan) -> Result<(), M
 
         transaction
             .execute(
+                "DELETE FROM issue_repositories WHERE issue_key = ?",
+                params![issue_key],
+            )
+            .map_err(|source| MemoryError::DuckDb {
+                path: config.index_path.clone(),
+                source,
+            })?;
+        if let Some(repo) = &issue_plan.repository {
+            transaction
+                .execute(
+                    "INSERT INTO issue_repositories (issue_key, repo_key) VALUES (?, ?)",
+                    params![issue_key, repo.key.as_str()],
+                )
+                .map_err(|source| MemoryError::DuckDb {
+                    path: config.index_path.clone(),
+                    source,
+                })?;
+        }
+
+        transaction
+            .execute(
                 "DELETE FROM pull_requests WHERE issue_key = ?",
                 params![issue_key],
             )
@@ -299,6 +320,10 @@ CREATE TABLE IF NOT EXISTS issue_areas (
   issue_key TEXT NOT NULL,
   area TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS issue_repositories (
+  issue_key TEXT NOT NULL,
+  repo_key TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS doc_sync_runs (
   run_id TEXT PRIMARY KEY,
   selected_issues_json TEXT NOT NULL,
@@ -339,6 +364,7 @@ fn load_indexed_issues(config: &MemoryConfig) -> Result<Vec<IndexedIssue>, Memor
                 milestone: row.get(3)?,
                 labels: serde_json::from_str::<Vec<String>>(&labels_json).unwrap_or_default(),
                 areas: Vec::new(),
+                repositories: Vec::new(),
                 capsule_path: PathBuf::from(row.get::<_, String>(5)?),
                 visibility: match row.get::<_, String>(6)?.as_str() {
                     "public" => MemoryVisibility::Public,
@@ -379,6 +405,12 @@ fn load_indexed_issues(config: &MemoryConfig) -> Result<Vec<IndexedIssue>, Memor
                     source,
                 }
             })?;
+        issue.repositories = load_issue_repositories(&connection, issue).map_err(|source| {
+            MemoryError::DuckDb {
+                path: config.index_path.clone(),
+                source,
+            }
+        })?;
     }
     Ok(issues)
 }
@@ -395,6 +427,79 @@ fn load_issue_areas(
         areas.push(row?);
     }
     Ok(areas)
+}
+
+/// Loads repository facets for an indexed issue.
+///
+/// When the `issue_repositories` table is missing (older indexes
+/// pre-dating LOC-26) or empty for the issue, the loader backfills from
+/// `issues.labels_json` only when exactly one well-formed `repo:<slug>`
+/// label is present. The facet's `url` and `default_branch` are always
+/// `None` in the backfill path; consumers that need them should look up
+/// the project-set inventory directly.
+fn load_issue_repositories(
+    connection: &Connection,
+    issue: &IndexedIssue,
+) -> Result<Vec<RepositoryFacet>, duckdb::Error> {
+    // Try the live `issue_repositories` table first. Pre-LOC-26 indexes
+    // never had this table, so a missing table is the canonical signal
+    // to fall through to the backfill path below.
+    if let Ok(mut statement) = connection.prepare(
+        "SELECT repo_key FROM issue_repositories WHERE issue_key = ? ORDER BY repo_key",
+    ) {
+        let rows = statement.query_map(params![issue.issue_key], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row?);
+        }
+        if !keys.is_empty() {
+            return Ok(keys
+                .into_iter()
+                .map(|key| RepositoryFacet {
+                    key,
+                    url: None,
+                    default_branch: None,
+                })
+                .collect());
+        }
+    }
+
+    // Backfill path: older indexes that pre-date the repository-facet
+    // table. Only backfill when the issue has exactly one well-formed
+    // `repo:<slug>` label, never from changed files.
+    let candidates = repo_label_keys(&issue.labels);
+    if candidates.len() == 1 {
+        Ok(vec![RepositoryFacet {
+            key: candidates.into_iter().next().expect("len == 1"),
+            url: None,
+            default_branch: None,
+        }])
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// Returns the well-formed `repo:<slug>` slugs in label order, preserving
+/// case. Empty `repo:` labels are dropped. Used by both capture-time
+/// extraction and the legacy-index backfill path.
+fn repo_label_keys(labels: &[String]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for label in labels {
+        let Some((prefix, suffix)) = label.split_once(':') else {
+            continue;
+        };
+        if !prefix.trim().eq_ignore_ascii_case("repo") {
+            continue;
+        }
+        let slug = suffix.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        keys.push(slug.to_string());
+    }
+    keys
 }
 
 fn load_issue_changed_files(
@@ -432,12 +537,24 @@ fn write_markdown_indexes(config: &MemoryConfig) -> Result<Vec<PathBuf>, MemoryE
     let mut index = String::new();
     index.push_str("# OpenSymphony Memory Index\n\n");
     for issue in &issues {
+        let mut facets = Vec::new();
+        if !issue.areas().is_empty() {
+            facets.push(format!("areas={}", issue.areas().join(", ")));
+        }
+        if let Some(repo) = issue.repositories().first() {
+            facets.push(format!("repo={}", repo.key));
+        }
+        let suffix = if facets.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", facets.join("; "))
+        };
         index.push_str(&format!(
-            "- [{}: {}]({}) ({})\n",
+            "- [{}: {}]({}){}\n",
             issue.issue_key,
             issue.title,
             path_relative_to(&config.memory_root, &issue.capsule_path),
-            issue.areas().join(", ")
+            suffix
         ));
     }
     write_file(&index_path, &index)?;

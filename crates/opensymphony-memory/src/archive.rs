@@ -187,4 +187,10 @@ impl IndexedIssue {
     fn areas(&self) -> Vec<String> {
         self.areas.clone()
     }
+
+    /// Returns the captured repository facets. Empty when the issue has no
+    /// `repo:<slug>` label evidence.
+    fn repositories(&self) -> Vec<RepositoryFacet> {
+        self.repositories.clone()
+    }
 }

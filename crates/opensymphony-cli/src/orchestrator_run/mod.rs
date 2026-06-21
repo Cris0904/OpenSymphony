@@ -209,6 +209,16 @@ async fn run_orchestrator(args: RunArgs) -> Result<(), RunCommandError> {
             .as_ref()
             .and_then(|server| server.token.clone()),
         project: runtime.workflow.config.tracker.project_slug.clone(),
+        project_set: runtime
+            .project_set
+            .as_ref()
+            .map(|project_set| project_set.config.slug.clone())
+            .unwrap_or_default(),
+        // LOC-26: resolved `RepoRef.key` is populated by the worker session
+        // from each issue's `execution_repo_ref`. Until a session runs, no
+        // issue-scoped repo key is available, so the run-level target repo
+        // path remains the only handoff.
+        execution_repo_key: String::new(),
         execution_repo: runtime.target_repo.display().to_string(),
     });
     if let Some(env) = &memory_env {
@@ -448,6 +458,13 @@ pub(super) struct RuntimeMemoryEnv {
     pub(super) endpoint: String,
     pub(super) token: Option<String>,
     pub(super) project: String,
+    /// Project-set slug (LOC-26). Distinct from the tracker project so a
+    /// multi-repo project-set can be scoped independently of the tracker
+    /// project slug.
+    pub(super) project_set: String,
+    /// Resolved `RepoRef.key` for the issue's execution repo. Preferred
+    /// over the run-level target repo path when set.
+    pub(super) execution_repo_key: String,
     pub(super) execution_repo: String,
 }
 

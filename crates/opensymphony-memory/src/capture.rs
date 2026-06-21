@@ -55,7 +55,10 @@ pub fn plan_capture(
             issue_warnings.push("no GitHub PR source was matched".to_string());
         }
 
-        let areas = infer_areas(config, source, &issue, &prs);
+        let (areas, repo_resolution) = infer_areas(config, source, &issue, &prs);
+        if let Some(warning) = repo_resolution.warning {
+            issue_warnings.push(warning);
+        }
         let docs_targets = areas
             .iter()
             .map(|area| config.area_or_default(area).docs_target)
@@ -76,6 +79,7 @@ pub fn plan_capture(
             capsule_path,
             areas,
             docs_targets,
+            repository: repo_resolution.facet,
             source_hash,
             already_captured,
             stale,

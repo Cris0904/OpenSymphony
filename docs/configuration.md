@@ -385,6 +385,40 @@ assume exact match:
   inventory slug exactly. See `docs/memory.md` for the related Memory-doc
   boundary and `AGENTS.md` for the canonical reserved-namespace note.
 
+### Memory `project` vs `projectSet` and `execution_repo_key` vs `execution_repo`
+
+The worker memory handoff exposes two distinct project scopes and two
+distinct repo scopes. They are NOT required to be the same value:
+
+- `OPENSYMPHONY_MEMORY_PROJECT` / MCP `project` is the **tracker project
+  slug** (`tracker.project_slug`). It identifies the Linear project the
+  current run is filed under.
+- `OPENSYMPHONY_MEMORY_PROJECT_SET` / MCP `projectSet` is the
+  **project-set slug** (`project_set.slug` / `project_set.config.slug`).
+  It identifies the project-set inventory that owns the repo topology.
+  When the project-set slug is unknown, this env var is intentionally
+  unset instead of silently mirroring the tracker project.
+- `OPENSYMPHONY_MEMORY_EXECUTION_REPO` / MCP `repo` is the run-level
+  **target repo path** (often `config.repo_root` or a child workspace
+  path). It is kept only as a warning-backed transitional fallback for the
+  duration of the LOC-26 migration.
+- `OPENSYMPHONY_MEMORY_EXECUTION_REPO_KEY` / MCP `executionRepoKey` is
+  the **issue's resolved repo key** (`NormalizedIssue.execution_repo_ref.key`).
+  It is the preferred value for repo-scoped Memory context and is matched
+  against `RepositoryFacet.key` on the Memory side.
+
+New callers should:
+
+- Send `project` and `projectSet` independently when both are known. Do
+  NOT collapse them into a single field.
+- Send `executionRepoKey` from the issue's resolved `RepoRef.key` when
+  available, and rely on `repo` only as a path-based fallback.
+
+See [memory.md](memory.md) for the related repo-facet and `--repo` vs
+`--paths` boundary, and the
+[LOC-26](https://linear.app/localgputokenscrazy/issue/LOC-26/memory-repository-facet-and-repo-scoped-context)
+slice for the original task.
+
 ### `LINEAR_API_KEY` fallback
 
 `project_set.linear.api_key_env` is the env-var name that holds the Linear

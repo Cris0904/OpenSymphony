@@ -85,7 +85,20 @@ pub struct IssueSessionRunnerConfig {
 pub struct MemoryWorkerAccess {
     pub endpoint: String,
     pub token: Option<String>,
+    /// Tracker project slug (Linear project). Distinct from the project-set
+    /// slug: a single tracker project can host many project-set repos.
     pub project: Option<String>,
+    /// Project-set slug (LOC-26). Distinct from the tracker project so a
+    /// multi-repo project-set can be scoped independently of the tracker
+    /// project slug.
+    pub project_set: Option<String>,
+    /// Resolved repository identity from the issue's `execution_repo_ref`,
+    /// i.e. the `RepoRef.key` for the repo the issue actually targets.
+    /// Preferred over the run-level `execution_repo` path when present.
+    pub execution_repo_key: Option<String>,
+    /// Run-level target repo path. Kept as a warning-backed transitional
+    /// fallback for the LOC-26 migration; new code should prefer
+    /// `execution_repo_key` whenever it is set.
     pub execution_repo: Option<String>,
 }
 
@@ -2914,6 +2927,38 @@ async fn fetch_memory_context_from_server(
     memory: &MemoryWorkerAccess,
     issue: &NormalizedIssue,
 ) -> Result<String, String> {
+    // LOC-26: prefer the issue's resolved `RepoRef.key` over the run-level
+    // target repo path. The path value remains a warning-backed transitional
+    // fallback for the migration window only.
+    //
+    // The MCP request carries BOTH fields so the server can use the resolved
+    // key for repo-scope filtering while older consumers that only know about
+    // `repo` continue to receive the fallback value:
+    //
+    // * `executionRepoKey` is the resolved `RepoRef.key` (either from
+    //   `issue.execution_repo_ref` or `memory.execution_repo_key`). It is the
+    //   preferred field for repo-scope filtering and matches against
+    //   `RepositoryFacet.key` on the Memory side.
+    // * `repo` carries the run-level target repo path (only when no key is
+    //   available). It is kept as a warning-backed transitional fallback for
+    //   the duration of the LOC-26 migration.
+    let resolved_repo_key = issue
+        .execution_repo_ref
+        .as_ref()
+        .map(|repo_ref| repo_ref.key.clone())
+        .or_else(|| memory.execution_repo_key.clone());
+    let resolved_repo = resolved_repo_key
+        .clone()
+        .or_else(|| memory.execution_repo.clone());
+    let used_transitional_repo_path =
+        resolved_repo.is_some() && memory.execution_repo.is_some() && resolved_repo_key.is_none();
+    if used_transitional_repo_path {
+        tracing::warn!(
+            "memory context request is using the run-level execution_repo path as a \
+             transitional fallback; prefer the issue's execution_repo_ref.key when available"
+        );
+    }
+
     let mut arguments = json!({
         "issue": issue.identifier.to_string(),
         "limit": 20,
@@ -2924,6 +2969,11 @@ async fn fetch_memory_context_from_server(
             "description": issue.description.clone(),
             "state": issue.state.name.clone(),
             "labels": issue.labels.clone(),
+            "executionRepoRef": issue.execution_repo_ref.as_ref().map(|repo| json!({
+                "key": repo.key.clone(),
+                "url": repo.url.clone(),
+                "defaultBranch": repo.default_branch.clone(),
+            })),
             "children": issue.sub_issues.iter().map(|child| json!({
                 "id": child.id.to_string(),
                 "identifier": child.identifier.to_string(),
@@ -2941,9 +2991,26 @@ async fn fetch_memory_context_from_server(
     if let Value::Object(map) = &mut arguments {
         if let Some(project) = &memory.project {
             map.insert("project".to_string(), json!(project));
-            map.insert("projectSet".to_string(), json!(project));
         }
-        if let Some(repo) = &memory.execution_repo {
+        // LOC-26: project-set scope is distinct from the tracker project
+        // scope. Do NOT fall back to the tracker project slug when the
+        // project-set slug is unknown — that is the silent mirror the
+        // env-var path (`backends.rs`) intentionally avoids by leaving
+        // `OPENSYMPHONY_MEMORY_PROJECT_SET` unset. The MCP server's
+        // `scope_filter_from_mcp` already handles a missing `projectSet`
+        // gracefully (omits the field rather than mirroring tracker
+        // project), matching the env-var semantics end to end.
+        if let Some(project_set) = memory.project_set.clone() {
+            map.insert("projectSet".to_string(), json!(project_set));
+        }
+        // LOC-26: send both `executionRepoKey` (the resolved `RepoRef.key`,
+        // preferred by the MCP server for repo-scope filtering) and `repo`
+        // (run-level path, transitional fallback). Older consumers that
+        // only know about `repo` keep working during the migration window.
+        if let Some(repo_key) = resolved_repo_key.as_ref() {
+            map.insert("executionRepoKey".to_string(), json!(repo_key));
+        }
+        if let Some(repo) = resolved_repo.as_ref() {
             map.insert("repo".to_string(), json!(repo));
         }
     }
@@ -3397,6 +3464,8 @@ mod tests {
             endpoint: format!("http://{address}/mcp"),
             token: Some("read-token".to_string()),
             project: Some("project-alpha".to_string()),
+            project_set: Some("project-alpha-set".to_string()),
+            execution_repo_key: Some("org/repo-alpha".to_string()),
             execution_repo: Some("/tmp/repo-alpha".to_string()),
         };
 
@@ -3458,9 +3527,314 @@ mod tests {
         assert_eq!(request["params"]["arguments"]["project"], "project-alpha");
         assert_eq!(
             request["params"]["arguments"]["projectSet"],
-            "project-alpha"
+            "project-alpha-set"
         );
+        // LOC-26: the resolved `RepoRef.key` is sent both as the new
+        // top-level `executionRepoKey` field (preferred by the MCP server for
+        // repo-scope filtering) and as `repo` (transitional fallback). Here
+        // the test sets `memory.execution_repo_key = Some("org/repo-alpha")`
+        // with no `execution_repo_ref`, so the resolved key is the value of
+        // `executionRepoKey` and `repo` mirrors it for backward compat.
+        assert_eq!(
+            request["params"]["arguments"]["executionRepoKey"],
+            "org/repo-alpha"
+        );
+        assert_eq!(request["params"]["arguments"]["repo"], "org/repo-alpha");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn fetch_memory_context_from_server_prefers_issue_repo_ref_key_over_path() {
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("memory test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("memory test listener should expose an address");
+        let app = Router::new()
+            .route("/mcp", post(memory_test_mcp))
+            .with_state(requests.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("memory test server should run");
+        });
+        // No `execution_repo_key` and no `execution_repo`: the worker should
+        // fall back to the issue's `execution_repo_ref.key` and emit it as
+        // `executionRepoKey`. `repo` must mirror it for backward compat.
+        let access = MemoryWorkerAccess {
+            endpoint: format!("http://{address}/mcp"),
+            token: Some("read-token".to_string()),
+            project: Some("project-alpha".to_string()),
+            project_set: Some("project-alpha-set".to_string()),
+            execution_repo_key: None,
+            execution_repo: None,
+        };
+        let repo_ref = crate::opensymphony_domain::RepoRef {
+            url: "https://github.com/example-org/example-repo.git".to_string(),
+            key: "example-org/example-repo".to_string(),
+            default_branch: Some("main".to_string()),
+        };
+        let issue = NormalizedIssue {
+            id: must(IssueId::new("issue-1000")),
+            identifier: must(IssueIdentifier::new("COE-1000")),
+            title: "Memory server context (issue RepoRef)".to_string(),
+            description: Some("Issue carries its own resolved repo.".to_string()),
+            priority: None,
+            state: IssueState {
+                id: None,
+                name: "In Progress".to_string(),
+                category: IssueStateCategory::Active,
+            },
+            branch_name: None,
+            url: None,
+            labels: vec!["repo:example-org/example-repo".to_string()],
+            parent_id: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            created_at: None,
+            updated_at: None,
+            execution_repo_ref: Some(repo_ref),
+        };
+
+        let context = fetch_memory_context_from_server(&access, &issue)
+            .await
+            .expect("memory server context should load");
+
+        // The shared MCP test mock always returns a fixed body; just assert
+        // that the request was completed without error and inspect the
+        // captured request below.
+        assert!(context.starts_with("# Memory Context: "));
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(
+            request["params"]["arguments"]["executionRepoKey"],
+            "example-org/example-repo"
+        );
+        assert_eq!(
+            request["params"]["arguments"]["repo"],
+            "example-org/example-repo"
+        );
+        assert_eq!(
+            request["params"]["arguments"]["currentIssue"]["executionRepoRef"]["key"],
+            "example-org/example-repo"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn fetch_memory_context_from_server_falls_back_to_run_level_repo_path() {
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("memory test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("memory test listener should expose an address");
+        let app = Router::new()
+            .route("/mcp", post(memory_test_mcp))
+            .with_state(requests.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("memory test server should run");
+        });
+        // Only the run-level path is available: `execution_repo_ref` is None
+        // and `execution_repo_key` is None. The request must surface `repo` as
+        // the path and OMIT `executionRepoKey` entirely (rather than sending
+        // the path under the new field).
+        let access = MemoryWorkerAccess {
+            endpoint: format!("http://{address}/mcp"),
+            token: Some("read-token".to_string()),
+            project: Some("project-alpha".to_string()),
+            project_set: Some("project-alpha-set".to_string()),
+            execution_repo_key: None,
+            execution_repo: Some("/tmp/repo-alpha".to_string()),
+        };
+        let issue = NormalizedIssue {
+            id: must(IssueId::new("issue-1001")),
+            identifier: must(IssueIdentifier::new("COE-1001")),
+            title: "Memory server context (path fallback)".to_string(),
+            description: Some("No resolved repo; only run-level path.".to_string()),
+            priority: None,
+            state: IssueState {
+                id: None,
+                name: "In Progress".to_string(),
+                category: IssueStateCategory::Active,
+            },
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            parent_id: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            created_at: None,
+            updated_at: None,
+            execution_repo_ref: None,
+        };
+
+        let _ = fetch_memory_context_from_server(&access, &issue)
+            .await
+            .expect("memory server context should load");
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
         assert_eq!(request["params"]["arguments"]["repo"], "/tmp/repo-alpha");
+        assert!(
+            request["params"]["arguments"]
+                .get("executionRepoKey")
+                .is_none()
+                || request["params"]["arguments"]["executionRepoKey"].is_null(),
+            "executionRepoKey must be absent/null when only the run-level path is known"
+        );
+        task.abort();
+    }
+
+    // LOC-26: when `project_set` is `None`, the MCP request must NOT
+    // silently mirror the tracker project slug into the `projectSet`
+    // field. The env-var path (`backends.rs`) intentionally leaves
+    // `OPENSYMPHONY_MEMORY_PROJECT_SET` unset when the project-set slug
+    // is unknown, so the MCP path must match that semantics end to end
+    // rather than falling back to the tracker project.
+    #[tokio::test]
+    async fn fetch_memory_context_from_server_does_not_mirror_tracker_project_into_project_set() {
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("memory test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("memory test listener should expose an address");
+        let app = Router::new()
+            .route("/mcp", post(memory_test_mcp))
+            .with_state(requests.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("memory test server should run");
+        });
+        let access = MemoryWorkerAccess {
+            endpoint: format!("http://{address}/mcp"),
+            token: Some("read-token".to_string()),
+            project: Some("project-alpha".to_string()),
+            project_set: None,
+            execution_repo_key: Some("org/repo-alpha".to_string()),
+            execution_repo: None,
+        };
+        let issue = NormalizedIssue {
+            id: must(IssueId::new("issue-1002")),
+            identifier: must(IssueIdentifier::new("COE-1002")),
+            title: "Memory server context (no project-set slug)".to_string(),
+            description: Some(
+                "Tracker project is known but project-set slug is unknown.".to_string(),
+            ),
+            priority: None,
+            state: IssueState {
+                id: None,
+                name: "In Progress".to_string(),
+                category: IssueStateCategory::Active,
+            },
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            parent_id: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            created_at: None,
+            updated_at: None,
+            execution_repo_ref: None,
+        };
+
+        let _ = fetch_memory_context_from_server(&access, &issue)
+            .await
+            .expect("memory server context should load");
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request["params"]["arguments"]["project"], "project-alpha");
+        assert!(
+            request["params"]["arguments"].get("projectSet").is_none()
+                || request["params"]["arguments"]["projectSet"].is_null(),
+            "projectSet must be absent/null when the project-set slug is unknown \
+             — must not silently mirror the tracker project"
+        );
+        task.abort();
+    }
+
+    // LOC-26: when both project-set and tracker project are available, the
+    // request must surface them as DISTINCT fields (no silent mirror in
+    // either direction).
+    #[tokio::test]
+    async fn fetch_memory_context_from_server_sends_distinct_project_and_project_set() {
+        let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("memory test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("memory test listener should expose an address");
+        let app = Router::new()
+            .route("/mcp", post(memory_test_mcp))
+            .with_state(requests.clone());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("memory test server should run");
+        });
+        let access = MemoryWorkerAccess {
+            endpoint: format!("http://{address}/mcp"),
+            token: Some("read-token".to_string()),
+            project: Some("project-alpha".to_string()),
+            project_set: Some("project-alpha-set".to_string()),
+            execution_repo_key: None,
+            execution_repo: None,
+        };
+        let issue = NormalizedIssue {
+            id: must(IssueId::new("issue-1003")),
+            identifier: must(IssueIdentifier::new("COE-1003")),
+            title: "Memory server context (both slugs available)".to_string(),
+            description: Some(
+                "Both project-set and tracker project are known and distinct.".to_string(),
+            ),
+            priority: None,
+            state: IssueState {
+                id: None,
+                name: "In Progress".to_string(),
+                category: IssueStateCategory::Active,
+            },
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            parent_id: None,
+            blocked_by: vec![],
+            sub_issues: vec![],
+            created_at: None,
+            updated_at: None,
+            execution_repo_ref: None,
+        };
+
+        let _ = fetch_memory_context_from_server(&access, &issue)
+            .await
+            .expect("memory server context should load");
+
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request["params"]["arguments"]["project"], "project-alpha");
+        assert_eq!(
+            request["params"]["arguments"]["projectSet"],
+            "project-alpha-set"
+        );
+        // The two slugs must remain distinct on the wire — no silent
+        // aliasing in either direction.
+        assert_ne!(
+            request["params"]["arguments"]["project"],
+            request["params"]["arguments"]["projectSet"]
+        );
         task.abort();
     }
 

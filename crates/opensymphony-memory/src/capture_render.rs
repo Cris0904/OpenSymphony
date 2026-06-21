@@ -144,22 +144,29 @@ fn infer_areas(
     source: &SourceFile,
     issue: &IssueEvidence,
     prs: &[PullRequestEvidence],
-) -> Vec<String> {
+) -> (Vec<String>, RepoLabelResolution) {
     let issue_key = normalize_issue_key(&issue.identifier);
+    // Extract repo labels from the original labels first so the slug's case
+    // is preserved exactly as it appears on the Linear issue.
+    let repo_resolution = extract_repo_labels(&issue.labels);
+    let labels = normalize_list(issue.labels.clone());
+
     if let Some(overrides) = source
         .overrides
         .get(&issue_key)
         .or_else(|| source.overrides.get(&issue.identifier))
         && !overrides.areas.is_empty()
     {
-        return normalize_list(overrides.areas.clone())
-            .into_iter()
-            .map(|area| slugify(&area))
-            .collect();
+        return (
+            normalize_list(overrides.areas.clone())
+                .into_iter()
+                .map(|area| slugify(&area))
+                .collect(),
+            repo_resolution,
+        );
     }
 
     let mut areas = BTreeSet::new();
-    let labels = normalize_list(issue.labels.clone());
     for label in &labels {
         if let Some(area) = canonical_area_label_slug(label) {
             areas.insert(area);
@@ -196,7 +203,7 @@ fn infer_areas(
         areas.insert("general".to_string());
     }
 
-    areas.into_iter().collect()
+    (areas.into_iter().collect(), repo_resolution)
 }
 
 fn area_alias_matches(area: &AreaConfig, value: &str) -> bool {
@@ -238,6 +245,70 @@ fn is_reserved_namespace_label(label: &str) -> bool {
     };
     let prefix = prefix.trim();
     !prefix.is_empty() && !prefix.eq_ignore_ascii_case("area")
+}
+
+/// Scans raw Linear labels for `repo:<slug>` entries and returns a
+/// deterministic repository-facet resolution.
+///
+/// Rules (LOC-26):
+/// - Only labels whose prefix is exactly `repo` (case-insensitive) participate.
+/// - The slug after the colon is preserved verbatim — never lowercased, never
+///   slugified — because the project-set inventory keys slugs by exact case.
+/// - An empty `repo:` label (no slug) is ignored: it produces no facet and
+///   no `raw_labels` entry.
+/// - Exactly one well-formed `repo:<slug>` label yields a single
+///   [`RepositoryFacet`] with the exact slug as `key`.
+/// - More than one well-formed `repo:<slug>` label yields no facet, marks the
+///   resolution as `ambiguous`, and preserves every raw label so callers can
+///   surface a warning or unresolved-repo state.
+fn extract_repo_labels(labels: &[String]) -> RepoLabelResolution {
+    let mut raw_labels = Vec::<String>::new();
+    let mut candidates: Vec<String> = Vec::new();
+    for label in labels {
+        let Some((prefix, suffix)) = label.split_once(':') else {
+            continue;
+        };
+        if !prefix.trim().eq_ignore_ascii_case("repo") {
+            continue;
+        }
+        let slug = suffix.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        raw_labels.push(label.clone());
+        candidates.push(slug.to_string());
+    }
+    match candidates.len() {
+        0 => RepoLabelResolution {
+            facet: None,
+            raw_labels,
+            ambiguous: false,
+            warning: None,
+        },
+        1 => RepoLabelResolution {
+            facet: Some(RepositoryFacet {
+                key: candidates.remove(0),
+                url: None,
+                default_branch: None,
+            }),
+            raw_labels,
+            ambiguous: false,
+            warning: None,
+        },
+        _ => {
+            let warning = format!(
+                "issue has {} `repo:` labels ({}); repository facet left unresolved",
+                candidates.len(),
+                candidates.join(", ")
+            );
+            RepoLabelResolution {
+                facet: None,
+                raw_labels,
+                ambiguous: true,
+                warning: Some(warning),
+            }
+        }
+    }
 }
 
 fn area_matches_evidence(
@@ -577,6 +648,7 @@ fn render_issue_capsule(
             })
             .collect(),
         areas: plan.areas.clone(),
+        repository: plan.repository.clone(),
         source_refs: SourceRefs {
             linear_issue: plan
                 .issue
@@ -719,6 +791,8 @@ struct IssueCapsuleFrontmatter {
     blocked_by: Vec<CapsuleIssueLink>,
     prs: Vec<CapsulePr>,
     areas: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<RepositoryFacet>,
     source_refs: SourceRefs,
     captured_at: DateTime<Utc>,
     docs_sync: DocsSyncFrontmatter,

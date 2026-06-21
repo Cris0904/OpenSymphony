@@ -274,14 +274,18 @@ opensymphony memory related --area openhands-runtime
 opensymphony memory related --paths crates/opensymphony-openhands
 opensymphony memory search "reconnect recovery"
 opensymphony memory docs --area openhands-runtime
+opensymphony memory search --repo open-symphony
+opensymphony memory status --repo open-symphony
+opensymphony memory docs --area openhands-runtime --repo open-symphony
 ```
 
 `memory context` is a pre-implementation context compiler, not a capture
 command. It fetches live Linear facts when available, excludes the current issue
 capsule, and selects captured memory from deterministic buckets: explicit
 includes, blocking predecessors, completed children, completed siblings, path
-matches, and canonical area matches. It strips each selected brief's
-`Documentation impact` section and appends one deduplicated section at the end.
+matches, repository matches, and canonical area matches. It strips each
+selected brief's `Documentation impact` section and appends one deduplicated
+section at the end.
 When `opensymphony run` starts a worker, it asks the supervised memory server
 for the same style of kickoff bundle and writes it to
 `.opensymphony/generated/memory-context.md` inside the issue workspace. If the
@@ -315,6 +319,46 @@ their confidence. Automation records warnings in `.opensymphony/memory/indexes`
 so operators can inspect unresolved capture or docs-sync blockers. When the
 Linear project overview content is available, OpenSymphony also maintains a
 managed memory-status section there for capture warnings that need attention.
+
+### Repository facet and `--repo` vs `--paths`
+
+Repository identity is a first-class Memory facet, not an area. It is recorded
+on every captured issue alongside areas and raw labels:
+
+- The `RepositoryFacet { key, url?, default_branch? }` struct captures the repo
+  identity. `key` is the project-set repo slug / `RepoRef.key` and is matched
+  **exactly** — Memory never lowercases or slugifies repo keys.
+- Repo identity is sourced from a resolved `RepoRef` when available, otherwise
+  from exactly one well-formed `repo:<slug>` label. Multiple `repo:` labels
+  make the facet ambiguous and surface a warning instead of guessing; empty
+  `repo:` labels are ignored. The raw `repo:<slug>` label(s) are still
+  preserved as label evidence.
+- Repo identity is persisted in the `issue_repositories` DuckDB table and
+  surfaced through `IndexedIssue`, `SearchResult`, `StatusIssue`, brief
+  output, markdown indexes, and MCP JSON — separately from `areas` and
+  `labels`.
+
+Scope filtering on `--repo` is keyed to the repo facet:
+
+- `--repo <key>` matches `RepositoryFacet.key` exactly. The
+  `memory context` command honors `--repo` even without
+  `--include-code-intel`, so repo scope applies to selected memory briefs
+  independently of optional code-intelligence context.
+- `--paths <prefix>` remains the path-based mechanism for changed-file
+  context. Existing path-prefix matching is unchanged.
+- For the duration of the LOC-26 migration, `--repo <path>` is preserved as
+  a warning-backed transitional fallback that path-prefix matches against
+  `changed_files`. New callers should prefer `--paths` for path-based
+  filtering and `--repo <key>` for repository scope; the fallback path is
+  covered by tests and emits an explicit deprecation warning.
+
+The worker memory-context handoff prefers `execution_repo_ref.key` (the
+issue's resolved repo) over the run-level target repo path; the run-level path
+is sent only as an explicit, warning-backed fallback. The project-set slug
+(`OPENSYMPHONY_MEMORY_PROJECT_SET` / `projectSet`) is independent of the
+tracker project slug (`OPENSYMPHONY_MEMORY_PROJECT` / `project`) and is no
+longer allowed to silently mirror the tracker project when both values are
+known — see [configuration.md](configuration.md).
 
 ## Archive Guard
 
