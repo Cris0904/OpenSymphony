@@ -133,6 +133,7 @@ pub enum ProjectSetAppliedOutcome {
 
 impl ProjectSetAppliedOutcome {
     /// Returns the absolute file path of the upserted project-set file.
+    #[allow(dead_code)] // Reserved for callers that need to display/log the project-set path.
     pub fn path(&self) -> &Path {
         match self {
             Self::Created(path) | Self::Updated(path) | Self::Unchanged(path) => path,

@@ -312,7 +312,7 @@ fn cargo_invocation_count(log_path: &Path) -> usize {
 
 fn memory_gitignore_policy(prefix: &str) -> String {
     format!(
-        "{prefix}.opensymphony*\n!.opensymphony/\n.opensymphony/*\n!.opensymphony/memory/\n.opensymphony/memory/*\n!.opensymphony/memory/memory.yaml\n"
+        "{prefix}.opensymphony*\n!.opensymphony/\n.opensymphony/*\n!.opensymphony/memory/\n.opensymphony/memory/*\n!.opensymphony/memory/memory.yaml\n!.opensymphony/project-set.yaml\n"
     )
 }
 

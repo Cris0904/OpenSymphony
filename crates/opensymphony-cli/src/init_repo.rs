@@ -45,12 +45,6 @@ const OPENHANDS_PR_REVIEW_SETUP_GUIDE_URL: &str =
 const AI_REVIEW_LABEL_NAME: &str = "review-this";
 const AGENTS_EXAMPLE_PATH: &str = "AGENTS-example.md";
 
-/// Sentinel URL string that the upstream template's `after_create` hook uses
-/// as its `git clone` placeholder. Kept here so `customize_workflow` can
-/// build the exact `git clone --depth 1 <placeholder> .` needle without
-/// depending on the operator's detected remote URL.
-const WORKFLOW_GIT_REMOTE_PLACEHOLDER: &str = "https://github.com/YOUR-ORG/YOUR-REPO.git";
-
 /// Default repo slug used when neither the remote nor the directory produces
 /// a usable slug. Matches the workspace-friendly slug operators see in the
 /// `init` summary output.
@@ -385,11 +379,14 @@ pub(crate) enum InitCommandError {
     #[error("could not register the repo in the project-set inventory: {guidance}")]
     ProjectSetRemoteMissing { guidance: String },
     #[error("could not register the repo in the project-set inventory (remotes: {}): {guidance}", remotes.join(", "))]
+    #[allow(dead_code)] // Reserved for the interactive ambiguity prompt path; not yet wired.
     ProjectSetRemoteAmbiguous {
         remotes: Vec<String>,
         guidance: String,
     },
     #[error("could not register the repo in the project-set inventory: {guidance}")]
+    #[allow(dead_code)]
+    // Reserved for the interactive slug-resolution prompt path; not yet wired.
     ProjectSetSlugUnresolved { guidance: String },
 }
 
@@ -537,10 +534,6 @@ where
 
     fn set_allow_prompts(&mut self, allow_prompts: bool) {
         self.allow_prompts = allow_prompts;
-    }
-
-    fn allow_prompts(&self) -> bool {
-        self.allow_prompts
     }
 
     fn line(&mut self, message: impl AsRef<str>) -> Result<(), InitCommandError> {
@@ -1734,8 +1727,7 @@ where
     W: Write,
 {
     use super::project_set_writer::{
-        ProjectSetAppliedOutcome, ProjectSetUpsertPlan, project_set_path,
-        upsert_project_set_yaml_with_path,
+        ProjectSetUpsertPlan, project_set_path, upsert_project_set_yaml_with_path,
     };
 
     // The repo URL comes from one of these sources, in priority order:
@@ -1820,6 +1812,7 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+#[allow(dead_code)] // Reserved for future YAML serialization needs (e.g. LOC-20 migration).
 fn yaml_double_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }

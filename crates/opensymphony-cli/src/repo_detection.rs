@@ -298,9 +298,9 @@ mod tests {
 
     #[test]
     fn derive_repo_slug_from_dir_returns_last_component() {
-        let path = std::path::Path::new("/tmp/example");
+        let path = Path::new("/tmp/example");
         assert_eq!(derive_repo_slug_from_dir(path), Some("example".to_string()));
-        let rel = std::path::Path::new("relative-dir");
+        let rel = Path::new("relative-dir");
         assert_eq!(
             derive_repo_slug_from_dir(rel),
             Some("relative-dir".to_string())
