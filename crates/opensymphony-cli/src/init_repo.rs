@@ -1904,6 +1904,7 @@ where
         max_concurrent_agents: None,
         linear_active_states: None,
         linear_terminal_states: None,
+        linear_endpoint: None,
     };
 
     let path = project_set_path(target_repo);
