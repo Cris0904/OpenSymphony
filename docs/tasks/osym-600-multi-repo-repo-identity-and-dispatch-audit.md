@@ -77,7 +77,7 @@ End-to-end path for a terminal leaf issue that carries a valid
    and `inject_repo_env` materializes:
    - `OPENSYMPHONY_EXECUTION_REPO_URL` (always)
    - `OPENSYMPHONY_EXECUTION_REPO_KEY` (always)
-   - `OPENSYMPHONY_EXECUTION_REPO_DEFAULT_BRANCH` (only when
+   - `OPENSYMPHONY_EXECUTION_REPO_BRANCH` (only when
      `RepoRef.default_branch` is `Some`)
 
    These constants are exported from
