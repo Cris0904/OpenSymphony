@@ -1272,6 +1272,10 @@ fn load_optional_doctor_project_set(
     }
 }
 
+/// Tuple returned by `resolve_doctor_workflow_for_mode`:
+/// `(resolved_workflow, stale_fields, workflow_skipped_for_stale_fields)`.
+type DoctorWorkflowResolution = Result<(ResolvedWorkflow, Vec<(String, String)>, bool), String>;
+
 /// Resolves the workflow according to the active mode.
 ///
 /// - In project-set mode with stale moved fields, the strict path is
@@ -1289,7 +1293,7 @@ fn resolve_doctor_workflow_for_mode(
     target_repo: &Path,
     active_mode: &DoctorActiveMode,
     linear_enabled: bool,
-) -> Result<(ResolvedWorkflow, Vec<(String, String)>, bool), String> {
+) -> DoctorWorkflowResolution {
     match (active_mode, project_set) {
         (DoctorActiveMode::ProjectSet, Some(resolved_project_set)) => {
             let stale = workflow.detect_stale_project_set_fields();

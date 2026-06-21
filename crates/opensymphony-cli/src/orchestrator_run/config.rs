@@ -126,7 +126,7 @@ pub(super) async fn resolve_runtime_config(
     // overwriting the workflow's per-repo values.
     let (project_set, project_set_path) = load_optional_project_set(config_root)?;
     let workflow = if let Some(resolved_project_set) = &project_set {
-        let resolved = workflow_definition
+        workflow_definition
             .resolve_strict_project_set(
                 resolved_project_set,
                 &target_repo,
@@ -143,8 +143,7 @@ pub(super) async fn resolve_runtime_config(
                     path: workflow_path.clone(),
                     source: other,
                 },
-            })?;
-        resolved
+            })?
     } else {
         workflow_definition
             .resolve_with_process_env(&target_repo)
