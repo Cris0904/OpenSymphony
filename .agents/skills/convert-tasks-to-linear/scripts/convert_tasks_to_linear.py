@@ -1197,6 +1197,16 @@ def ensure_repo_labels(
     Returns a slug -> label_id cache that ``merged_label_ids`` uses as a
     fallback when ``_lookup_repo_label_id`` cannot find an existing
     match on the issue.
+
+    Lookup is exact-case first, then a defensive case-insensitive
+    fallback. The exact-case primary path keeps the contract: a new
+    ``repo:<slug>`` label is created with the inventory key verbatim, no
+    lowercasing or slugification. The case-insensitive fallback only
+    triggers when a legacy tool or manual intervention created a
+    case-variant label on the team — in that case reusing the existing
+    label prevents a duplicate ``repo:opensymphony`` (new) /
+    ``repo:OpenSymphony`` (legacy) split that would later confuse
+    ``_lookup_repo_label_id``.
     """
 
     slugs = sorted({
@@ -1211,6 +1221,15 @@ def ensure_repo_labels(
         if existing:
             label_ids[slug] = existing["id"]
             continue
+        legacy = _find_existing_repo_label_case_insensitive(client, name, team["id"])
+        if legacy:
+            label_ids[slug] = legacy["id"]
+            print(
+                f"reusing existing repo label {legacy['name']!r} for slug "
+                f"{slug!r} (case-insensitive match; inventory slug preserved "
+                f"on subsequent label emissions)"
+            )
+            continue
         data = client.call(
             "issue_label_create.graphql",
             {"input": {"name": name, "teamId": team["id"]}},
@@ -1221,6 +1240,10 @@ def ensure_repo_labels(
             if existing:
                 label_ids[slug] = existing["id"]
                 continue
+            legacy = _find_existing_repo_label_case_insensitive(client, name, team["id"])
+            if legacy:
+                label_ids[slug] = legacy["id"]
+                continue
             raise LinearError(
                 f"failed to create repo label {name}: "
                 f"{json.dumps(data['errors'], indent=2)}"
@@ -1229,6 +1252,42 @@ def ensure_repo_labels(
         label_ids[slug] = label["id"]
         print(f"created repo label: {name}")
     return label_ids
+
+
+def _find_existing_repo_label_case_insensitive(
+    client: LinearClient,
+    name: str,
+    team_id: str,
+) -> dict[str, Any] | None:
+    """Case-insensitive fallback lookup for an existing ``repo:<slug>`` label.
+
+    ``find_issue_label`` uses Linear's ``name: { eq: $name }`` filter,
+    which is case-sensitive. If a legacy tool or manual operator
+    created a case-variant of the same label (e.g. ``repo:OpenSymphony``
+    for an inventory slug ``opensymphony``), the exact-case lookup
+    misses it and ``issueLabelCreate`` would otherwise produce a
+    duplicate. This helper uses ``eqIgnoreCase`` so we can reuse the
+    legacy label id without altering the on-disk inventory contract.
+    """
+
+    data = client.call(
+        "issue_label_by_name_case_insensitive.graphql",
+        {"name": name, "teamId": team_id, "first": 10},
+        allow_errors=True,
+    )
+    if data.get("errors"):
+        return None
+    nodes = data.get("data", {}).get("issueLabels", {}).get("nodes", [])
+    name_lower = name.lower()
+    for label in nodes:
+        existing_name = label.get("name")
+        if (
+            isinstance(existing_name, str)
+            and existing_name.lower() == name_lower
+            and existing_name != name
+        ):
+            return label
+    return None
 
 
 def find_issue_label(client: LinearClient, name: str, team_id: str) -> dict[str, Any] | None:

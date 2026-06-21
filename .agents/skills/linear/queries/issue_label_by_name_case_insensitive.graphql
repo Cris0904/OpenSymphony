@@ -1,0 +1,11 @@
+query IssueLabelByNameCaseInsensitive($name: String!, $teamId: ID!, $first: Int!) {
+  issueLabels(
+    filter: { name: { eqIgnoreCase: $name }, team: { id: { eq: $teamId } } }
+    first: $first
+  ) {
+    nodes {
+      id
+      name
+    }
+  }
+}
