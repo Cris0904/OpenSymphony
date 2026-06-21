@@ -204,6 +204,24 @@ impl ManifestValidator {
         // the parsed frontmatter so empty-string slugs and missing
         // frontmatter are surfaced before the converter ever talks to
         // Linear.
+        //
+        // Phase 1 scope (LOC-25): the Rust `ManifestValidator` performs
+        // shape-only validation here — it surfaces parent-with-repo and
+        // missing-leaf-repo findings but does NOT check inventory
+        // membership. Inventory-membership (out-of-inventory-repo) is
+        // enforced by the Python `convert-tasks-to-linear` converter
+        // against `<repo_root>/.opensymphony/project-set.yaml` because
+        // the converter is the publish-time gate (D11). The
+        // `AvailableRepoInventory` context in `generator/session.rs`
+        // already exists so a future Phase 2 can add the inventory-
+        // membership check here as well; until then the
+        // `unknown-repo-slug` code reserved on `InvalidRepoRouting` is
+        // emitted exclusively by the Python validator.
+        //
+        // TODO LOC-25 Phase 2: thread the `AvailableRepoInventory`
+        // through `ManifestValidator::validate_against_repo_root` so the
+        // Rust validator can emit `unknown-repo-slug` alongside
+        // `parent_with_repo` / `missing_leaf_repo`.
         let parent_ids: BTreeSet<&str> = entries
             .iter()
             .filter_map(|(_, fm)| fm.parent.as_deref())
