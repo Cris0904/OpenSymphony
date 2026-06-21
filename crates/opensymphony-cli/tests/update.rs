@@ -619,6 +619,40 @@ async fn migrate_only_rejects_missing_remote_without_writing_files() {
 }
 
 #[tokio::test]
+async fn update_rejects_migrate_only_combined_with_skip_migration() {
+    // `--migrate-only` requests the migration step alone, while
+    // `--skip-migration` suppresses it. Passing both is an operator
+    // mistake that the CLI must surface explicitly instead of silently
+    // picking one of the two behaviours (LOC-20 PR feedback #2).
+    let server = UpdateServer::start(env!("CARGO_PKG_VERSION")).await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    let cargo_log = repo.path().join("cargo.log");
+    write_legacy_target_repo(repo.path());
+
+    let output = run_update(
+        repo.path(),
+        &cargo_log,
+        &server,
+        &["--migrate-only", "--skip-migration"],
+    )
+    .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "conflicting flags should fail: stdout={stdout}, stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--migrate-only") && stderr.contains("--skip-migration"),
+        "stderr should name both flags: {stderr}"
+    );
+    assert!(
+        !repo.path().join(".opensymphony/project-set.yaml").exists(),
+        "no project-set.yaml should be written when the flag combination is invalid"
+    );
+}
+
+#[tokio::test]
 async fn update_migration_runs_even_when_cargo_self_update_fails() {
     // The migration must run BEFORE the self-update path so a broken
     // `cargo install` (or a simulated network failure) does not block the

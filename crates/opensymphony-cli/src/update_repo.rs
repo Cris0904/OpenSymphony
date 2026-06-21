@@ -22,9 +22,12 @@ const DEFAULT_CRATE_METADATA_URL: &str = "https://crates.io/api/v1/crates/opensy
 pub struct UpdateArgs {
     /// Run only the existing-repo project-set migration step and exit.
     ///
-    /// Skips self-update, skill refresh, and memory init. Useful for
-    /// recovering from a failed migration without re-running the rest of
-    /// the `update` flow (LOC-20).
+    /// Performs the migration (creates/updates `.opensymphony/project-set.yaml`
+    /// and rewrites `WORKFLOW.md`) and then exits without touching anything
+    /// else: it skips the OpenSymphony self-update, the skill refresh, and
+    /// the project memory init steps. Use this to recover from a partially
+    /// applied migration without re-running the rest of the `update` flow
+    /// (LOC-20).
     #[arg(long)]
     pub migrate_only: bool,
     /// Skip the existing-repo project-set migration step entirely.
@@ -94,6 +97,11 @@ enum UpdateCommandError {
     /// other `update` step runs against a partially-migrated repo.
     #[error("existing-repo project-set migration failed: {0}")]
     Migration(#[from] MigrationError),
+    /// `--migrate-only` and `--skip-migration` were both passed. These
+    /// flags are mutually exclusive: one requests the migration step
+    /// alone, the other suppresses it (LOC-20).
+    #[error("--migrate-only and --skip-migration cannot be used together")]
+    ConflictingFlags,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +173,27 @@ async fn run_update(args: UpdateArgs) -> Result<(), UpdateCommandError> {
     let current_dir = env::current_dir().map_err(UpdateCommandError::CurrentDir)?;
     println!("Updating OpenSymphony from {}", current_dir.display());
 
+    if args.migrate_only && args.skip_migration {
+        // `--migrate-only` requests the migration step alone;
+        // `--skip-migration` suppresses it. Silently ignoring either
+        // would mask an operator mistake, so we surface the conflict
+        // explicitly (LOC-20).
+        return Err(UpdateCommandError::ConflictingFlags);
+    }
+
     let target_repo = detect_target_repo_markers(&current_dir);
+
+    if args.migrate_only {
+        if target_repo.looks_like_target_repo() {
+            run_existing_repo_migration(&current_dir)?;
+        } else {
+            println!(
+                "`--migrate-only` requested but this directory is not an OpenSymphony target repo; nothing to migrate."
+            );
+        }
+        println!("OpenSymphony update complete.");
+        return Ok(());
+    }
 
     // Run the existing-repo project-set migration BEFORE self-update / skill
     // refresh so local migration can succeed even when the network self-update
@@ -173,19 +201,6 @@ async fn run_update(args: UpdateArgs) -> Result<(), UpdateCommandError> {
     // `opensymphony update` flow (LOC-20).
     if target_repo.looks_like_target_repo() && !args.skip_migration {
         run_existing_repo_migration(&current_dir)?;
-        if args.migrate_only {
-            println!("OpenSymphony update complete.");
-            return Ok(());
-        }
-    } else if args.migrate_only && !target_repo.looks_like_target_repo() {
-        println!(
-            "`--migrate-only` requested but this directory is not an OpenSymphony target repo; nothing to migrate."
-        );
-        println!("OpenSymphony update complete.");
-        return Ok(());
-    } else if args.migrate_only {
-        println!("OpenSymphony update complete.");
-        return Ok(());
     }
 
     let client = Client::builder()
