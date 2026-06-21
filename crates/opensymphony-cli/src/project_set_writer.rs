@@ -19,9 +19,9 @@ use thiserror::Error;
 use serde::Serialize;
 
 use crate::opensymphony_workflow::{
-    IntegerLike, ProjectEntry, ProjectSetAgentFrontMatter, ProjectSetBody,
-    ProjectSetFrontMatter, ProjectSetLinearFrontMatter, ProjectSetPollingFrontMatter,
-    PROJECT_SET_SCHEMA_VERSION,
+    IntegerLike, PROJECT_SET_SCHEMA_VERSION, ProjectEntry, ProjectSetAgentFrontMatter,
+    ProjectSetBody, ProjectSetFrontMatter, ProjectSetLinearFrontMatter,
+    ProjectSetPollingFrontMatter,
 };
 
 #[derive(Debug, Error)]
@@ -150,21 +150,11 @@ pub const DEFAULT_MAX_CONCURRENT_AGENTS: u64 = 4;
 
 /// Default Linear state names used when bootstrapping a project-set file
 /// from scratch.
-pub const DEFAULT_ACTIVE_STATES: &[&str] = &[
-    "Todo",
-    "In Progress",
-    "Human Review",
-    "Merging",
-    "Rework",
-];
+pub const DEFAULT_ACTIVE_STATES: &[&str] =
+    &["Todo", "In Progress", "Human Review", "Merging", "Rework"];
 
-pub const DEFAULT_TERMINAL_STATES: &[&str] = &[
-    "Done",
-    "Closed",
-    "Cancelled",
-    "Canceled",
-    "Duplicate",
-];
+pub const DEFAULT_TERMINAL_STATES: &[&str] =
+    &["Done", "Closed", "Cancelled", "Canceled", "Duplicate"];
 
 /// Computes the canonical project-set file path for `config_root`.
 pub fn project_set_path(config_root: impl AsRef<Path>) -> PathBuf {
@@ -221,10 +211,10 @@ pub fn apply_upsert_plan(
     existing: Option<&ProjectSetFrontMatter>,
     plan: &ProjectSetUpsertPlan,
 ) -> Result<ProjectSetUpsertDiff, ProjectSetUpsertError> {
-    let trimmed_repo_slug = trimmed_non_empty(Some(&plan.repo_slug))
-        .ok_or_else(|| missing_field_error("repo_slug"))?;
-    let trimmed_repo_url = trimmed_non_empty(Some(&plan.repo_url))
-        .ok_or_else(|| missing_field_error("repo_url"))?;
+    let trimmed_repo_slug =
+        trimmed_non_empty(Some(&plan.repo_slug)).ok_or_else(|| missing_field_error("repo_slug"))?;
+    let trimmed_repo_url =
+        trimmed_non_empty(Some(&plan.repo_url)).ok_or_else(|| missing_field_error("repo_url"))?;
     let trimmed_default_branch = trimmed_non_empty(plan.default_branch.as_deref());
 
     let Some(existing) = existing else {
@@ -327,10 +317,10 @@ pub fn serialize_front_matter(
 fn build_fresh_front_matter(
     plan: &ProjectSetUpsertPlan,
 ) -> Result<ProjectSetFrontMatter, ProjectSetUpsertError> {
-    let repo_slug = trimmed_non_empty(Some(&plan.repo_slug))
-        .ok_or_else(|| missing_field_error("repo_slug"))?;
-    let repo_url = trimmed_non_empty(Some(&plan.repo_url))
-        .ok_or_else(|| missing_field_error("repo_url"))?;
+    let repo_slug =
+        trimmed_non_empty(Some(&plan.repo_slug)).ok_or_else(|| missing_field_error("repo_slug"))?;
+    let repo_url =
+        trimmed_non_empty(Some(&plan.repo_url)).ok_or_else(|| missing_field_error("repo_url"))?;
     let project_set_slug = trimmed_non_empty(Some(&plan.project_set_slug))
         .ok_or_else(|| missing_field_error("project_set_slug"))?;
     let project_slug = trimmed_non_empty(Some(&plan.project_slug))
@@ -339,20 +329,22 @@ fn build_fresh_front_matter(
         .ok_or_else(|| missing_field_error("linear_project_slug"))?;
     let api_key_env = trimmed_non_empty(plan.linear_api_key_env.as_deref())
         .unwrap_or_else(|| "LINEAR_API_KEY".to_string());
-    let polling_interval_ms = plan
-        .polling_interval_ms
-        .unwrap_or(DEFAULT_POLL_INTERVAL_MS);
+    let polling_interval_ms = plan.polling_interval_ms.unwrap_or(DEFAULT_POLL_INTERVAL_MS);
     let max_concurrent_agents = plan
         .max_concurrent_agents
         .unwrap_or(DEFAULT_MAX_CONCURRENT_AGENTS);
-    let active_states = plan
-        .linear_active_states
-        .clone()
-        .unwrap_or_else(|| DEFAULT_ACTIVE_STATES.iter().map(|s| s.to_string()).collect());
-    let terminal_states = plan
-        .linear_terminal_states
-        .clone()
-        .unwrap_or_else(|| DEFAULT_TERMINAL_STATES.iter().map(|s| s.to_string()).collect());
+    let active_states = plan.linear_active_states.clone().unwrap_or_else(|| {
+        DEFAULT_ACTIVE_STATES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    });
+    let terminal_states = plan.linear_terminal_states.clone().unwrap_or_else(|| {
+        DEFAULT_TERMINAL_STATES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    });
 
     let body = ProjectSetBody {
         slug: Some(project_set_slug.clone()),
@@ -388,7 +380,10 @@ fn build_fresh_front_matter(
     })
 }
 
-fn ensure_project_entry<'a>(body: &'a mut ProjectSetBody, project_slug: &str) -> &'a mut ProjectEntry {
+fn ensure_project_entry<'a>(
+    body: &'a mut ProjectSetBody,
+    project_slug: &str,
+) -> &'a mut ProjectEntry {
     if let Some(index) = body.projects.iter().position(|project| {
         project
             .slug
@@ -418,11 +413,19 @@ fn upsert_repo_entry(
 ) -> Result<ProjectSetUpsertOutcome, ProjectSetUpsertError> {
     // Detect conflicts against any existing entry first.
     for entry in project.repos.iter() {
-        let Some(existing_slug) = entry.slug.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        let Some(existing_slug) = entry
+            .slug
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
         else {
             continue;
         };
-        let Some(existing_url) = entry.url.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        let Some(existing_url) = entry
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
         else {
             continue;
         };
@@ -459,9 +462,9 @@ fn upsert_repo_entry(
             changed = true;
         }
         let desired_branch = default_branch
-        .map(str::trim)
-        .filter(|branch| !branch.is_empty())
-        .map(|branch| branch.to_owned());
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .map(|branch| branch.to_owned());
         match (prior_branch, desired_branch.as_deref()) {
             (None, Some(_)) => {
                 entry.default_branch = desired_branch;

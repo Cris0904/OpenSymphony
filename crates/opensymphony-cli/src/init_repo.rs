@@ -10,8 +10,8 @@ use std::{
 use super::memory_init_summary::record_memory_init_changes;
 use super::project_set_writer::ProjectSetAppliedOutcome;
 use super::repo_detection::{
-    GitRemoteDetection, detect_git_default_branch, detect_git_remote_url,
-    derive_repo_slug_from_dir, derive_repo_slug_from_remote,
+    GitRemoteDetection, derive_repo_slug_from_dir, derive_repo_slug_from_remote,
+    detect_git_default_branch, detect_git_remote_url,
 };
 // `git_remote_url` and `git_remote_name` were the `init`-private free
 // functions; their equivalents now live as inherent methods on
@@ -1701,7 +1701,9 @@ fn strip_project_set_owned_fields(template: &str) -> String {
 }
 
 fn split_front_matter(template: &str) -> Option<(&str, &str, &str)> {
-    let trimmed = template.strip_prefix("---\n").or_else(|| template.strip_prefix("---\r\n"))?;
+    let trimmed = template
+        .strip_prefix("---\n")
+        .or_else(|| template.strip_prefix("---\r\n"))?;
     let (front_matter, body) = trimmed.split_once("\n---")?;
     Some(("---\n", front_matter, body))
 }
@@ -1743,9 +1745,7 @@ where
     // 3. None (the operator will be prompted for one, unless non-interactive).
     let trimmed_override = trimmed_non_empty(repo_url_override);
     let detected_url = git_remote.url().map(ToOwned::to_owned);
-    let repo_url = trimmed_override
-        .clone()
-        .or_else(|| detected_url.clone());
+    let repo_url = trimmed_override.clone().or_else(|| detected_url.clone());
 
     let repo_url = match repo_url {
         Some(url) => url,
@@ -1789,8 +1789,8 @@ where
     // and `project_set.linear.project_slug`. When the operator skipped the
     // Linear prompt we still create a usable project-set file with sentinel
     // values so the inventory is committed and editable.
-    let linear_project_slug = trimmed_non_empty(linear_project_slug)
-        .unwrap_or_else(|| repo_slug.clone());
+    let linear_project_slug =
+        trimmed_non_empty(linear_project_slug).unwrap_or_else(|| repo_slug.clone());
 
     // Build the upsert plan. We let the writer fill in defaults (polling
     // interval, max concurrent agents, active/terminal states) when no
@@ -2408,6 +2408,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
+    use super::super::repo_detection::{derive_repo_slug_from_remote, select_remote_name};
     use super::{
         AiReviewConfig, AiReviewProviderKindArg, DEFAULT_AI_REVIEW_MODEL_ID, DEFAULT_LLM_BASE_URL,
         DEFAULT_LLM_MODEL, DEFAULT_TEMPLATE_FETCH_TIMEOUT_MS, GitRemoteDetection, InitArgs,
@@ -2415,9 +2416,6 @@ mod tests {
         customize_workflow, github_repo_slug_from_remote, normalize_github_repo_slug,
         prompt_ai_review_config, prompt_for_missing_llm_env, prompt_yes_no,
         resolve_ai_review_secret, shell_single_quote, template_fetch_timeout_from_env,
-    };
-    use super::super::repo_detection::{
-        derive_repo_slug_from_remote, select_remote_name,
     };
 
     struct StubEnvironment {

@@ -6,10 +6,7 @@
 //! [LOC-20](https://linear.app/localgputokenscrazy/issue/LOC-20/existing-repo-project-set-migration)
 //! migration path) can reuse them without duplicating `init`-private logic.
 
-use std::{
-    ops::Not,
-    path::Path,
-};
+use std::{ops::Not, path::Path};
 
 /// Result of probing the local git repository for its canonical clone remote.
 ///
@@ -19,10 +16,7 @@ use std::{
 /// non-`origin` remotes exist and we will not guess.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitRemoteDetection {
-    Selected {
-        remote_name: String,
-        url: String,
-    },
+    Selected { remote_name: String, url: String },
     None,
     Ambiguous(Vec<String>),
 }
@@ -307,6 +301,9 @@ mod tests {
         let path = std::path::Path::new("/tmp/example");
         assert_eq!(derive_repo_slug_from_dir(path), Some("example".to_string()));
         let rel = std::path::Path::new("relative-dir");
-        assert_eq!(derive_repo_slug_from_dir(rel), Some("relative-dir".to_string()));
+        assert_eq!(
+            derive_repo_slug_from_dir(rel),
+            Some("relative-dir".to_string())
+        );
     }
 }
