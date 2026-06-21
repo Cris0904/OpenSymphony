@@ -653,6 +653,48 @@ async fn update_rejects_migrate_only_combined_with_skip_migration() {
 }
 
 #[tokio::test]
+async fn update_skip_migration_omits_project_set_and_preserves_legacy_workflow() {
+    // `--skip-migration` is the explicit opt-out for already-migrated
+    // repos (or any repo where the operator does not want the migration
+    // step to run). It must (LOC-20):
+    //
+    // * not write `.opensymphony/project-set.yaml`;
+    // * leave the legacy `WORKFLOW.md` untouched (no field rewrites);
+    // * continue with the rest of the update flow (self-update check,
+    //   skill refresh, memory init).
+    let server = UpdateServer::start(env!("CARGO_PKG_VERSION")).await;
+    let repo = TempDir::new().expect("temp repo should exist");
+    let cargo_log = repo.path().join("cargo.log");
+    write_legacy_target_repo(repo.path());
+
+    let workflow_before =
+        fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow exists");
+
+    let output = run_update(repo.path(), &cargo_log, &server, &["--skip-migration"]).await;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "skip-migration should still let the rest of `update` succeed: stdout={stdout}, stderr={stderr}"
+    );
+    assert!(
+        !repo.path().join(".opensymphony/project-set.yaml").exists(),
+        "skip-migration must not create the project-set file"
+    );
+    let workflow_after =
+        fs::read_to_string(repo.path().join("WORKFLOW.md")).expect("workflow exists");
+    assert_eq!(
+        workflow_before, workflow_after,
+        "skip-migration must leave WORKFLOW.md byte-identical"
+    );
+    assert!(
+        !stdout.contains("Migration: created") && !stdout.contains("Migration: rewrote"),
+        "skip-migration must not run the migration step: {stdout}"
+    );
+}
+
+#[tokio::test]
 async fn update_migration_runs_even_when_cargo_self_update_fails() {
     // The migration must run BEFORE the self-update path so a broken
     // `cargo install` (or a simulated network failure) does not block the

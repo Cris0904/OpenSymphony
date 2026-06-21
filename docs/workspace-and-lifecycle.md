@@ -106,6 +106,23 @@ The workspace manager owns:
 
 The OpenHands runtime owns only the conversation execution inside that path.
 
+The project-set owner (`.opensymphony/project-set.yaml`) owns:
+
+- the cross-repo Linear scope (`project_set.linear.project_slug`,
+  `endpoint`, `active_states`, `terminal_states`, `api_key_env`)
+- polling cadence (`project_set.polling.interval_ms`)
+- total concurrency (`project_set.agent.max_concurrent_agents`)
+- one inventory entry per tracked repo (slug → url / optional
+  `default_branch`)
+
+The runtime enforces a strict project-set boundary: any project-set-owned
+field that still appears in `WORKFLOW.md` causes the runtime to fail with
+a stale-field error. Already-bootstrapped target repos that predate the
+strict boundary are migrated in place by `opensymphony update`, which
+moves the legacy global fields from `WORKFLOW.md` into the project-set
+file atomically and leaves every repo-local workflow field, hook,
+OpenHands setting, and the prompt body byte-identical.
+
 ## 6. Lifecycle hooks
 
 Preserve the Symphony hook model.
