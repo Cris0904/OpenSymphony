@@ -359,6 +359,68 @@ the boundary as follows:
   `project_set.linear.api_key_env` is always consulted; the Linear check
   cannot be silenced by `config.yaml` alone.
 
+#### Evidence (captured from this repo)
+
+The boundary was exercised end-to-end against this repo with a
+pre-migration-shaped `WORKFLOW.md` (still defining every moved field)
+and a project-set file copied from `examples/project-set.yaml`.
+
+Stale-fields `opensymphony run` hard-fail (exit 1):
+
+```text
+$ opensymphony run --config /tmp/loc18_evidence/doctor.yaml
+project-set mode is active but /tmp/loc18_evidence/repo/WORKFLOW.md still defines
+project-set-owned fields: stale project-set-owned fields in WORKFLOW.md:
+tracker.kind -> project_set.linear (kind implied: linear),
+tracker.endpoint -> project_set.linear.endpoint,
+tracker.project_slug -> project_set.linear.project_slug,
+tracker.api_key -> project_set.linear.api_key_env,
+tracker.active_states -> project_set.linear.active_states,
+tracker.terminal_states -> project_set.linear.terminal_states,
+polling.interval_ms -> project_set.polling.interval_ms,
+agent.max_concurrent_agents -> project_set.agent.max_concurrent_agents;
+move them to `.opensymphony/project-set.yaml` and remove them from WORKFLOW.md
+```
+
+Stale-fields `opensymphony doctor` (boundary check fails; unrelated checks
+still report):
+
+```text
+[PASS] mode: active mode: project-set; project-set at .../project-set.yaml
+       (slug `opensymphony-updates`, inventory of 1 repo(s)) owns global
+       tracker/polling/total-concurrency; repo WORKFLOW.md owns repo-local fields
+[PASS] workflow: resolved .../WORKFLOW.md -> workspace ...
+[SKIP] workflow-prompt: skipped because project-set boundary is failing;
+       fix stale moved fields in WORKFLOW.md
+[WARN] workspace-root: ...
+[PASS] bind-scope: OpenHands loopback target http://127.0.0.1:8000 ...
+[SKIP] linear: skipped because project-set boundary is failing
+[PASS] project-set: resolved .../project-set.yaml -> slug `opensymphony-updates`,
+       linear project `opensymphony-bootstrap-e7b957855cb7`, 1 repos in inventory
+[FAIL] project-set-boundary: WORKFLOW.md still defines project-set-owned fields
+       in project-set mode: tracker.kind -> project_set.linear (kind implied:
+       linear), tracker.endpoint -> project_set.linear.endpoint, ...,
+       agent.max_concurrent_agents -> project_set.agent.max_concurrent_agents;
+       remove them from WORKFLOW.md and set the matching values under
+       `linear`/`polling`/`agent` in `.opensymphony/project-set.yaml`
+       (migration owner: LOC-20)
+```
+
+Migrated `WORKFLOW.md` (omits every moved field) under the same project-set:
+
+```text
+[PASS] mode: active mode: project-set; ...
+[PASS] workflow: resolved .../repo_migrated/WORKFLOW.md -> workspace ...
+[PASS] workflow-prompt: rendered 28 characters from .../repo_migrated/WORKFLOW.md
+[PASS] linear: project-set Linear auth ready: project
+       opensymphony-bootstrap-e7b957855cb7, api_key_env LINEAR_API_KEY
+       resolved (5 active / 5 terminal)
+[PASS] project-set: resolved .../project-set.yaml -> ...
+[PASS] project-set-boundary: no stale moved fields in
+       .../project-set.yaml; project-set owns tracker/polling/total-concurrency
+       and WORKFLOW.md owns repo-local fields
+```
+
 ### Migrating an existing single-repo
 
 `opensymphony run` never modifies user files. Migrating an existing repo

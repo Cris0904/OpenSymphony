@@ -627,30 +627,26 @@ pub async fn run_doctor_command(
                 }
             };
 
-            if runtime.workflow_skipped_for_stale_fields {
-                checks.push(CheckResult::skip(
-                    "workspace-root",
-                    "skipped because project-set boundary is failing",
-                ));
-                checks.push(CheckResult::skip(
-                    "linear",
-                    "skipped because project-set boundary is failing",
-                ));
-                checks.push(CheckResult::skip(
-                    "openhands-transport",
-                    "skipped because project-set boundary is failing",
-                ));
-            } else {
-                checks.push(check_workspace_root(&runtime.workflow.config.workspace.root).await);
-                checks.push(check_local_safety());
-                checks.push(check_openhands_transport(&runtime.workflow));
-                checks.push(check_linear(
-                    &config.linear,
-                    &runtime.workflow,
-                    runtime.active_mode,
-                    runtime.project_set.as_ref(),
-                ));
-            }
+            // LOC-18 AC: doctor continues unrelated checks where practical.
+            //
+            // When stale moved fields are present the strict path is
+            // rejected, but `resolve_doctor_workflow_for_mode` falls back to
+            // the legacy resolver so `runtime.workflow` is still populated.
+            // The four workflow-dependent checks below only inspect the
+            // resolved workflow fields (and `check_linear` reads the
+            // project-set's `api_key_env` directly), so they remain useful as
+            // a migration guide even while the boundary is failing. The
+            // `project-set-boundary` check (handled below) carries the
+            // migration diagnostic.
+            checks.push(check_workspace_root(&runtime.workflow.config.workspace.root).await);
+            checks.push(check_local_safety());
+            checks.push(check_openhands_transport(&runtime.workflow));
+            checks.push(check_linear(
+                &config.linear,
+                &runtime.workflow,
+                runtime.active_mode,
+                runtime.project_set.as_ref(),
+            ));
             checks.push(check_project_set(config_root));
             checks.push(check_project_set_boundary(&runtime));
             (runtime, rendered_probe_prompt)
@@ -1790,9 +1786,14 @@ fn check_linear(
         // LOC-18: project-set mode owns Linear auth. Do NOT bypass the real
         // env check with `linear.enabled: false`; the legacy placeholder
         // relaxation applies only in legacy single-repo mode.
+        //
+        // `active_mode == ProjectSet` is set only when the project-set file
+        // is present, so `project_set` is always `Some(...)` here. Use
+        // `expect` to make the invariant explicit rather than fall through
+        // to a `LINEAR_API_KEY` default that is unreachable.
         let api_key_env = project_set
             .map(|ps| ps.config.linear.api_key_env.clone())
-            .unwrap_or_else(|| "LINEAR_API_KEY".to_string());
+            .expect("active_mode == ProjectSet implies project_set is Some");
         match env::var(&api_key_env) {
             Ok(value) if !value.trim().is_empty() => CheckResult::pass(
                 "linear",

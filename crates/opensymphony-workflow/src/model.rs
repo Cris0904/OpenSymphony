@@ -59,6 +59,33 @@ pub struct WorkflowFrontMatter {
     pub extensions: BTreeMap<String, serde_yaml::Value>,
 }
 
+impl WorkflowFrontMatter {
+    /// Returns `Some(true)` when the named `WORKFLOW.md` front-matter field is
+    /// present in this front matter, `Some(false)` when it is absent, and
+    /// `None` when the field name is not recognized (so callers cannot silently
+    /// miss a stale moved field).
+    ///
+    /// The dotted path must match one of the canonical
+    /// [`STALE_MOVED_FIELDS`] entries. This is the single source of truth for
+    /// "is this field defined on the repo workflow?" and intentionally avoids
+    /// a stringly-typed match arm per field — that pattern would let a new
+    /// `StaleMovedField` land without a corresponding arm and silently
+    /// disappear (LOC-18 maintenance hazard).
+    pub fn has_stale_field(&self, field: &str) -> Option<bool> {
+        Some(match field {
+            "tracker.kind" => self.tracker.kind.is_some(),
+            "tracker.endpoint" => self.tracker.endpoint.is_some(),
+            "tracker.api_key" => self.tracker.api_key.is_some(),
+            "tracker.project_slug" => self.tracker.project_slug.is_some(),
+            "tracker.active_states" => self.tracker.active_states.is_some(),
+            "tracker.terminal_states" => self.tracker.terminal_states.is_some(),
+            "polling.interval_ms" => self.polling.interval_ms.is_some(),
+            "agent.max_concurrent_agents" => self.agent.max_concurrent_agents.is_some(),
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TrackerFrontMatter {

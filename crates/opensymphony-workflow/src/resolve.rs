@@ -69,19 +69,16 @@ pub(crate) fn detect_stale_project_set_fields(
     let mut stale = Vec::new();
 
     for entry in STALE_MOVED_FIELDS {
-        let is_present = match entry.field {
-            "tracker.kind" => front_matter.tracker.kind.is_some(),
-            "tracker.endpoint" => front_matter.tracker.endpoint.is_some(),
-            "tracker.project_slug" => front_matter.tracker.project_slug.is_some(),
-            "tracker.api_key" => front_matter.tracker.api_key.is_some(),
-            "tracker.active_states" => front_matter.tracker.active_states.is_some(),
-            "tracker.terminal_states" => front_matter.tracker.terminal_states.is_some(),
-            "polling.interval_ms" => front_matter.polling.interval_ms.is_some(),
-            "agent.max_concurrent_agents" => front_matter.agent.max_concurrent_agents.is_some(),
-            _ => false,
-        };
-        if is_present {
-            stale.push((entry.field.to_owned(), entry.destination.to_owned()));
+        // `has_stale_field` returns `None` for unrecognized paths so a new
+        // `STALE_MOVED_FIELDS` entry without a matching arm is impossible to
+        // add silently — the loop refuses to claim the field is absent.
+        match front_matter.has_stale_field(entry.field) {
+            Some(true) => stale.push((entry.field.to_owned(), entry.destination.to_owned())),
+            Some(false) => {}
+            None => panic!(
+                "STALE_MOVED_FIELDS entry `{}` has no presence check in WorkflowFrontMatter::has_stale_field; add the arm before adding the entry",
+                entry.field
+            ),
         }
     }
 
