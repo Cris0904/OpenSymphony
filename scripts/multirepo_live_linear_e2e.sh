@@ -403,26 +403,55 @@ print(tasks.get('${task_id}', {}).get('issue', '') or '')
 
     local label_payload
     label_payload="$(python3 -c "
-import json, subprocess, sys
+import json, subprocess, sys, time
+def _run(args, attempts=5, backoff=1.0):
+    last = None
+    for i in range(attempts):
+        r = subprocess.run(
+            args,
+            cwd='${REPO_ROOT}',
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            return r
+        last = r
+        # Bail out on user-input / GraphQL schema errors so we do not
+        # spin forever on a deterministic failure.
+        try:
+            data = json.loads(r.stdout or '{}')
+        except Exception:
+            data = {}
+        if isinstance(data, dict) and 'errors' in data:
+            errs = data['errors']
+            bad = any(
+                isinstance(e, dict) and e.get('extensions', {}).get('code')
+                    in ('BAD_USER_INPUT', 'INVALID_QUERY')
+                for e in errs
+            )
+            if bad:
+                sys.stderr.write(r.stdout)
+                sys.stderr.write(r.stderr)
+                raise SystemExit(2)
+        time.sleep(backoff * (2 ** i))
+    sys.stderr.write(last.stdout if last else '')
+    sys.stderr.write(last.stderr if last else '')
+    raise SystemExit(1)
+
 vars = {'key': '${issue_key}'}
-result = subprocess.run(
-    ['python3', '${LINEAR_HELPER}',
-     '--query-file', '${ISSUE_BY_KEY_QUERY}',
-     '--variables', json.dumps(vars)],
-    cwd='${REPO_ROOT}',
-    capture_output=True, text=True, check=True,
-)
+result = _run([
+    'python3', '${LINEAR_HELPER}',
+    '--query-file', '${ISSUE_BY_KEY_QUERY}',
+    '--variables', json.dumps(vars),
+])
 data = json.loads(result.stdout)
 issue = data['data']['issue']
 issue_id = issue['id']
 vars = {'id': issue_id, 'first': 100}
-result = subprocess.run(
-    ['python3', '${LINEAR_HELPER}',
-     '--query-file', '${ISSUE_LABELS_QUERY}',
-     '--variables', json.dumps(vars)],
-    cwd='${REPO_ROOT}',
-    capture_output=True, text=True, check=True,
-)
+result = _run([
+    'python3', '${LINEAR_HELPER}',
+    '--query-file', '${ISSUE_LABELS_QUERY}',
+    '--variables', json.dumps(vars),
+])
 data = json.loads(result.stdout)
 print(issue_id)
 for node in data['data']['issue']['labels']['nodes']:
