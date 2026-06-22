@@ -125,12 +125,21 @@ if [[ "${OPENSYMPHONY_LIVE_OPENHANDS}" == "1" ]]; then
         OH_PIDS="$(lsof -nP -iTCP:"${OH_PORT}" -sTCP:LISTEN -t 2>/dev/null || true)"
         if [[ -n "${OH_PIDS}" ]]; then
             echo "==> preflight: stopping existing OpenHands server(s) on port ${OH_PORT}: ${OH_PIDS}"
-            # Filter to only openhands.agent_server PIDs to avoid killing
-            # unrelated processes that happen to bind 127.0.0.1:8000.
+            # Filter to only OpenHands agent-server PIDs to avoid killing
+            # unrelated processes that happen to bind 127.0.0.1:8000. The
+            # check matches the canonical executable basename
+            # (``openhands.agent_server``) plus the package path
+            # (``openhands/agent_server``) so we only ever touch the
+            # orchestrator's supervised server, never an unrelated
+            # process whose argv happens to contain the substring
+            # ``openhands_server``.
             FILTERED=""
             for pid in ${OH_PIDS}; do
                 cmd="$(ps -p "${pid}" -o command= 2>/dev/null || true)"
-                if [[ "${cmd}" == *openhands.agent_server* ]] || [[ "${cmd}" == *openhands_server* ]]; then
+                base="$(basename "${cmd}" 2>/dev/null || true)"
+                if [[ "${base}" == "openhands.agent_server" ]] \
+                    || [[ "${cmd}" == */openhands/agent_server* ]] \
+                    || [[ "${cmd}" == *openhands.agent_server.* ]]; then
                     FILTERED="${FILTERED} ${pid}"
                 fi
             done
@@ -703,16 +712,6 @@ verify_marker() {
     local expect_repo_key="$3"
     local ws="${OH_STAGE_DIR}/workspaces/${issue_key}"
 
-    # Parent issue must never be cloned.
-    if [[ "${expect_repo_key}" == "PARENT" ]]; then
-        if [[ ! -d "${ws}" ]]; then
-            echo "    OK: parent workspace ${ws} does not exist (expected)"
-            return 0
-        fi
-        echo "    FAIL: parent workspace ${ws} was created (should not be)" >&2
-        return 1
-    fi
-
     # Wait briefly for the workspace to be created.
     while (( SECONDS < OH_DISPATCH_DEADLINE )); do
         if [[ -d "${ws}" ]] && [[ -f "${ws}/${marker_name}" ]]; then
@@ -735,6 +734,17 @@ verify_marker() {
         sleep 2
     done
     echo "    FAIL: ${ws} missing ${marker_name} or hook evidence" >&2
+    return 1
+}
+
+verify_parent_not_cloned() {
+    local issue_key="$1"
+    local ws="${OH_STAGE_DIR}/workspaces/${issue_key}"
+    if [[ ! -d "${ws}" ]]; then
+        echo "    OK: parent workspace ${ws} does not exist (expected)"
+        return 0
+    fi
+    echo "    FAIL: parent workspace ${ws} was created (should not be)" >&2
     return 1
 }
 
@@ -763,14 +773,26 @@ print(tasks.get('TASK-LOC31-LEAF-B', {}).get('issue', '') or '')
 echo
 echo "==> verifying OpenHands dispatch evidence"
 OH_DISPATCH_FAILED=0
-verify_marker "${PARENT_KEY}" "" "PARENT" || OH_DISPATCH_FAILED=1
+verify_parent_not_cloned "${PARENT_KEY}" || OH_DISPATCH_FAILED=1
 verify_marker "${LEAF_A_KEY}" "E2E_REPO_A_MARKER.txt" "repo-a" || OH_DISPATCH_FAILED=1
 verify_marker "${LEAF_B_KEY}" "E2E_REPO_B_MARKER.txt" "repo-b" || OH_DISPATCH_FAILED=1
 
 # Always shut the orchestrator down once verification finishes so the
-# temp artifact root is clean.
+# temp artifact root is clean. Bounded graceful-exit window followed by
+# a SIGKILL fallback so the script cannot hang on a stuck orchestrator
+# (mirrors the preflight cleanup at lines ~146-157).
 if kill -0 "${RUN_PID}" 2>/dev/null; then
     kill "${RUN_PID}" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if ! kill -0 "${RUN_PID}" 2>/dev/null; then
+            break
+        fi
+        sleep 0.5
+    done
+    if kill -0 "${RUN_PID}" 2>/dev/null; then
+        echo "    orchestrator still alive after SIGTERM; sending SIGKILL"
+        kill -9 "${RUN_PID}" 2>/dev/null || true
+    fi
     wait "${RUN_PID}" 2>/dev/null || true
 fi
 
@@ -784,3 +806,4 @@ echo "live multi-repo e2e harness: OK"
 echo "evidence root: ${TMP_ROOT}"
 echo "log directory: ${LOG_DIR}"
 exit 0
+
