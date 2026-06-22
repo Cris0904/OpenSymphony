@@ -203,7 +203,8 @@ through `scripts/label_merge.py`, which exposes a
   - When `areas` is present (including an empty list), the converter drops
     every existing `area:*` label and applies exactly the listed ones.
   - When `areas` is absent, existing `area:*` labels are preserved.
-- **`repo:*`** is managed by this skill for repo-aware packages (LOC-30).
+- **`repo:*`** is managed by this skill for repo-aware packages
+  ([LOC-30](https://linear.app/localgputokenscrazy/issue/LOC-30/e2e-converter-repo-label-publish-fix)).
   The converter projects a `DesiredRepo` value per task from
   `validate_repo_routing`'s leaf-vs-parent verdict:
   - **Leaves** (no `parent:` frontmatter) with a non-empty `repo:` slug get
@@ -251,9 +252,10 @@ Before reporting success:
 - Every `blockedBy` edge is represented as a Linear blocker relation.
 - Every declared area is represented as a Linear `area:<slug>` label.
 - Every leaf task's `repo:` slug is published as exactly one
-  `repo:<slug>` Linear label (LOC-30).
+  `repo:<slug>` Linear label
+  ([LOC-30](https://linear.app/localgputokenscrazy/issue/LOC-30/e2e-converter-repo-label-publish-fix)).
 - Every parent / review task carries zero `repo:*` Linear labels
-  (LOC-30).
+  ([LOC-30](https://linear.app/localgputokenscrazy/issue/LOC-30/e2e-converter-repo-label-publish-fix)).
 - Unmanaged labels (hand-set `priority:`, `ops:`, etc.) and out-of-package
   `repo:` labels survive a re-publish; only the converter's managed
   namespaces (`area:*` and `repo:*`) are rewritten.
