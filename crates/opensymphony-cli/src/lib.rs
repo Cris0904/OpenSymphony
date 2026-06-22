@@ -2389,7 +2389,16 @@ fn print_checks(checks: &[CheckResult]) {
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("opensymphony=info,opensymphony_control=info"));
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    // Write tracing events to stderr with no ANSI codes and an unbuffered
+    // writer so the lines reach the harness log file even when the
+    // orchestrator's stdout is fully buffered (e.g. when stdout is
+    // redirected to a file via `> log 2>&1`).
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 #[derive(Debug, Error)]
