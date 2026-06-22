@@ -664,9 +664,10 @@ YAML
 
 # Write a minimal config so ``opensymphony run`` picks up the
 # project-set; the local-dev example does the same.
-cat > "${TEMP_REPO}/config.yaml" <<'YAML'
+OSYM_E2E_CONTROL_PORT="${OPENSYMPHONY_CONTROL_PORT:-2468}"
+cat > "${TEMP_REPO}/config.yaml" <<YAML
 control_plane:
-  bind: 127.0.0.1:2468
+  bind: 127.0.0.1:${OSYM_E2E_CONTROL_PORT}
 
 openhands:
   tool_dir: ~/.opensymphony/openhands-server
