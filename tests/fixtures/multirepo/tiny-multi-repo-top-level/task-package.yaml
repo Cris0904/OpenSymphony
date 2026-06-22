@@ -1,0 +1,19 @@
+# Tiny multi-repo plan fixture — top-level variant (LOC-29).
+#
+# Exercises the contract on a multi-repo top-level layout: every task
+# is a top-level Linear issue (no sub-issues), and each leaf carries
+# an exact `repo:` slug matching the project-set inventory. The
+# fixture deliberately has no parent so every task is a leaf.
+#
+# The companion fixture `tiny-multi-repo-sub-issues/` exercises the
+# parent + sub-issue shape where the parent is detected via the
+# `parent:` reference on its children.
+planningWave: loc29-tiny-multi-repo-top-level
+tasksDir: docs/tasks
+milestones:
+  - "M14: Multi-Repo Phase 1"
+tasks:
+  - id: TASK-LEAF-A
+    file: docs/tasks/TASK-LEAF-A.md
+  - id: TASK-LEAF-B
+    file: docs/tasks/TASK-LEAF-B.md

@@ -1,0 +1,24 @@
+# Tiny multi-repo plan fixture — sub-issue variant (LOC-29).
+#
+# Exercises the contract on the parent + sub-issue shape:
+#
+#   * one parent task carries NO `repo:` value and owns sub-issues,
+#   * two sub-issue leaves carry different exact `repo:` slugs,
+#   * sub-issues are leaves and therefore MUST carry `repo:`,
+#   * repo slugs match the project-set inventory keys character-
+#     for-character (no lowercasing, no slugification).
+#
+# The Python `convert-tasks-to-linear validate` command is the
+# publish-time inventory gate; the Rust `ManifestValidator` checks
+# the shape (parent-without-repo, leaf-with-repo) independently.
+planningWave: loc29-tiny-multi-repo-sub-issues
+tasksDir: docs/tasks
+milestones:
+  - "M14: Multi-Repo Phase 1"
+tasks:
+  - id: TASK-PARENT
+    file: docs/tasks/TASK-PARENT.md
+  - id: TASK-SUB-A
+    file: docs/tasks/TASK-SUB-A.md
+  - id: TASK-SUB-B
+    file: docs/tasks/TASK-SUB-B.md

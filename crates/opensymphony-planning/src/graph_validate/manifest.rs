@@ -238,6 +238,14 @@ impl ManifestValidator {
         //              + tests.
         //   Out of scope for LOC-25: keep this comment in sync with the
         //              Python converter's authoritative inventory check.
+        //
+        // LOC-29 extends the loop below with an `areas` namespace-misuse
+        // check so the Rust validator can catch `areas: ["repo:<slug>"]`
+        // before the Python converter is invoked. The misuse detection
+        // shares the `InvalidRepoRouting` finding type because the
+        // violation is part of the same routing contract — the
+        // `repo:<slug>` label must come from the `repo` frontmatter
+        // field, not from `areas`.
         let parent_ids: BTreeSet<&str> = entries
             .iter()
             .filter_map(|(_, fm)| fm.parent.as_deref())
@@ -274,6 +282,32 @@ impl ManifestValidator {
                             .to_string(),
                     ),
                 });
+            }
+
+            // LOC-29: reject any `areas:` entry that uses the reserved
+            // non-area namespace `repo:`. The planning skill reserves
+            // `areas` for `area:<slug>` labels and `repo` for `repo:<slug>`
+            // routing labels; using the `repo:` prefix inside `areas` would
+            // silently publish the wrong label set. The Python converter
+            // already rejects this shape in `normalize_area_slugs`; this
+            // block mirrors the check on the Rust side so the
+            // manifest-validator fixture used by the planning-contract
+            // guard (`scripts/multirepo_live_linear_e2e.sh`) catches it
+            // before the converter is even invoked.
+            for raw_area in &frontmatter.areas {
+                if raw_area.trim().to_ascii_lowercase().starts_with("repo:") {
+                    result.invalid_repo_routing.push(InvalidRepoRouting {
+                        task_id: task_id.clone(),
+                        code: "areas_repo_namespace_misuse".to_string(),
+                        declared_repo: raw_area.clone(),
+                        hint: Some(
+                            "`areas` is reserved for the `area:<slug>` namespace; \
+                                use the `repo:` frontmatter field for routing labels \
+                                instead of placing `repo:<slug>` inside `areas`"
+                                .to_string(),
+                        ),
+                    });
+                }
             }
         }
 
@@ -708,6 +742,153 @@ mod tests {
         assert!(!result.is_ok());
         assert_eq!(result.invalid_repo_routing.len(), 1);
         assert_eq!(result.invalid_repo_routing[0].code, "missing_leaf_repo");
+    }
+
+    /// LOC-29: a tiny multi-repo plan — one parent (no `repo:`) with
+    /// two sub-issue leaves that carry distinct exact `repo:` slugs —
+    /// must validate cleanly. The manifest validator identifies a task
+    /// as a parent/review node by being referenced in another task's
+    /// `parent:` field, so the multi-repo plan must use sub-issues
+    /// for the leaves to keep `TASK-PARENT` recognised as a parent.
+    /// This mirrors the
+    /// `tests/fixtures/multirepo/tiny-multi-repo-plan` fixture used by
+    /// the planning-contract guard in
+    /// `scripts/multirepo_live_linear_e2e.sh`.
+    #[test]
+    fn tiny_multi_repo_plan_passes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[
+            ("TASK-PARENT", "docs/tasks/parent.md"),
+            ("TASK-LEAF-A", "docs/tasks/leaf-a.md"),
+            ("TASK-LEAF-B", "docs/tasks/leaf-b.md"),
+        ]);
+        let parent_body = "---\nid: TASK-PARENT\ntitle: \"Parent\"\n\
+                           milestone: \"M1\"\nblockedBy: []\nblocks: []\n\
+                           areas:\n  - planning\nparent: null\n---\n# Parent\n";
+        let leaf_a_body = "---\nid: TASK-LEAF-A\ntitle: \"Repo-A leaf\"\n\
+                          milestone: \"M1\"\nblockedBy: []\nblocks: []\n\
+                          areas:\n  - planning\nparent: TASK-PARENT\nrepo: repo-a\n---\n# Leaf A\n";
+        let leaf_b_body = "---\nid: TASK-LEAF-B\ntitle: \"Repo-B leaf\"\n\
+                          milestone: \"M1\"\nblockedBy: []\nblocks: []\n\
+                          areas:\n  - planning\nparent: TASK-PARENT\nrepo: repo-b\n---\n# Leaf B\n";
+        let files = vec![
+            ("docs/tasks/parent.md".to_string(), parent_body.to_string()),
+            ("docs/tasks/leaf-a.md".to_string(), leaf_a_body.to_string()),
+            ("docs/tasks/leaf-b.md".to_string(), leaf_b_body.to_string()),
+        ];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(
+            result.is_ok(),
+            "tiny multi-repo plan should pass; findings: {:?}",
+            result
+        );
+        assert!(
+            result.invalid_repo_routing.is_empty(),
+            "no routing findings expected: {:?}",
+            result.invalid_repo_routing
+        );
+    }
+
+    /// LOC-29: a multi-repo sub-issue layout — one parent (no `repo:`)
+    /// with two sub-issue leaves that carry different exact `repo:`
+    /// slugs — must validate cleanly. The sub-issue variant proves the
+    /// `parent: <id>` shape works alongside distinct repos on the
+    /// leaves.
+    #[test]
+    fn multi_repo_sub_issue_layout_passes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[
+            ("TASK-PARENT", "docs/tasks/parent.md"),
+            ("TASK-SUB-A", "docs/tasks/sub-a.md"),
+            ("TASK-SUB-B", "docs/tasks/sub-b.md"),
+        ]);
+        let parent_body = "---\nid: TASK-PARENT\ntitle: \"Parent\"\n\
+                           milestone: \"M1\"\nblockedBy: []\nblocks: []\n\
+                           areas:\n  - planning\nparent: null\n---\n# Parent\n";
+        let sub_a_body = "---\nid: TASK-SUB-A\ntitle: \"Repo-A sub-issue\"\n\
+                         milestone: \"M1\"\nblockedBy: []\nblocks: []\n\
+                         areas:\n  - planning\nparent: TASK-PARENT\nrepo: repo-a\n---\n# Sub A\n";
+        let sub_b_body = "---\nid: TASK-SUB-B\ntitle: \"Repo-B sub-issue\"\n\
+                         milestone: \"M1\"\nblockedBy: []\nblocks: []\n\
+                         areas:\n  - planning\nparent: TASK-PARENT\nrepo: repo-b\n---\n# Sub B\n";
+        let files = vec![
+            ("docs/tasks/parent.md".to_string(), parent_body.to_string()),
+            ("docs/tasks/sub-a.md".to_string(), sub_a_body.to_string()),
+            ("docs/tasks/sub-b.md".to_string(), sub_b_body.to_string()),
+        ];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(
+            result.is_ok(),
+            "multi-repo sub-issue layout should pass; findings: {:?}",
+            result
+        );
+        assert!(
+            result.invalid_repo_routing.is_empty(),
+            "no routing findings expected: {:?}",
+            result.invalid_repo_routing
+        );
+    }
+
+    /// LOC-29: an `areas:` entry using the reserved `repo:` prefix
+    /// (`areas: ["repo:<slug>"]`) must be reported as
+    /// `areas_repo_namespace_misuse`. The Rust validator mirrors the
+    /// Python converter's `normalize_area_slugs` rejection so the
+    /// planning-contract guard can catch the misuse before any
+    /// converter call.
+    #[test]
+    fn areas_repo_namespace_misuse_is_reported() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md")]);
+        let body = "---\nid: TASK-A\ntitle: \"A\"\nmilestone: \"M1\"\n\
+                    repo: repo-a\nblockedBy: []\nblocks: []\n\
+                    areas:\n  - planning\n  - repo:opensymphony\n---\n# A\n";
+        let files = vec![("docs/tasks/a.md".to_string(), body.to_string())];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(!result.is_ok());
+        assert_eq!(
+            result.invalid_repo_routing.len(),
+            1,
+            "exactly one routing finding expected (areas_repo_namespace_misuse): {:?}",
+            result.invalid_repo_routing
+        );
+        let finding = &result.invalid_repo_routing[0];
+        assert_eq!(finding.task_id, TaskId::new("TASK-A"));
+        assert_eq!(finding.code, "areas_repo_namespace_misuse");
+        assert!(
+            finding.hint.as_deref().unwrap_or_default().contains("area:<slug>"),
+            "hint should reference the area namespace: {:?}",
+            finding.hint
+        );
+    }
+
+    /// LOC-29: the same misuse check fires when the `repo:` prefix
+    /// inside `areas` uses mixed case (`REPO:opensymphony`). The check
+    /// is case-insensitive on the prefix so the misuse cannot sneak
+    /// past by case-folding the namespace marker.
+    #[test]
+    fn areas_repo_namespace_misuse_is_case_insensitive_on_prefix() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest_text = manifest_with_tasks(&[("TASK-A", "docs/tasks/a.md")]);
+        let body = "---\nid: TASK-A\ntitle: \"A\"\nmilestone: \"M1\"\n\
+                    repo: repo-a\nblockedBy: []\nblocks: []\n\
+                    areas:\n  - REPO:opensymphony\n---\n# A\n";
+        let files = vec![("docs/tasks/a.md".to_string(), body.to_string())];
+        let manifest = fixture_with_manifest(tmp.path(), &manifest_text, files);
+        let result = ManifestValidator::validate_against_repo_root(&manifest, tmp.path());
+        assert!(!result.is_ok());
+        assert_eq!(
+            result.invalid_repo_routing.len(),
+            1,
+            "exactly one routing finding expected: {:?}",
+            result.invalid_repo_routing
+        );
+        assert_eq!(
+            result.invalid_repo_routing[0].code,
+            "areas_repo_namespace_misuse"
+        );
     }
 
     #[test]
