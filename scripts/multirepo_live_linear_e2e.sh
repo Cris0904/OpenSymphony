@@ -553,7 +553,7 @@ seed_bare_repo() {
     rm -rf "${bare_dir}" "${work_dir}"
     git init -q --bare "${bare_dir}"
     git init -q -b main "${work_dir}"
-    git -c user.email=harness@example.com -c user.name=harness \
+    git -C "${work_dir}" -c user.email=harness@example.com -c user.name=harness \
         commit -q --allow-empty -m "init"
     printf 'LOC-31 E2E marker for %s\n' "${marker_name}" > "${work_dir}/${marker_name}"
     git -C "${work_dir}" -c user.email=harness@example.com -c user.name=harness \
@@ -712,11 +712,18 @@ verify_marker() {
     local marker_name="$2"
     local expect_repo_key="$3"
     local ws="${OH_STAGE_DIR}/workspaces/${issue_key}"
+    local marker_seen=0
+    local hook_seen=0
 
-    # Wait briefly for the workspace to be created.
+    # Wait briefly for the workspace to be created. Print each
+    # progress milestone exactly once so the CI log is not flooded
+    # with duplicate messages on every poll iteration.
     while (( SECONDS < OH_DISPATCH_DEADLINE )); do
         if [[ -d "${ws}" ]] && [[ -f "${ws}/${marker_name}" ]]; then
-            echo "    OK: ${ws} contains ${marker_name}"
+            if [[ "${marker_seen}" -eq 0 ]]; then
+                echo "    OK: ${ws} contains ${marker_name}"
+                marker_seen=1
+            fi
             # Hook evidence: ``opensymphony workspace clone`` records
             # ``workspace clone: ok key=<repo-key> url=<url> ...`` on
             # stderr; the workspace manager captures that stderr and
@@ -728,7 +735,10 @@ verify_marker() {
             local run_json="${ws}/.opensymphony/run.json"
             if [[ -f "${run_json}" ]] \
                 && grep -q "\"key=${expect_repo_key}\"" "${run_json}"; then
-                echo "    OK: hook evidence records key=${expect_repo_key}"
+                if [[ "${hook_seen}" -eq 0 ]]; then
+                    echo "    OK: hook evidence records key=${expect_repo_key}"
+                    hook_seen=1
+                fi
                 return 0
             fi
         fi
