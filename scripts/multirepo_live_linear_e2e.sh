@@ -34,6 +34,12 @@
 #     synthetic plan while the on-disk contract is still being
 #     iterated on. The Rust fixture and Python validate stages
 #     still run so the gate cannot be silently bypassed.
+#   OSYM_E2E_RUST_TEST_TIMEOUT=<seconds>
+#     Per-invocation timeout for the single combined `cargo test`
+#     call used by stage 2 (Rust manifest validator). Defaults to
+#     120 seconds when unset; the script fails fast on a timeout so
+#     CI environments cannot hang indefinitely on a stuck test
+#     binary.
 #
 # Exit status:
 #   0  — every enabled stage passed.
@@ -45,6 +51,7 @@ SCRIPT_NAME="multirepo_live_linear_e2e"
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"/.. && pwd)"
 LOG_DIR="${OSYM_E2E_LOG_DIR:-${ROOT_DIR}/target/${SCRIPT_NAME}}"
 mkdir -p "${LOG_DIR}"
+RUST_TEST_TIMEOUT="${OSYM_E2E_RUST_TEST_TIMEOUT:-120}"
 
 SKILL_PATH="${ROOT_DIR}/.agents/skills/create-implementation-plan/SKILL.md"
 PYTHON_CONVERT_SCRIPT="${ROOT_DIR}/.agents/skills/convert-tasks-to-linear/scripts/convert_tasks_to_linear.py"
@@ -137,24 +144,56 @@ check_create_implementation_plan_contract() {
   } | tee -a "${log}"
 }
 
-# Stage 2: run the new Rust fixture tests. Each test is filtered by
-# full path so a single failing test surfaces the failure rather than
-# the whole planning test binary failing.
+# Stage 2: run the new Rust fixture tests. All fixture tests share the
+# `opensymphony_planning::graph_validate::manifest::tests::` module
+# path, so we run the module once (single compile, single test binary
+# startup) and then verify each expected test name appears in the
+# output. This avoids N cargo invocations (each of which re-runs the
+# test binary startup) and bounds total runtime with `timeout`.
+#
+# Per-test names are recorded in the log so reviewers can see which
+# tests passed; the cargo exit code covers compilation/runtime errors
+# and the per-name grep guards against an unexpected empty module.
 check_rust_manifest_validator() {
   local log
   log="$(log_path rust-validator)"
   : > "${log}"
 
+  local combined_filter="opensymphony_planning::graph_validate::manifest::tests::"
+  echo "  - cargo test --lib ${combined_filter} (one invocation, ${#RUST_FIXTURE_TESTS[@]} tests)" \
+    | tee -a "${log}"
+
+  local cargo_output
+  local cargo_exit
+  cargo_output="$(timeout "${RUST_TEST_TIMEOUT}" cargo test --lib "${combined_filter}" 2>&1)"
+  cargo_exit=$?
+  # Tee the captured output to the log after we already have it in
+  # memory so the script preserves the per-test PASS lines.
+  printf '%s\n' "${cargo_output}" >> "${log}"
+
+  if [[ "${cargo_exit}" -ne 0 ]]; then
+    echo "FAIL: rust fixture test invocation failed (exit ${cargo_exit}, timeout=${RUST_TEST_TIMEOUT}s)" \
+      >&2 | tee -a "${log}"
+    return 1
+  fi
+
   local test
-  local failed=0
+  local test_name
+  local missing=0
   for test in "${RUST_FIXTURE_TESTS[@]}"; do
+    test_name="${test##*::}"
     echo "  - cargo test ${test}" | tee -a "${log}"
-    if ! cargo test --lib "${test}" 2>&1 | tee -a "${log}" >/dev/null; then
-      echo "FAIL: rust fixture test failed: ${test}" >&2 | tee -a "${log}"
-      failed=1
+    # Cargo's per-test PASS line format is
+    #   `test <full-path> ... ok`
+    # The full path may include `::` separated segments, so anchor
+    # only the leading `test ` and the trailing `... ok` markers and
+    # match the test name anywhere in the path.
+    if ! grep -Eq "^test .*${test_name} \.\.\. ok" <<< "${cargo_output}"; then
+      echo "FAIL: rust fixture test did not pass: ${test}" >&2 | tee -a "${log}"
+      missing=1
     fi
   done
-  if [[ "${failed}" -ne 0 ]]; then
+  if [[ "${missing}" -ne 0 ]]; then
     return 1
   fi
   echo "OK: rust manifest validator fixtures passed" | tee -a "${log}"
