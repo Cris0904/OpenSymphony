@@ -1,0 +1,16 @@
+# LOC-29 tiny multi-repo top-level project-set inventory.
+schema_version: 1
+
+project_set:
+  slug: loc29-tiny-multi-repo-top-level
+  name: LOC-29 Tiny Multi-Repo Top-Level
+  projects:
+    - slug: multi-repo-fixture
+      name: LOC-29 Multi-Repo Fixture
+      repos:
+        - slug: repo-a
+          url: git@github.com:example/repo-a.git
+          default_branch: main
+        - slug: repo-b
+          url: git@github.com:example/repo-b.git
+          default_branch: main

@@ -40,3 +40,5 @@ apps/desktop/src-tauri/gen/
 .opensymphony/memory/*
 !.opensymphony/memory/memory.yaml
 !.opensymphony/project-set.yaml
+**/__pycache__/
+**/*.pyc

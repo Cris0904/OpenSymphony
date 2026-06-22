@@ -113,7 +113,14 @@ Rules:
 Create one Markdown file per task. File names may follow a readable convention
 such as `001-brief-description.md`, but the manifest is the source of truth.
 
-Each task file must include this frontmatter:
+Each task file must include this frontmatter. The template shows a
+top-level **leaf** task — `parent: null` plus a single `repo:` slug.
+
+For a top-level **parent** / review task (one that owns sub-issues),
+omit `repo:` and use `parent: null`; the validator rejects any
+parent that carries a `repo:` value. For a **sub-issue**, set
+`parent: <parent-id>` and carry a `repo:` slug (sub-issues are
+always leaves).
 
 ```markdown
 ---
@@ -131,6 +138,69 @@ repo: opensymphony
 ---
 ```
 
+A multi-repo sub-issue layout — one parent, one sub-issue leaf per
+repo — looks like this. The parent carries no `repo:` value and the
+sub-issue leaves carry distinct exact `repo:` slugs; the manifest
+validator identifies TASK-PARENT as a parent because TASK-LEAF-A and
+TASK-LEAF-B reference it via `parent: TASK-PARENT`.
+
+```markdown
+---
+# Parent / review task — no `repo:` allowed.
+id: TASK-PARENT
+title: Multi-repo parent
+milestone: "M14: Multi-Repo Phase 1"
+priority: 3
+estimate: 5
+blockedBy: []
+blocks: ["TASK-LEAF-A", "TASK-LEAF-B"]
+areas:
+  - planning
+parent: null
+---
+
+---
+# Leaf 1 — explicit `repo:` slug, exact inventory key.
+id: TASK-LEAF-A
+title: Repo-A leaf
+milestone: "M14: Multi-Repo Phase 1"
+priority: 3
+estimate: 3
+blockedBy: []
+blocks: []
+areas:
+  - planning
+parent: TASK-PARENT
+repo: repo-a
+---
+
+---
+# Leaf 2 — same parent, different repo.
+id: TASK-LEAF-B
+title: Repo-B leaf
+milestone: "M14: Multi-Repo Phase 1"
+priority: 3
+estimate: 3
+blockedBy: []
+blocks: []
+areas:
+  - planning
+parent: TASK-PARENT
+repo: repo-b
+---
+```
+
+A top-level multi-repo layout — where every task is a top-level
+issue with no sub-issues — is also valid: each task has `parent:
+null` plus a `repo:` slug, so the manifest validator treats every
+task as a leaf. See `tests/fixtures/multirepo/tiny-multi-repo-top-level`
+for that shape.
+
+The same shape applies to sub-issue leaves: set `parent: <id>` and
+carry a single `repo:` slug. A mixed parent + sub-issues layout is
+explicit in `tests/fixtures/multirepo/tiny-multi-repo-sub-issues` so
+the contract is reproducible from a real on-disk fixture.
+
 Field rules:
 
 - `id` must be unique within `task-package.yaml`.
@@ -142,14 +212,45 @@ Field rules:
   `memory`, `openhands-runtime`, or `gateway`. The converter publishes them as
   canonical Linear labels named `area:<slug>`.
 - `parent` is `null` for top-level issues or a task ID for a Linear sub-issue.
-- `repo` is **required on leaf tasks** (top-level issues without `parent`
-  and every sub-issue) and **forbidden on parent/review tasks** (top-level
-  issues with sub-issues). The value MUST be the **exact** project-set
-  inventory repo slug / `RepoRef.key` — no lowercasing, no slugification,
-  no whitespace coercion beyond trimming. The converter publishes it as a
-  canonical Linear label named `repo:<slug>`. See the *Reserved Linear
-  label namespaces* section below for the dual-source-of-truth contract
-  with `opensymphony-planning`.
+- `repo: <slug>` is the leaf-task routing identity. It is **required on leaf tasks**
+  (top-level issues without `parent` and every sub-issue) and is
+  **forbidden on parent/review tasks** (top-level issues with sub-issues).
+  The `<slug>` MUST be the **exact** project-set inventory repo slug /
+  `RepoRef.key` — no lowercasing, no slugification, no whitespace
+  coercion beyond trimming. The converter publishes it as a canonical
+  Linear label named `repo:<slug>`. See the *Reserved Linear label
+  namespaces* section below for the dual-source-of-truth contract with
+  `opensymphony-planning`.
+
+#### One-repo obvious-case auto-fill
+
+The Rust planner in `opensymphony-planning` exposes the project-set
+inventory to the planning session via `PlanningSession::available_repos`
+and a `single_repo_slug()` accessor. When the inventory has **exactly
+one** repo entry and a leaf task's `repo:` field is omitted, the
+generator may auto-fill the obvious single slug; the validator then
+treats the leaf as in-contract. When the inventory has **zero** or
+**multiple** repo entries, multi-repo assignment is the responsibility
+of the planning agent / human — the planner does **not** infer the
+slug from `areas`, from the issue title, or from any other heuristic.
+The Python `convert-tasks-to-linear validate` command is the publish-time
+gate: even an auto-filled leaf is revalidated against the inventory
+slug before any Linear write happens. The contract is therefore:
+
+- **Inventory has one repo**: the planning session may leave `repo:`
+  unset on a leaf and the validator treats the auto-filled slug as
+  in-contract. Always prefer setting `repo:` explicitly so the
+  frontmatter is self-describing.
+- **Inventory has zero repos**: the planning session **must** set
+  `repo:` explicitly on every leaf, even if the project-set inventory
+  has not been onboarded yet; the manifest validator's
+  `missing_leaf_repo` finding still fires.
+- **Inventory has multiple repos**: the planning agent / human
+  **must** pick the exact `repo:` slug per leaf; the planner never
+  infers from `areas`, the issue title, or any other signal. The
+  validator's `missing_leaf_repo` finding fires for any leaf without
+  an exact slug, and `unknown_repo_slug` fires for any slug outside
+  the inventory at publish time.
 
 ### Reserved Linear label namespaces
 
@@ -171,6 +272,15 @@ The two namespaces are deliberately separate:
   (see [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate));
   keep `areas` strictly area-shaped at planning time so the validation
   never has to fire on real waves.
+  The Rust `ManifestValidator` (see LOC-29) also rejects the
+  `areas: ["repo:<slug>"]` shape with the `areas_repo_namespace_misuse`
+  finding so the planning-contract guard catches the misuse before any
+  converter call. The two layers agree on the same contract — neither
+  normalizes `repo:` entries into `area:` territory, both surface
+  a stable error string the operator can grep for.
+- Quick mental model: `areas` produces `area:<slug>`; `repo` produces
+  `repo:<slug>`; mixing `repo:<slug>` into `areas` is a misuse of the
+  `areas` namespace.
 - `repo:<slug>` is published from the task's `repo` frontmatter (see
   `convert-tasks-to-linear/SKILL.md`) and uses the **exact** project-set repo
   slug / `RepoRef.key`. It is not lowercased, slugified, or otherwise coerced.
