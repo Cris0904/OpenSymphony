@@ -858,7 +858,11 @@ mod tests {
         assert_eq!(finding.task_id, TaskId::new("TASK-A"));
         assert_eq!(finding.code, "areas_repo_namespace_misuse");
         assert!(
-            finding.hint.as_deref().unwrap_or_default().contains("area:<slug>"),
+            finding
+                .hint
+                .as_deref()
+                .unwrap_or_default()
+                .contains("area:<slug>"),
             "hint should reference the area namespace: {:?}",
             finding.hint
         );
