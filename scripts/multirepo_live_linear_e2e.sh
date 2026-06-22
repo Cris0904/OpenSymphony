@@ -551,7 +551,16 @@ seed_bare_repo() {
     local marker_name="$2"
     local work_dir="${bare_dir}-work"
     rm -rf "${bare_dir}" "${work_dir}"
-    git init -q --bare "${bare_dir}"
+    # ``--initial-branch=main`` ensures the bare repo's ``HEAD`` ref points
+    # to ``refs/heads/main`` from the moment it is created. Without it, the
+    # bare repo defaults to ``refs/heads/master``; the working clone below
+    # pushes the ``main`` branch into ``refs/heads/main`` but never updates
+    # the bare repo's ``HEAD``. ``git clone`` of a bare repo whose ``HEAD``
+    # points at a non-existent ref reports "You appear to have cloned an
+    # empty repository" and leaves the working tree empty, so the dispatch
+    # hook's marker-file probe never finds ``E2E_REPO_A_MARKER.txt`` /
+    # ``E2E_REPO_B_MARKER.txt`` even though the clone technically exits 0.
+    git init -q --bare --initial-branch=main "${bare_dir}"
     git init -q -b main "${work_dir}"
     git -C "${work_dir}" -c user.email=harness@example.com -c user.name=harness \
         commit -q --allow-empty -m "init"
@@ -733,8 +742,13 @@ verify_marker() {
             # the workspace-manager's placeholder dir; hook stdout/stderr
             # are not streamed there).
             local run_json="${ws}/.opensymphony/run.json"
+            # The hook records ``key=<repo-key> url=<url> ...`` on stderr;
+            # serde_json escapes that into the JSON string value for the
+            # ``stderr`` field, so the substring appears unquoted in the
+            # serialized file. Match it without the surrounding quotes so
+            # the probe actually fires when the clone hook succeeded.
             if [[ -f "${run_json}" ]] \
-                && grep -q "\"key=${expect_repo_key}\"" "${run_json}"; then
+                && grep -q "key=${expect_repo_key}" "${run_json}"; then
                 if [[ "${hook_seen}" -eq 0 ]]; then
                     echo "    OK: hook evidence records key=${expect_repo_key}"
                     hook_seen=1
