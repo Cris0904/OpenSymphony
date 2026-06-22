@@ -194,27 +194,49 @@ adds short HTML comments to Linear issue descriptions as a recovery aid:
 ## Label Management (Additive, Namespace-Aware)
 
 Linear's `issue_update` REPLACES the issue's label set on every call, so the
-converter cannot simply overwrite labels. Labels are merged by namespace:
+converter cannot simply overwrite labels. Labels are merged by namespace
+through `scripts/label_merge.py`, which exposes a
+`DesiredRepo` policy the converter projects per task from the validated
+`repo:` frontmatter:
 
 - **`area:*`** is rebuilt exactly from the task's frontmatter `areas` field.
   - When `areas` is present (including an empty list), the converter drops
     every existing `area:*` label and applies exactly the listed ones.
   - When `areas` is absent, existing `area:*` labels are preserved.
-- **`repo:*`** is *not* managed by this skill (LOC-25 owns repo labels).
-  When `apply` is called without an explicit desired-repo state, existing
-  `repo:*` labels are preserved.
+- **`repo:*`** is managed by this skill for repo-aware packages
+  ([LOC-30](https://linear.app/localgputokenscrazy/issue/LOC-30/e2e-converter-repo-label-publish-fix)).
+  The converter projects a `DesiredRepo` value per task from
+  `validate_repo_routing`'s leaf-vs-parent verdict:
+  - **Leaves** (no `parent:` frontmatter) with a non-empty `repo:` slug get
+    `DesiredRepo.managed(<slug>)` — exactly one `repo:<slug>` label is
+    applied; every other pre-existing `repo:*` label is dropped.
+  - **Parents / review nodes** (id appears in any other task's `parent:`)
+    get `DesiredRepo.cleared()` — no `repo:*` label survives; this
+    guarantees stale parent-side labels are removed on re-publish.
+  - **Defensive preserve** only fires when the validator was bypassed (the
+    frontmatter omitted `repo:` on a leaf). The publish path then keeps
+    existing `repo:*` labels untouched instead of stripping them.
 - **All other labels** (e.g. `priority:*`, `ops:*`, hand-set team labels)
-  are preserved untouched.
+  are preserved untouched regardless of the `area:*` / `repo:*` policy.
 
 Concretely:
 
-- A re-publish never wipes a hand-set `repo:` label.
-- A re-publish never deletes a `priority:` / `severity:` / `bug:` label
-  authored outside this converter.
-- The converter fails the run before calling `issue_update` if the existing
-  label set is paginated/truncated so it cannot be proven complete.
-- Per-issue label hydration happens for both provenance-discovered issues
-  and issues mapped through `linear-publish.yaml`.
+- A re-publish of a leaf drops every pre-existing `repo:*` label and
+  applies exactly one `repo:<slug>` label (the declared slug).
+- A re-publish of a parent removes every pre-existing `repo:*` label so
+  routing never accidentally lands on a review node.
+- A re-publish never deletes a `priority:` / `severity:` / `bug:` /
+  `ops:` label authored outside this converter.
+- The converter fails the run before calling `issue_update` if the
+  existing label set is paginated/truncated so it cannot be proven
+  complete. Both the project-level `_assert_project_state_complete`
+  guard and the per-issue `fetch_labels_complete` paginator enforce
+  this — neither provenance-discovered issues nor
+  `linear-publish.yaml`-mapped issues can update against a partial
+  label set.
+- Per-issue label hydration happens for both provenance-discovered
+  issues and issues mapped through `linear-publish.yaml` (the mapped
+  path always paginates until the cursor reports `hasNextPage: false`).
 
 The merge helper itself lives in
 `scripts/label_merge.py` and can be imported independently for unit tests
@@ -229,7 +251,14 @@ Before reporting success:
 - Every `parent` task is represented as a Linear parent/sub-issue relationship.
 - Every `blockedBy` edge is represented as a Linear blocker relation.
 - Every declared area is represented as a Linear `area:<slug>` label.
-- Unmanaged labels (hand-set `repo:`, `priority:`, etc.) survive a re-publish.
+- Every leaf task's `repo:` slug is published as exactly one
+  `repo:<slug>` Linear label
+  ([LOC-30](https://linear.app/localgputokenscrazy/issue/LOC-30/e2e-converter-repo-label-publish-fix)).
+- Every parent / review task carries zero `repo:*` Linear labels
+  ([LOC-30](https://linear.app/localgputokenscrazy/issue/LOC-30/e2e-converter-repo-label-publish-fix)).
+- Unmanaged labels (hand-set `priority:`, `ops:`, etc.) and out-of-package
+  `repo:` labels survive a re-publish; only the converter's managed
+  namespaces (`area:*` and `repo:*`) are rewritten.
 - No issue is blocked by itself.
 - Local task IDs remain only in provenance comments or explicit source-context sections.
 - `linear-publish.yaml` contains every converted task.

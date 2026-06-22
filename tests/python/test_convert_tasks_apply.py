@@ -831,6 +831,233 @@ class EnsureIssuesLabelTests(unittest.TestCase):
         sent_label_ids = fake.last_update()["input"]["labelIds"]
         self.assertIn("label-repo-opensymphony", sent_label_ids)
 
+    # ---- LOC-30 acceptance criteria --------------------------------------
+
+    def test_repo_aware_leaf_replaces_stale_repo_with_different_slug(self) -> None:
+        """LOC-30: a leaf whose desired slug differs from the existing slug
+        drops the stale ``repo:old`` label and applies exactly one
+        ``repo:new`` label.
+
+        Distinct from :meth:`test_repo_aware_leaf_replaces_stale_repo`,
+        which exercises the same-slug case. The acceptance criterion is
+        that the *only* ``repo:*`` label on the leaf after publish is the
+        declared one — never the stale slug, never both.
+        """
+
+        task = _make_task(task_id="T1", title="Leaf", areas=["planning"])
+        package = _make_package(tasks={"T1": task})
+        existing = _make_existing_issue(
+            issue_id="issue-loc30-leaf",
+            identifier="LOC30-LF",
+            labels=[
+                {"id": "label-stale-repo", "name": "repo:old"},
+                {"id": "label-area", "name": "area:planning"},
+                {"id": "label-unmanaged", "name": "ops:triage"},
+            ],
+        )
+        project = _make_project(issues=[existing])
+
+        # Pre-register ``repo:old`` so ``_lookup_repo_label_id`` cannot
+        # re-use it; the merge must drop the stale id and emit only the
+        # newly managed slug instead.
+        fake = self._make_fake_client(project)
+        fake.label_names_to_ids["repo:old"] = "label-stale-repo"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package.repo_root = Path(tmp)
+            ctl.ensure_issues(
+                client=fake.real_client,
+                package=package,
+                project=project,
+                team=_make_team(),
+                milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                publish={},
+                desired_repo_by_task={
+                    "T1": DesiredRepo.managed("new")
+                },
+            )
+
+        sent_label_ids = fake.last_update()["input"]["labelIds"]
+        # The stale slug must NOT survive the merge.
+        self.assertNotIn("label-stale-repo", sent_label_ids)
+        # The newly managed slug must be present exactly once.
+        self.assertEqual(
+            sent_label_ids.count("label-repo-new"),
+            1,
+            msg=(
+                "expected exactly one repo:new label after publish; "
+                f"got labelIds={sent_label_ids!r}"
+            ),
+        )
+        # Unmanaged and area labels survive untouched.
+        self.assertIn("label-area", sent_label_ids)
+        self.assertIn("label-unmanaged", sent_label_ids)
+        # No ``repo:*`` label id other than ``label-repo-new`` remains.
+        repo_label_ids = {
+            lid
+            for lid in sent_label_ids
+            if lid in {"label-stale-repo", "label-repo-new"}
+        }
+        self.assertEqual(repo_label_ids, {"label-repo-new"})
+
+    def test_repo_aware_parent_publishes_no_repo_label(self) -> None:
+        """LOC-30: a freshly-created parent/review issue carries no ``repo:*``
+        label even when the package is repo-aware.
+
+        The package declares two leaves with repo slugs; the parent
+        must not have any repo label after publish, only the area
+        label managed from its ``areas`` frontmatter.
+        """
+
+        parent_task = _make_task(
+            task_id="T-PARENT",
+            title="Parent",
+            areas=["planning"],
+        )
+        leaf_task = _make_task(
+            task_id="T-LEAF",
+            title="Leaf",
+            areas=["planning"],
+            parent="T-PARENT",
+        )
+        # Mark the leaf's ``repo`` so ``build_desired_repo_by_task`` would
+        # produce ``DesiredRepo.managed`` for it; the parent must still
+        # produce ``DesiredRepo.cleared``.
+        leaf_task.repo = "opensymphony"
+        parent_task.repo = None
+        package = _make_package(
+            tasks={"T-PARENT": parent_task, "T-LEAF": leaf_task}
+        )
+
+        project = _make_project(issues=[])
+
+        fake = self._make_fake_client(project)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package.repo_root = Path(tmp)
+            desired = ctl.build_desired_repo_by_task(package.tasks)
+            ctl.ensure_issues(
+                client=fake.real_client,
+                package=package,
+                project=project,
+                team=_make_team(),
+                milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                publish={},
+                desired_repo_by_task=desired,
+            )
+
+        # Find the parent's create call and the leaf's create call.
+        create_inputs = [
+            variables["input"]
+            for name, variables in fake.calls
+            if name == "issue_create.graphql"
+        ]
+        parent_inputs = [
+            inp for inp in create_inputs if inp.get("title") == "Parent"
+        ]
+        leaf_inputs = [
+            inp for inp in create_inputs if inp.get("title") == "Leaf"
+        ]
+        self.assertEqual(len(parent_inputs), 1, msg=f"parents: {create_inputs!r}")
+        self.assertEqual(len(leaf_inputs), 1, msg=f"leaves: {create_inputs!r}")
+
+        parent_label_ids = parent_inputs[0].get("labelIds", [])
+        leaf_label_ids = leaf_inputs[0].get("labelIds", [])
+
+        # Parent must not carry any ``repo:*`` label id.
+        self.assertEqual(
+            [lid for lid in parent_label_ids if "label-repo" in lid],
+            [],
+            msg=(
+                "parent must not have any repo:* label id after publish; "
+                f"got labelIds={parent_label_ids!r}"
+            ),
+        )
+        # Leaf must carry exactly one ``repo:opensymphony`` id.
+        repo_leaf_ids = [lid for lid in leaf_label_ids if "label-repo" in lid]
+        self.assertEqual(
+            repo_leaf_ids,
+            ["label-repo-opensymphony"],
+            msg=(
+                "leaf must carry exactly one repo:opensymphony id; "
+                f"got labelIds={leaf_label_ids!r}"
+            ),
+        )
+
+    def test_repo_aware_leaf_paginates_label_hydration(self) -> None:
+        """LOC-30: when the per-issue labels page is paginated, the merge still
+        drops every pre-existing ``repo:*`` label and emits exactly one
+        ``repo:new`` label.
+
+        Exercises ``fetch_labels_complete`` together with the
+        ``DesiredRepo.managed`` path so the stale repo label lives on a
+        page after the first, and the merge must still drop it.
+        """
+
+        task = _make_task(task_id="T1", title="Leaf", areas=["planning"])
+        package = _make_package(tasks={"T1": task})
+        project = _make_project(issues=[])
+        publish = {
+            "tasks": {
+                "T1": {
+                    "issue": "TEST-LOC30",
+                    "issueId": "loc30-issue-id",
+                    "url": "https://linear.app/test/issue/TEST-LOC30",
+                }
+            }
+        }
+
+        fake = self._make_fake_client(project)
+        # Two pages, the stale repo label is on page 2 so the merge must
+        # walk past it before deciding which labels to keep.
+        fake.label_pages["loc30-issue-id"] = [
+            [
+                {"id": "label-page1-area", "name": "area:planning"},
+                {"id": "label-page1-unmanaged", "name": "ops:triage"},
+            ],
+            [
+                {"id": "label-page2-stale-repo", "name": "repo:old"},
+            ],
+        ]
+        fake.label_names_to_ids["area:planning"] = "label-page1-area"
+        fake.label_names_to_ids["repo:old"] = "label-page2-stale-repo"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package.repo_root = Path(tmp)
+            ctl.ensure_issues(
+                client=fake.real_client,
+                package=package,
+                project=project,
+                team=_make_team(),
+                milestone_map={"M1: Test": {"id": "ms-id", "name": "M1: Test"}},
+                publish=publish,
+                desired_repo_by_task={"T1": DesiredRepo.managed("new")},
+            )
+
+        # Both pages were requested.
+        paginated_calls = [
+            v for n, v in fake.calls if n == "issue_labels.graphql"
+        ]
+        self.assertEqual(len(paginated_calls), 2)
+        self.assertNotIn("after", paginated_calls[0])
+        self.assertEqual(paginated_calls[1].get("after"), "1")
+
+        sent_label_ids = fake.last_update()["input"]["labelIds"]
+        # Stale repo label lives on page 2 — must not survive the merge.
+        self.assertNotIn("label-page2-stale-repo", sent_label_ids)
+        # Exactly one new repo label id is present.
+        self.assertEqual(
+            sent_label_ids.count("label-repo-new"),
+            1,
+            msg=(
+                "expected exactly one repo:new label after the paginated "
+                f"merge; got labelIds={sent_label_ids!r}"
+            ),
+        )
+        # Area and unmanaged labels from page 1 are preserved.
+        self.assertIn("label-page1-area", sent_label_ids)
+        self.assertIn("label-page1-unmanaged", sent_label_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
