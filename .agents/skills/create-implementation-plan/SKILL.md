@@ -263,6 +263,12 @@ The two namespaces are deliberately separate:
   (see [LOC-25](https://linear.app/localgputokenscrazy/issue/LOC-25/planning-seeds-the-repo-skill-and-crate));
   keep `areas` strictly area-shaped at planning time so the validation
   never has to fire on real waves.
+  The Rust `ManifestValidator` (see LOC-29) also rejects the
+  `areas: ["repo:<slug>"]` shape with the `areas_repo_namespace_misuse`
+  finding so the planning-contract guard catches the misuse before any
+  converter call. The two layers agree on the same contract — neither
+  normalizes `repo:` entries into `area:` territory, both surface
+  a stable error string the operator can grep for.
 - Quick mental model: `areas` produces `area:<slug>`; `repo` produces
   `repo:<slug>`; mixing `repo:<slug>` into `areas` is a misuse of the
   `areas` namespace.

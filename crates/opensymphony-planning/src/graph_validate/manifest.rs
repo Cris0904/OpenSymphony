@@ -294,6 +294,14 @@ impl ManifestValidator {
             // manifest-validator fixture used by the planning-contract
             // guard (`scripts/multirepo_live_linear_e2e.sh`) catches it
             // before the converter is even invoked.
+            //
+            // ASCII-only note: the prefix check uses
+            // `to_ascii_lowercase()` because the `repo:` and `area:`
+            // namespace prefixes are ASCII by contract (see
+            // `convert-tasks-to-linear/SKILL.md` reserved-namespaces
+            // section). Non-ASCII edge cases are out of scope for the
+            // planning frontmatter contract and would be rejected by
+            // the Linear label namespace rules anyway.
             for raw_area in &frontmatter.areas {
                 if raw_area.trim().to_ascii_lowercase().starts_with("repo:") {
                     result.invalid_repo_routing.push(InvalidRepoRouting {
