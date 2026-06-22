@@ -138,8 +138,11 @@ repo: opensymphony
 ---
 ```
 
-A multi-repo top-level layout — one parent, one leaf per repo — looks
-like this:
+A multi-repo sub-issue layout — one parent, one sub-issue leaf per
+repo — looks like this. The parent carries no `repo:` value and the
+sub-issue leaves carry distinct exact `repo:` slugs; the manifest
+validator identifies TASK-PARENT as a parent because TASK-LEAF-A and
+TASK-LEAF-B reference it via `parent: TASK-PARENT`.
 
 ```markdown
 ---
@@ -150,7 +153,7 @@ milestone: "M14: Multi-Repo Phase 1"
 priority: 3
 estimate: 5
 blockedBy: []
-blocks: []
+blocks: ["TASK-LEAF-A", "TASK-LEAF-B"]
 areas:
   - planning
 parent: null
@@ -167,7 +170,7 @@ blockedBy: []
 blocks: []
 areas:
   - planning
-parent: null
+parent: TASK-PARENT
 repo: repo-a
 ---
 
@@ -182,15 +185,21 @@ blockedBy: []
 blocks: []
 areas:
   - planning
-parent: null
+parent: TASK-PARENT
 repo: repo-b
 ---
 ```
 
+A top-level multi-repo layout — where every task is a top-level
+issue with no sub-issues — is also valid: each task has `parent:
+null` plus a `repo:` slug, so the manifest validator treats every
+task as a leaf. See `tests/fixtures/multirepo/tiny-multi-repo-top-level`
+for that shape.
+
 The same shape applies to sub-issue leaves: set `parent: <id>` and
 carry a single `repo:` slug. A mixed parent + sub-issues layout is
-explicit in `tests/fixtures/multirepo/tiny-multi-repo-plan` so the
-contract is reproducible from a real on-disk fixture.
+explicit in `tests/fixtures/multirepo/tiny-multi-repo-sub-issues` so
+the contract is reproducible from a real on-disk fixture.
 
 Field rules:
 

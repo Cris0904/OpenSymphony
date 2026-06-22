@@ -759,8 +759,8 @@ mod tests {
     /// `parent:` field, so the multi-repo plan must use sub-issues
     /// for the leaves to keep `TASK-PARENT` recognised as a parent.
     /// This mirrors the
-    /// `tests/fixtures/multirepo/tiny-multi-repo-plan` fixture used by
-    /// the planning-contract guard in
+    /// `tests/fixtures/multirepo/tiny-multi-repo-sub-issues` fixture
+    /// used by the planning-contract guard in
     /// `scripts/multirepo_planner_contract_check.sh`.
     #[test]
     fn tiny_multi_repo_plan_passes() {
