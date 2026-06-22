@@ -31,6 +31,14 @@
 
 set -euo pipefail
 
+# Verify PyYAML is available before the harness invokes the converter
+# subprocesses. The script embeds ``python3 -c "import yaml, ..."`` calls
+# that surface a confusing ModuleNotFoundError when PyYAML is missing.
+if ! python3 -c 'import yaml' 2>/dev/null; then
+    echo "PyYAML is required but not installed; install with 'pip install PyYAML'." >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CONVERTER="${REPO_ROOT}/.agents/skills/convert-tasks-to-linear/scripts/convert_tasks_to_linear.py"
@@ -417,3 +425,4 @@ check_labels "TASK-LOC30-LEAF-B" 1 "repo:OpenSymphony-Config" || exit 2
 
 echo
 echo "live harness check: OK"
+exit 0

@@ -923,8 +923,8 @@ class EnsureIssuesLabelTests(unittest.TestCase):
         # Mark the leaf's ``repo`` so ``build_desired_repo_by_task`` would
         # produce ``DesiredRepo.managed`` for it; the parent must still
         # produce ``DesiredRepo.cleared``.
-        leaf_task.repo = "opensymphony"  # type: ignore[attr-defined]
-        parent_task.repo = None  # type: ignore[attr-defined]
+        leaf_task.repo = "opensymphony"
+        parent_task.repo = None
         package = _make_package(
             tasks={"T-PARENT": parent_task, "T-LEAF": leaf_task}
         )
