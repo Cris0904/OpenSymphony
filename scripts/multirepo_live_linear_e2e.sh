@@ -8,6 +8,11 @@
 # `convert-tasks-to-linear validate` command) agrees on the
 # repo-frontmatter contract before any Linear write is attempted.
 #
+# Default mode is strict: the planning-contract guard MUST pass before any
+# downstream stage runs. Set `OSYM_E2E_ALLOW_SYNTHETIC_PLAN=1` to bypass
+# that guard (escape hatch for downstream LOC-31 verification — see the
+# Environment toggles section below).
+#
 # Stages:
 #   1. Planning contract guard
 #      (`check_create_implementation_plan_contract`) — verifies the
