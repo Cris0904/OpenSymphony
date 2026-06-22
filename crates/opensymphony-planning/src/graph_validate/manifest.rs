@@ -292,7 +292,7 @@ impl ManifestValidator {
             // already rejects this shape in `normalize_area_slugs`; this
             // block mirrors the check on the Rust side so the
             // manifest-validator fixture used by the planning-contract
-            // guard (`scripts/multirepo_live_linear_e2e.sh`) catches it
+            // guard (`scripts/multirepo_planner_contract_check.sh`) catches it
             // before the converter is even invoked.
             //
             // ASCII-only note: the prefix check uses
@@ -761,7 +761,7 @@ mod tests {
     /// This mirrors the
     /// `tests/fixtures/multirepo/tiny-multi-repo-plan` fixture used by
     /// the planning-contract guard in
-    /// `scripts/multirepo_live_linear_e2e.sh`.
+    /// `scripts/multirepo_planner_contract_check.sh`.
     #[test]
     fn tiny_multi_repo_plan_passes() {
         let tmp = tempfile::tempdir().expect("tempdir");

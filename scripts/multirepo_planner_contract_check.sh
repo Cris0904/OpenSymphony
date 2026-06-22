@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# multirepo_live_linear_e2e — strict-mode planning-contract guard for the
+# multirepo_planner_contract_check — strict-mode planning-contract guard for the
 # multi-repo end-to-end flow (LOC-29).
 #
 # This script is the user-journey guard that proves the planning
@@ -47,7 +47,7 @@
 
 set -euo pipefail
 
-SCRIPT_NAME="multirepo_live_linear_e2e"
+SCRIPT_NAME="multirepo_planner_contract_check"
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")"/.. && pwd)"
 LOG_DIR="${OSYM_E2E_LOG_DIR:-${ROOT_DIR}/target/${SCRIPT_NAME}}"
 mkdir -p "${LOG_DIR}"

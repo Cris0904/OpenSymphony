@@ -40,5 +40,5 @@ touching the real OpenSymphony project-set.
   `tiny_multi_repo_sub_issue_plan_passes`).
 - `.agents/skills/convert-tasks-to-linear/scripts/convert_tasks_to_linear.py`
   `validate` subcommand when run from the fixture directory.
-- `scripts/multirepo_live_linear_e2e.sh`
+- `scripts/multirepo_planner_contract_check.sh`
   `check_create_implementation_plan_contract` guard.
